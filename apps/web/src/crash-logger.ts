@@ -11,8 +11,43 @@
  * 4. beforeunload 事件记录最后状态
  */
 
-import { sanitizeUrl } from '@aitu/utils';
 import { swChannelClient } from '@drawnix/drawnix/runtime';
+
+const SENSITIVE_URL_PARAMS = [
+  'apikey',
+  'api_key',
+  'key',
+  'token',
+  'secret',
+  'password',
+  'authorization',
+  'credential',
+];
+
+function sanitizeUrl(url: string, baseUrl?: string): string {
+  if (!url) return url;
+
+  try {
+    const urlObj = new URL(url, baseUrl || window.location.origin);
+    const keysToDelete: string[] = [];
+    urlObj.searchParams.forEach((_value, key) => {
+      const lowerKey = key.toLowerCase();
+      if (SENSITIVE_URL_PARAMS.some((param) => lowerKey === param || lowerKey.includes(param))) {
+        keysToDelete.push(key);
+      }
+    });
+
+    keysToDelete.forEach((key) => urlObj.searchParams.delete(key));
+    return urlObj.toString();
+  } catch {
+    let result = url;
+    SENSITIVE_URL_PARAMS.forEach((param) => {
+      const regex = new RegExp(`([?&])${param}=[^&]*`, 'gi');
+      result = result.replace(regex, `$1${param}=[REDACTED]`);
+    });
+    return result;
+  }
+}
 
 // ==================== 类型定义 ====================
 
@@ -618,7 +653,7 @@ export function recordStartupSnapshot(): void {
     timestamp: Date.now(),
     type: 'startup',
     userAgent: navigator.userAgent,
-    url: location.href,
+    url: window.location.href,
     memory: getMemoryInfo(),
     // 启动时不收集 pageStats 和 storage，减少初始化开销
     // 注：storage.estimate() 返回的是浏览器配额，不是实际磁盘空间，意义不大
@@ -670,7 +705,7 @@ export function startPeriodicSnapshots(): void {
         memory,
         pageStats,
         userAgent: navigator.userAgent,
-        url: location.href,
+        url: window.location.href,
       };
 
       sendSnapshotToSW(snapshot);
@@ -716,7 +751,7 @@ export function setupErrorCapture(): void {
       },
       memory: getMemoryInfo(),
       userAgent: navigator.userAgent,
-      url: location.href,
+      url: window.location.href,
       customData: buildErrorDiagnosticContext({
         filename: event.filename,
         lineno: event.lineno,
@@ -758,7 +793,7 @@ export function setupErrorCapture(): void {
       },
       memory: getMemoryInfo(),
       userAgent: navigator.userAgent,
-      url: location.href,
+      url: window.location.href,
       customData: buildErrorDiagnosticContext(),
     };
 
@@ -776,7 +811,7 @@ export function setupErrorCapture(): void {
         type: 'beforeunload',
         memory,
         userAgent: navigator.userAgent,
-        url: location.href,
+        url: window.location.href,
       };
 
       // 同时保存到 localStorage 和发送到 SW
@@ -832,7 +867,7 @@ export function setupHeartbeat(): void {
           fps: currentFps,
         },
         userAgent: navigator.userAgent,
-        url: location.href,
+        url: window.location.href,
         customData: {
           recentActions: userActions.slice(-10),
           recentErrors: consoleErrors.slice(-5),
@@ -897,7 +932,7 @@ export function setupLongTaskMonitoring(): void {
               fps: currentFps,
             },
             userAgent: navigator.userAgent,
-            url: location.href,
+            url: window.location.href,
             customData: {
               taskName: entry.name,
               startTime: entry.startTime,
@@ -964,7 +999,7 @@ export function setupFpsMonitoring(): void {
           fps: currentFps,
         },
         userAgent: navigator.userAgent,
-        url: location.href,
+        url: window.location.href,
       };
 
       sendSnapshotToSW(snapshot);
@@ -1023,7 +1058,7 @@ function checkForWhitescreen(): void {
         plaitBoardExists: hasPlaitBoard,
       },
       userAgent: navigator.userAgent,
-      url: location.href,
+      url: window.location.href,
       customData: {
         rootExists: !!root,
         rootChildCount: root?.children.length || 0,
@@ -1037,7 +1072,7 @@ function checkForWhitescreen(): void {
   }
 
   // 如果应用已加载但画板不存在（且不是首页等非画板页面）
-  if (hasContent && !hasPlaitBoard && location.pathname === '/') {
+  if (hasContent && !hasPlaitBoard && window.location.pathname === '/') {
     // 给更多时间，画板可能还在加载
     setTimeout(() => {
       if (
@@ -1053,7 +1088,7 @@ function checkForWhitescreen(): void {
           memory: getMemoryInfo(),
           pageStats: collectPageStats(),
           userAgent: navigator.userAgent,
-          url: location.href,
+          url: window.location.href,
           customData: {
             reason: '画板未加载',
             rootChildCount: root?.children.length || 0,
@@ -1183,12 +1218,12 @@ export function setupUserActionTracking(): void {
 
   // 监听路由变化
   window.addEventListener('popstate', () => {
-    recordUserAction('navigate', location.pathname);
+    recordUserAction('navigate', window.location.pathname);
   });
 
   // 监听 hash 变化
   window.addEventListener('hashchange', () => {
-    recordUserAction('navigate', location.hash);
+    recordUserAction('navigate', window.location.hash);
   });
 }
 
@@ -1288,7 +1323,7 @@ export function setupResourceErrorTracking(): void {
             },
             memory: getMemoryInfo(),
             userAgent: navigator.userAgent,
-            url: location.href,
+            url: window.location.href,
             customData: buildErrorDiagnosticContext({
               resourceUrl: truncateContextValue(
                 url ? sanitizeUrl(url) : undefined
@@ -1411,7 +1446,7 @@ export function recordCustomSnapshot(
     type: 'periodic', // 使用 periodic 类型，便于统一处理
     memory: getMemoryInfo(),
     userAgent: navigator.userAgent,
-    url: location.href,
+    url: window.location.href,
     customData: {
       label,
       ...customData,
@@ -1463,7 +1498,7 @@ function exposeDebugTools(): void {
         memory: getMemoryInfo(),
         pageStats: collectPageStats(),
         userAgent: navigator.userAgent,
-        url: location.href,
+        url: window.location.href,
       };
       sendSnapshotToSW(snapshot);
     },

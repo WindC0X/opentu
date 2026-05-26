@@ -1,7 +1,9 @@
 import { AuthService } from '../auth/service';
 import { hashPassword } from '../auth/password';
 import { DEFAULT_TENANT_ID, User } from '../auth/types';
+import { ProjectService } from '../projects/service';
 import { InMemoryAuthRepository } from '../repositories/in-memory-auth-repository';
+import { InMemoryProjectRepository } from '../repositories/in-memory-project-repository';
 
 export async function createTestAuthContext() {
   const repository = new InMemoryAuthRepository();
@@ -26,6 +28,20 @@ export async function createTestAuthContext() {
   });
 
   return { admin, repository, service };
+}
+
+export async function createTestAppContext() {
+  const auth = await createTestAuthContext();
+  const projectRepository = new InMemoryProjectRepository();
+  const projectService = new ProjectService(projectRepository, {
+    now: () => new Date('2026-05-26T00:00:00.000Z'),
+  });
+
+  return {
+    ...auth,
+    projectRepository,
+    projectService,
+  };
 }
 
 export async function createUserWithQuota(

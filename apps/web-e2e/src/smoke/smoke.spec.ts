@@ -4,18 +4,23 @@
  * 仅 2 次页面加载，覆盖所有核心功能
  */
 import { test, expect } from '../fixtures/test-base';
+import { MengtuHomeApp } from '../fixtures/test-app';
+
+const WORKBENCH_READY_TIMEOUT = 60000;
 
 test.describe('@smoke 核心功能验证', () => {
   /**
    * 测试1：主画布所有组件和交互
    */
   test('主画布：加载、工具栏、AI输入栏、视图导航', async ({ page }) => {
-    await page.goto('/');
+    const home = new MengtuHomeApp(page);
+    await home.installApiMocks();
+    await home.createProjectAndOpenCanvas('Smoke 主画布');
     
     // 1. 验证页面加载（必须通过）
     await expect(page).toHaveTitle(/Opentu/);
     const drawnix = page.locator('.drawnix');
-    await expect(drawnix).toBeVisible({ timeout: 10000 });
+    await expect(drawnix).toBeVisible({ timeout: WORKBENCH_READY_TIMEOUT });
     await page.waitForTimeout(2000);
     
     // 2. 验证工具栏存在（必须通过）
@@ -114,9 +119,12 @@ test.describe('@smoke 核心功能验证', () => {
    * 测试2：所有弹窗/抽屉组件
    */
   test('弹窗抽屉：设置、项目、工具箱', async ({ page }) => {
-    await page.goto('/');
+    const home = new MengtuHomeApp(page);
+    await home.installApiMocks();
+    await home.createProjectAndOpenCanvas('Smoke 弹窗抽屉');
+
     const drawnix = page.locator('.drawnix');
-    await expect(drawnix).toBeVisible({ timeout: 10000 });
+    await expect(drawnix).toBeVisible({ timeout: WORKBENCH_READY_TIMEOUT });
     await page.waitForTimeout(1500);
     
     // === 项目抽屉 ===

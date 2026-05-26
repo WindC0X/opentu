@@ -31,3 +31,6 @@ export {
   requestServiceWorkerIdlePrefetch,
   type IdlePrefetchGroup,
 } from './utils/startup-prefetch';
+export * from './types/shared/core.types';
+export type { Workflow } from './services/workflow-engine/types';
+export type { MengtuFeatureFlags } from './drawnix';

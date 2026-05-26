@@ -17,6 +17,7 @@ import {
   normalizeKnowledgeContextRefs,
 } from '../../services/generation-context-service';
 import { Z_INDEX } from '../../constants/z-index';
+import { HoverTip } from './hover';
 import './knowledge-note-context-selector.scss';
 
 export interface KnowledgeNoteContextSelectorProps {
@@ -420,39 +421,43 @@ export const KnowledgeNoteContextSelector: React.FC<
         </div>
       ) : null}
 
-      <button
-        type="button"
-        className="knowledge-note-context-selector__trigger"
-        onClick={() => !disabled && setOpen((prev) => !prev)}
-        disabled={disabled}
-        aria-expanded={open}
-        aria-label={compactState.triggerLabel}
-        title={
+      <HoverTip
+        content={
           isCompact
             ? compactState.selectedTitleText || compactState.triggerLabel
             : undefined
         }
+        disabled={!isCompact}
       >
-        <BookOpen size={isCompact ? 18 : 15} />
-        {!isCompact ? (
-          <>
-            <span>
-              {selectedRefs.length > 0
-                ? language === 'zh'
-                  ? `已选 ${selectedRefs.length} 篇笔记`
-                  : `${selectedRefs.length} notes selected`
-                : language === 'zh'
-                  ? '选择知识库笔记'
-                  : 'Select notes'}
+        <button
+          type="button"
+          className="knowledge-note-context-selector__trigger"
+          onClick={() => !disabled && setOpen((prev) => !prev)}
+          disabled={disabled}
+          aria-expanded={open}
+          aria-label={compactState.triggerLabel}
+        >
+          <BookOpen size={isCompact ? 18 : 15} />
+          {!isCompact ? (
+            <>
+              <span>
+                {selectedRefs.length > 0
+                  ? language === 'zh'
+                    ? `已选 ${selectedRefs.length} 篇笔记`
+                    : `${selectedRefs.length} notes selected`
+                  : language === 'zh'
+                    ? '选择知识库笔记'
+                    : 'Select notes'}
+              </span>
+              <ChevronDown size={15} />
+            </>
+          ) : compactState.badgeText ? (
+            <span className="knowledge-note-context-selector__badge">
+              {compactState.badgeText}
             </span>
-            <ChevronDown size={15} />
-          </>
-        ) : compactState.badgeText ? (
-          <span className="knowledge-note-context-selector__badge">
-            {compactState.badgeText}
-          </span>
-        ) : null}
-      </button>
+          ) : null}
+        </button>
+      </HoverTip>
 
       {isCompact && selectedRefs.length > 0 ? (
         <div

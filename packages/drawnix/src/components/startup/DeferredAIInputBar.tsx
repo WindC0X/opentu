@@ -2,10 +2,12 @@ import React, { useEffect, useRef } from 'react';
 import { WorkflowProvider } from '../../contexts/WorkflowContext';
 import { ModelHealthProvider } from '../../contexts/ModelHealthContext';
 import { AIInputBar } from '../ai-input-bar/AIInputBar';
+import type { MengtuFeatureFlags } from '../../drawnix';
 
 interface DeferredAIInputBarProps {
   isDataReady: boolean;
   activationKey: number;
+  featureFlags?: MengtuFeatureFlags;
   onEnableToolWindows?: () => void;
   onEnableRuntime?: () => void;
 }
@@ -13,6 +15,7 @@ interface DeferredAIInputBarProps {
 export function DeferredAIInputBar({
   isDataReady,
   activationKey,
+  featureFlags,
   onEnableToolWindows,
   onEnableRuntime,
 }: DeferredAIInputBarProps) {
@@ -40,6 +43,7 @@ export function DeferredAIInputBar({
       <ModelHealthProvider>
         <div ref={containerRef}>
           <AIInputBar
+            featureFlags={featureFlags}
             isDataReady={isDataReady}
             onEnableToolWindows={onEnableToolWindows}
             onEnableRuntime={onEnableRuntime}

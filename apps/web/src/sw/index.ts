@@ -2722,7 +2722,7 @@ async function prewarmAllIdlePrefetchGroupsForUpdateReady(): Promise<void> {
   let iteration = 0;
   let orderedGroups: string[] | null = null;
 
-  while (true) {
+  while (Date.now() - startedAt < UPDATE_FULL_PREWARM_TIMEOUT_MS) {
     if (!orderedGroups) {
       const manifest = await getIdlePrefetchManifest();
       if (!manifest) {
@@ -2793,6 +2793,10 @@ async function prewarmAllIdlePrefetchGroupsForUpdateReady(): Promise<void> {
       setTimeout(resolve, waitMs);
     });
   }
+
+  throw new Error(
+    `idle-prefetch incomplete after ${Date.now() - startedAt}ms before the next retry`
+  );
 }
 
 sw.addEventListener('install', (event: ExtendableEvent) => {
@@ -6094,7 +6098,6 @@ function cleanupStaleRequests(): void {
 }
 
 async function handleImageRequest(request: Request): Promise<Response> {
-  try {
     // 生成唯一的请求ID用于追踪
     const requestId = Math.random().toString(36).substring(2, 10);
 
@@ -6282,9 +6285,6 @@ async function handleImageRequest(request: Request): Promise<Response> {
       }
       throw timeoutError;
     }
-  } catch (error) {
-    throw error;
-  }
 }
 
 // 创建超时响应，通知前端使用直接加载方式

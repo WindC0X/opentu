@@ -218,7 +218,15 @@ export type DrawnixProps = {
   isDataReady?: boolean;
   /** 当前画板 ID（用于 tab 同步过滤） */
   currentBoardId?: string | null;
+  /** Mengtu platform feature flags for first-version entry control */
+  mengtuFeatureFlags?: MengtuFeatureFlags;
 } & Omit<React.HTMLAttributes<HTMLDivElement>, 'onChange'>;
+
+export interface MengtuFeatureFlags {
+  agentEnabled?: boolean;
+  experimentalToolsEnabled?: boolean;
+  imageTaskEnabled?: boolean;
+}
 
 const DEFAULT_IDLE_PREFETCH_GROUPS: IdlePrefetchGroup[] = [];
 const PROJECT_DRAWER_ACTIVE_TAB_KEY = 'project-drawer-active-tab';
@@ -275,6 +283,7 @@ export const Drawnix: React.FC<DrawnixProps> = ({
   onTabSyncNeeded,
   isDataReady = false,
   currentBoardId,
+  mengtuFeatureFlags,
 }) => {
   const options: PlaitBoardOptions = {
     readonly: false,
@@ -884,6 +893,7 @@ export const Drawnix: React.FC<DrawnixProps> = ({
                       isDataReady={isDataReady}
                       onCreateProjectForMemory={handleCreateProjectForMemory}
                       currentBoardId={currentBoardId}
+                      mengtuFeatureFlags={mengtuFeatureFlags}
                       deferredRuntimeEnabled={deferredRuntimeEnabled}
                       shouldRenderDeferredFeatures={
                         shouldRenderDeferredFeatures
@@ -957,6 +967,7 @@ interface DrawnixContentProps {
   isDataReady: boolean;
   onCreateProjectForMemory: () => Promise<void>;
   currentBoardId?: string | null;
+  mengtuFeatureFlags?: MengtuFeatureFlags;
 }
 
 const DrawnixContent: React.FC<DrawnixContentProps> = ({
@@ -1009,6 +1020,7 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
   isDataReady,
   onCreateProjectForMemory,
   currentBoardId,
+  mengtuFeatureFlags,
 }) => {
   const { setAppState: updateState } = useDrawnix();
   const { chatDrawerRef } = useChatDrawer();
@@ -1631,6 +1643,7 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
             <DeferredAIInputBar
               isDataReady={isDataReady}
               activationKey={0}
+              featureFlags={mengtuFeatureFlags}
               onEnableToolWindows={enableToolWindows}
               onEnableRuntime={enableGenerationRuntime}
             />

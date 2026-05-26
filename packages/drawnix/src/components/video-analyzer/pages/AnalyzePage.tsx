@@ -15,7 +15,7 @@ import { formatShotsMarkdown } from '../types';
 import { videoAnalyzeTool } from '../../../mcp/tools/video-analyze';
 import { quickInsert } from '../../../mcp/tools/canvas-insertion';
 import { ModelDropdown } from '../../ai-input-bar/ModelDropdown';
-import { KnowledgeNoteContextSelector } from '../../shared';
+import { HoverTip, KnowledgeNoteContextSelector } from '../../shared';
 import {
   CreativeBriefEditor,
   VideoParametersRow,
@@ -848,9 +848,12 @@ export const AnalyzePage: React.FC<AnalyzePageProps> = ({
                   </button>
                   {pdfAttachment ? (
                     <div className="va-pdf-chip">
-                      <span title={pdfAttachment.name}>
-                        {pdfAttachment.name} · {formatSize(pdfAttachment.size)}
-                      </span>
+                      <HoverTip content={pdfAttachment.name}>
+                        <span>
+                          {pdfAttachment.name} ·{' '}
+                          {formatSize(pdfAttachment.size)}
+                        </span>
+                      </HoverTip>
                       <button
                         type="button"
                         aria-label="移除 PDF"

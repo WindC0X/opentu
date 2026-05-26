@@ -51,6 +51,7 @@ Thumbs.db
 package-lock.json
 apps/web/public/sw.js
 apps/web/public/sw.js.map
+apps/web/public/source.css
 .pnpm-store
 apps/web-e2e/test-results/
 apps/web-e2e/playwright-report/

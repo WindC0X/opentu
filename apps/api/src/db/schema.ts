@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgEnum,
@@ -32,6 +33,17 @@ export const quotaLedgerEntryType = pgEnum('mt_quota_ledger_entry_type', [
   'release',
   'refund',
   'adjustment',
+]);
+export const projectStatus = pgEnum('mt_project_status', [
+  'active',
+  'archived',
+  'deleted',
+]);
+export const canvasSyncStatus = pgEnum('mt_canvas_sync_status', [
+  'pending',
+  'running',
+  'succeeded',
+  'failed',
 ]);
 
 const tenantId = () => uuid('tenant_id').notNull();
@@ -239,3 +251,57 @@ export const mtAuditLogs = pgTable('mt_audit_logs', {
   targetType: varchar('target_type', { length: 80 }).notNull(),
   tenantId: tenantId(),
 });
+
+export const mtProjects = pgTable(
+  'mt_projects',
+  {
+    createdAt: createdAt(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    id: uuid('id').primaryKey().defaultRandom(),
+    lastOpenedAt: timestamp('last_opened_at', { withTimezone: true }),
+    opentuWorkspaceId: varchar('opentu_workspace_id', { length: 160 }),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => mtUsers.id),
+    status: projectStatus('status').notNull().default('active'),
+    tenantId: tenantId(),
+    title: varchar('title', { length: 120 }).notNull(),
+    updatedAt: updatedAt(),
+  },
+  (table) => ({
+    ownerStatusIdx: index('mt_projects_owner_status_idx').on(
+      table.tenantId,
+      table.ownerUserId,
+      table.status
+    ),
+    workspaceTenantIdx: uniqueIndex('mt_projects_workspace_uidx').on(
+      table.tenantId,
+      table.opentuWorkspaceId
+    ),
+  })
+);
+
+export const mtCanvasSyncRecords = pgTable(
+  'mt_canvas_sync_records',
+  {
+    assetId: uuid('asset_id'),
+    createdAt: createdAt(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    imageTaskId: uuid('image_task_id'),
+    lastErrorCode: varchar('last_error_code', { length: 120 }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => mtProjects.id),
+    retryCount: integer('retry_count').notNull().default(0),
+    status: canvasSyncStatus('status').notNull().default('pending'),
+    tenantId: tenantId(),
+    updatedAt: updatedAt(),
+  },
+  (table) => ({
+    projectStatusIdx: index('mt_canvas_sync_records_project_status_idx').on(
+      table.tenantId,
+      table.projectId,
+      table.status
+    ),
+  })
+);

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown, Check, Sparkles, Image, Video, Music4, FileText, Bot } from 'lucide-react';
 import { ATTACHED_ELEMENT_CLASS_NAME } from '@plait/core';
@@ -11,6 +11,7 @@ import { HoverTip } from '../shared/hover';
 export interface GenerationTypeDropdownProps {
   value: GenerationType;
   onSelect: (type: GenerationType) => void;
+  agentEnabled?: boolean;
   disabled?: boolean;
 }
 
@@ -25,20 +26,28 @@ const TYPE_OPTIONS: Array<{ value: GenerationType; label: string; icon: React.Re
 export const GenerationTypeDropdown: React.FC<GenerationTypeDropdownProps> = ({
   value,
   onSelect,
+  agentEnabled = true,
   disabled = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const { language } = useI18n();
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const options = useMemo(
+    () =>
+      agentEnabled
+        ? TYPE_OPTIONS
+        : TYPE_OPTIONS.filter(option => option.value !== 'agent'),
+    [agentEnabled]
+  );
 
   // 打开时重置高亮索引到当前选中项
   useEffect(() => {
     if (isOpen) {
-      const currentIndex = TYPE_OPTIONS.findIndex(opt => opt.value === value);
+      const currentIndex = options.findIndex(opt => opt.value === value);
       setHighlightedIndex(currentIndex >= 0 ? currentIndex : 0);
     }
-  }, [isOpen, value]);
+  }, [isOpen, options, value]);
 
   // 确保高亮项可见
   useEffect(() => {
@@ -68,24 +77,24 @@ export const GenerationTypeDropdown: React.FC<GenerationTypeDropdownProps> = ({
     }
 
     if (key === 'ArrowDown') {
-      setHighlightedIndex(prev => (prev < TYPE_OPTIONS.length - 1 ? prev + 1 : 0));
+      setHighlightedIndex(prev => (prev < options.length - 1 ? prev + 1 : 0));
       return true;
     }
 
     if (key === 'ArrowUp') {
-      setHighlightedIndex(prev => (prev > 0 ? prev - 1 : TYPE_OPTIONS.length - 1));
+      setHighlightedIndex(prev => (prev > 0 ? prev - 1 : options.length - 1));
       return true;
     }
 
     if (key === 'Enter' || key === ' ' || key === 'Tab') {
-      handleSelect(TYPE_OPTIONS[highlightedIndex].value);
+      handleSelect(options[highlightedIndex].value);
       return true;
     }
 
     return false;
-  }, [highlightedIndex, handleSelect]);
+  }, [highlightedIndex, handleSelect, options]);
 
-  const selectedOption = TYPE_OPTIONS.find(opt => opt.value === value) || TYPE_OPTIONS[0];
+  const selectedOption = options.find(opt => opt.value === value) || options[0];
 
   return (
     <KeyboardDropdown
@@ -131,7 +140,7 @@ export const GenerationTypeDropdown: React.FC<GenerationTypeDropdownProps> = ({
                 <span>{language === 'zh' ? '生成类型 (↑↓ Tab)' : 'Generation type (↑↓ Tab)'}</span>
               </div>
               <div ref={listRef} className="generation-type-dropdown__list">
-                {TYPE_OPTIONS.map((option, index) => {
+                {options.map((option, index) => {
                   const isSelected = option.value === value;
                   const isHighlighted = index === highlightedIndex;
                   return (

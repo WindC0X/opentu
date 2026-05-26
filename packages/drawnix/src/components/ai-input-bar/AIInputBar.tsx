@@ -172,6 +172,7 @@ import {
   type AIInputPrefillEventDetail,
 } from '../../services/ai-input-ui-events';
 import { normalizeKnowledgeContextRefs } from '../../services/generation-context-service';
+import type { MengtuFeatureFlags } from '../../drawnix';
 
 /**
  * 将 WorkflowDefinition 转换为 WorkflowMessageData
@@ -572,6 +573,7 @@ function isVideoUrl(url: string): boolean {
 
 interface AIInputBarProps {
   className?: string;
+  featureFlags?: MengtuFeatureFlags;
   /** 数据是否已准备好（用于判断画布是否为空） */
   isDataReady?: boolean;
   /** 确保工具窗口管理器已启用 */
@@ -771,7 +773,13 @@ const SelectionWatcher: React.FC<{
 SelectionWatcher.displayName = 'SelectionWatcher';
 
 export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
-  ({ className, isDataReady, onEnableToolWindows, onEnableRuntime }) => {
+  ({
+    className,
+    featureFlags,
+    isDataReady,
+    onEnableToolWindows,
+    onEnableRuntime,
+  }) => {
     // console.log('[AIInputBar] Component rendering');
 
     const { language } = useI18n();
@@ -994,7 +1002,11 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       [resolvePersistedModelSelection]
     );
 
-    const initialGenerationType = initialPreferences.generationType;
+    const agentEnabled = featureFlags?.agentEnabled ?? true;
+    const initialGenerationType =
+      !agentEnabled && initialPreferences.generationType === 'agent'
+        ? 'image'
+        : initialPreferences.generationType;
     const initialModelsForType =
       initialGenerationType === 'video'
         ? videoModels
@@ -1955,7 +1967,11 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
         const detail = (event as CustomEvent<AIInputFocusEventDetail>).detail;
 
         if (detail?.generationType) {
-          setGenerationType(detail.generationType);
+          setGenerationType(
+            !agentEnabled && detail.generationType === 'agent'
+              ? 'image'
+              : detail.generationType
+          );
         }
         if (detail?.skillId) {
           setSelectedSkillId(detail.skillId);
@@ -1972,7 +1988,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       return () => {
         window.removeEventListener(AI_INPUT_FOCUS_EVENT, handleAIInputFocus);
       };
-    }, [focusInput]);
+    }, [agentEnabled, focusInput]);
 
     useEffect(() => {
       const handleAIInputPrefill = async (
@@ -1983,7 +1999,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
           return;
         }
 
-        const nextGenerationType = detail.generationType;
+        const nextGenerationType =
+          !agentEnabled && detail.generationType === 'agent'
+            ? 'image'
+            : detail.generationType;
         const modelsForType =
           nextGenerationType === 'video'
             ? videoModels
@@ -2078,6 +2097,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
         window.removeEventListener(AI_INPUT_PREFILL_EVENT, handleAIInputPrefill);
       };
     }, [
+      agentEnabled,
       audioModels,
       confirmOverwriteInputIfNeeded,
       focusInput,
@@ -2101,7 +2121,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       }) => {
         setPrompt(info.prompt);
         setIsInspirationSendGuideActive(true);
-        setGenerationType('agent');
+        setGenerationType(agentEnabled ? 'agent' : 'image');
         if (info.skillId) {
           setSelectedSkillId(info.skillId);
           const systemSkill = findSystemSkillById(info.skillId);
@@ -2121,7 +2141,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
           category: info.category,
         });
       },
-      []
+      [agentEnabled]
     );
 
     // 处理历史提示词选择：将提示词回填到输入框并切换生成类型
@@ -2141,13 +2161,13 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
           } else if (info.modelType === 'text') {
             setGenerationType('text');
           } else if (info.modelType === 'agent') {
-            setGenerationType('agent');
+            setGenerationType(agentEnabled ? 'agent' : 'image');
           }
         }
 
         inputRef.current?.focus();
       },
-      []
+      [agentEnabled]
     );
 
     // 处理添加 Skill：打开知识库并定位到 Skill 目录，自动新建笔记
@@ -4625,6 +4645,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
               <GenerationTypeDropdown
                 value={generationType}
                 onSelect={setGenerationType}
+                agentEnabled={agentEnabled}
                 disabled={isSubmitting}
               />
 

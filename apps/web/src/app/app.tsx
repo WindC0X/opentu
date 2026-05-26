@@ -25,6 +25,9 @@ import {
 } from '@plait/core';
 import { ErrorFallbackUI, safeModeReload, goToDebug } from './ErrorBoundary';
 import { collectAndDownloadErrorLog } from '../utils/error-log-exporter';
+import { ProjectHomePage } from '../mengtu/ProjectHomePage';
+import type { CanvasBootContext } from '../mengtu/types';
+import styles from './app.module.scss';
 
 // 节流保存 viewport 的间隔（毫秒）
 const VIEWPORT_SAVE_DEBOUNCE = 500;
@@ -32,6 +35,7 @@ const VIEWPORT_SAVE_DEBOUNCE = 500;
 // URL 参数名
 const BOARD_URL_PARAM = 'board';
 const BOARD_CLOSE_SNAPSHOT_KEY = 'aitu_board_close_snapshot_v1';
+const MENGTU_CANVAS_BOOT_KEY = 'mengtu_canvas_boot_context_v1';
 
 // Global flag to prevent duplicate initialization in StrictMode
 let appInitialized = false;
@@ -50,6 +54,15 @@ type BoardCloseSnapshot = BoardPersistencePayload & {
 type BootController = {
   markReady: () => void;
   markError: (message?: string) => void;
+};
+
+type AppRoute = 'home' | 'canvas';
+type MengtuCanvasFeatureFlags = CanvasBootContext['featureFlags'];
+
+const DEFAULT_CANVAS_FEATURE_FLAGS: MengtuCanvasFeatureFlags = {
+  agentEnabled: false,
+  experimentalToolsEnabled: false,
+  imageTaskEnabled: false,
 };
 
 function getBootController(): BootController | undefined {
@@ -75,7 +88,7 @@ function getBoardIdFromUrl(): string | null {
  */
 function updateBoardIdInUrl(
   boardId: string | null,
-  replace: boolean = false
+  replace = false
 ): void {
   const url = new URL(window.location.href);
   if (boardId) {
@@ -137,7 +150,100 @@ function clearBoardCloseSnapshot(boardId?: string | null): void {
   }
 }
 
+function getCurrentRoute(): AppRoute {
+  if (typeof window === 'undefined') {
+    return 'home';
+  }
+  return window.location.pathname.startsWith('/canvas') ? 'canvas' : 'home';
+}
+
+function buildCanvasNavigationUrl(canvasUrl: string): string {
+  const target = new URL(canvasUrl, window.location.origin);
+  const current = new URL(window.location.href);
+  const sw = current.searchParams.get('sw');
+  if (sw && !target.searchParams.has('sw')) {
+    target.searchParams.set('sw', sw);
+  }
+  return `${target.pathname}${target.search}${target.hash}`;
+}
+
+function saveCanvasBootContext(bootContext: CanvasBootContext): void {
+  try {
+    sessionStorage.setItem(
+      MENGTU_CANVAS_BOOT_KEY,
+      JSON.stringify(bootContext)
+    );
+  } catch (error) {
+    console.warn('[App] Failed to save Mengtu canvas boot context:', error);
+  }
+}
+
+function loadCanvasFeatureFlags(): MengtuCanvasFeatureFlags {
+  try {
+    const raw = sessionStorage.getItem(MENGTU_CANVAS_BOOT_KEY);
+    if (!raw) {
+      return DEFAULT_CANVAS_FEATURE_FLAGS;
+    }
+    const parsed = JSON.parse(raw) as Partial<CanvasBootContext>;
+    if (
+      typeof parsed.featureFlags?.agentEnabled !== 'boolean' ||
+      typeof parsed.featureFlags?.experimentalToolsEnabled !== 'boolean' ||
+      typeof parsed.featureFlags?.imageTaskEnabled !== 'boolean'
+    ) {
+      return DEFAULT_CANVAS_FEATURE_FLAGS;
+    }
+    return parsed.featureFlags;
+  } catch (error) {
+    console.warn('[App] Failed to load Mengtu canvas boot context:', error);
+    return DEFAULT_CANVAS_FEATURE_FLAGS;
+  }
+}
+
 export function App() {
+  const [route, setRoute] = useState<AppRoute>(() => getCurrentRoute());
+  const [canvasFeatureFlags, setCanvasFeatureFlags] =
+    useState<MengtuCanvasFeatureFlags>(() => loadCanvasFeatureFlags());
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setRoute(getCurrentRoute());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (route === 'home') {
+      getBootController()?.markReady();
+    }
+  }, [route]);
+
+  const handleOpenCanvas = useCallback((bootContext: CanvasBootContext) => {
+    const canvasUrl = buildCanvasNavigationUrl(bootContext.canvasUrl);
+    saveCanvasBootContext(bootContext);
+    setCanvasFeatureFlags(bootContext.featureFlags);
+    window.history.pushState({ projectId: bootContext.projectId }, '', canvasUrl);
+    setRoute('canvas');
+  }, []);
+
+  if (route === 'home') {
+    return <ProjectHomePage onOpenCanvas={handleOpenCanvas} />;
+  }
+
+  return (
+    <div className={styles.canvasRoute}>
+      <CanvasApp featureFlags={canvasFeatureFlags} />
+    </div>
+  );
+}
+
+function CanvasApp({
+  featureFlags,
+}: {
+  featureFlags: MengtuCanvasFeatureFlags;
+}) {
   const [isLoading, setIsLoading] = useState(true);
   const [isDataReady, setIsDataReady] = useState(false);
   // 使用 ref 跟踪 isDataReady，避免 handleBoardChange 因闭包捕获旧值导致保存被跳过
@@ -508,7 +614,7 @@ export function App() {
 
   // Handle board switching
   const handleBoardSwitch = useCallback(
-    async (board: Board, skipUrlUpdate: boolean = false) => {
+    async (board: Board, skipUrlUpdate = false) => {
       try {
         // 立即更新 URL 和 sessionStorage，确保刷新页面时能恢复到正确的画板
         // 必须在任何异步操作之前执行，避免刷新时丢失画板选择
@@ -924,6 +1030,7 @@ export function App() {
         onTabSyncNeeded={handleTabSyncNeeded}
         isDataReady={isDataReady}
         currentBoardId={currentBoardId}
+        mengtuFeatureFlags={featureFlags}
         afterInit={(board) => {
           // 保存 board 引用，用于手动触发边界更新
           boardRef.current = board;

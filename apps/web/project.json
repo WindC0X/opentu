@@ -67,7 +67,7 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "eslint .",
+        "command": "eslint src --ext .ts,.tsx,.js,.jsx",
         "cwd": "apps/web"
       }
     },

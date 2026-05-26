@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app';
-import { createTestAuthContext } from './test/helpers';
+import { createTestAppContext, createUserWithQuota } from './test/helpers';
 
 describe('S03 auth/access API', () => {
   it('registers by invite, logs in, redeems quota, and blocks disabled login', async () => {
-    const { repository, service } = await createTestAuthContext();
+    const { repository, service, projectService } = await createTestAppContext();
     const app = createApp({
       authService: service,
+      projectService,
       secureCookies: false,
     });
 
@@ -104,6 +105,124 @@ describe('S03 auth/access API', () => {
   });
 });
 
+describe('S04 projects/home API', () => {
+  it('creates owner projects, returns summary, and opens canvas owner-only', async () => {
+    const { projectRepository, projectService, repository, service } =
+      await createTestAppContext();
+    const app = createApp({
+      authService: service,
+      projectService,
+      secureCookies: false,
+    });
+
+    await createUserWithQuota(repository, {
+      email: 'owner@mengtu.local',
+      password: 'owner-password',
+      username: 'owner',
+    });
+    await createUserWithQuota(repository, {
+      email: 'other@mengtu.local',
+      password: 'other-password',
+      username: 'other',
+    });
+
+    const ownerLogin = await post(app, '/api/auth/login', {
+      login: 'owner@mengtu.local',
+      password: 'owner-password',
+    });
+    const otherLogin = await post(app, '/api/auth/login', {
+      login: 'other@mengtu.local',
+      password: 'other-password',
+    });
+    const adminLogin = await post(app, '/api/auth/login', {
+      login: 'admin@mengtu.local',
+      password: 'admin-password',
+    });
+
+    const empty = await get(app, '/api/projects', ownerLogin.cookie);
+    expect(empty.response.status).toBe(200);
+    expect(empty.json.data.projects).toEqual([]);
+
+    const missingTitle = await post(
+      app,
+      '/api/projects',
+      { title: '   ' },
+      ownerLogin.cookie
+    );
+    expect(missingTitle.response.status).toBe(400);
+    expect(missingTitle.json.error.code).toBe('PROJECT_TITLE_REQUIRED');
+
+    const created = await post(
+      app,
+      '/api/projects',
+      { title: '  S04 Project  ' },
+      ownerLogin.cookie
+    );
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.project.title).toBe('S04 Project');
+    const projectId = created.json.data.project.id as string;
+
+    const summary = await get(app, '/api/home/summary', ownerLogin.cookie);
+    expect(summary.response.status).toBe(200);
+    expect(summary.json.data.projects.total).toBe(1);
+    expect(summary.json.data.recentAssets).toEqual([]);
+    expect(summary.json.data.recentTasks).toEqual([]);
+
+    const adminDetail = await get(
+      app,
+      `/api/projects/${projectId}`,
+      adminLogin.cookie
+    );
+    expect(adminDetail.response.status).toBe(200);
+    expect(adminDetail.json.data.project.id).toBe(projectId);
+
+    const forbiddenDetail = await get(
+      app,
+      `/api/projects/${projectId}`,
+      otherLogin.cookie
+    );
+    expect(forbiddenDetail.response.status).toBe(404);
+    expect(forbiddenDetail.json.error.code).toBe('PROJECT_NOT_FOUND');
+
+    const forbiddenOpen = await post(
+      app,
+      `/api/projects/${projectId}/open-canvas`,
+      {},
+      adminLogin.cookie
+    );
+    expect(forbiddenOpen.response.status).toBe(403);
+    expect(forbiddenOpen.json.error.code).toBe('FORBIDDEN');
+
+    const opened = await post(
+      app,
+      `/api/projects/${projectId}/open-canvas`,
+      {},
+      ownerLogin.cookie
+    );
+    expect(opened.response.status).toBe(200);
+    expect(opened.json.data).toMatchObject({
+      canvasUrl: expect.stringContaining(`/canvas?project_id=${projectId}`),
+      featureFlags: {
+        agentEnabled: false,
+        experimentalToolsEnabled: false,
+        imageTaskEnabled: false,
+      },
+      projectId,
+    });
+    expect(projectRepository.projects.get(projectId)?.lastOpenedAt).toEqual(
+      new Date('2026-05-26T00:00:00.000Z')
+    );
+  });
+});
+
+async function get(
+  app: ReturnType<typeof createApp>,
+  path: string,
+  cookie?: string
+) {
+  return send(app, path, 'GET', undefined, cookie);
+}
+
 async function post(
   app: ReturnType<typeof createApp>,
   path: string,
@@ -137,7 +256,7 @@ async function send(
   }
 
   const response = await app.request(path, {
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
     headers,
     method,
   });

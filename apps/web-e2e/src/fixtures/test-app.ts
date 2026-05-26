@@ -4,6 +4,186 @@
  */
 import { type Page, type Locator, expect } from '@playwright/test';
 
+type MockProject = {
+  id: string;
+  title: string;
+  status: 'active';
+  opentuWorkspaceId: string;
+  lastOpenedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const mockEnvelope = <T>(data: T) => ({
+  data,
+  error: null,
+  request_id: 'req_smoke_s04',
+});
+
+const mockErrorEnvelope = (code: string, message: string) => ({
+  data: null,
+  error: { code, message },
+  request_id: 'req_smoke_s04',
+});
+
+/**
+ * MengtuHomeApp Page Object
+ * 覆盖 S04 项目首页到 OpenTu 画布的入口流。
+ */
+export class MengtuHomeApp {
+  readonly page: Page;
+  readonly projectNameInput: Locator;
+  readonly createProjectButton: Locator;
+
+  constructor(page: Page) {
+    this.page = page;
+    this.projectNameInput = page.getByLabel('项目名称');
+    this.createProjectButton = page.getByRole('button', {
+      name: '新建项目',
+    });
+  }
+
+  async installApiMocks() {
+    const projects: MockProject[] = [];
+
+    await this.page.route('**/api/**', async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname;
+      const now = new Date('2026-05-26T00:00:00.000Z').toISOString();
+
+      if (request.method() === 'GET' && path === '/api/home/summary') {
+        await route.fulfill({
+          body: JSON.stringify(
+            mockEnvelope({
+              projects: {
+                items: projects.slice(0, 5),
+                total: projects.length,
+              },
+              quota: {
+                accountId: 'quota_smoke',
+                balanceAmount: 100,
+                heldAmount: 0,
+              },
+              recentAssets: [],
+              recentTasks: [],
+              user: {
+                id: 'user_smoke',
+                role: 'user',
+                username: 'smoke-user',
+              },
+            })
+          ),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+
+      if (request.method() === 'GET' && path === '/api/projects') {
+        await route.fulfill({
+          body: JSON.stringify(mockEnvelope({ projects })),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+
+      if (request.method() === 'POST' && path === '/api/projects') {
+        const body = JSON.parse(request.postData() || '{}') as {
+          title?: string;
+        };
+        const title = body.title?.trim();
+        if (!title) {
+          await route.fulfill({
+            body: JSON.stringify(
+              mockErrorEnvelope('PROJECT_TITLE_REQUIRED', '请输入项目名称')
+            ),
+            contentType: 'application/json',
+            status: 400,
+          });
+          return;
+        }
+
+        const project: MockProject = {
+          id: `proj_smoke_${projects.length + 1}`,
+          title,
+          status: 'active',
+          opentuWorkspaceId: `workspace_proj_smoke_${projects.length + 1}`,
+          lastOpenedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        projects.unshift(project);
+        await route.fulfill({
+          body: JSON.stringify(mockEnvelope({ project })),
+          contentType: 'application/json',
+          status: 201,
+        });
+        return;
+      }
+
+      const openCanvasMatch = path.match(
+        /^\/api\/projects\/([^/]+)\/open-canvas$/
+      );
+      if (request.method() === 'POST' && openCanvasMatch) {
+        const project = projects.find((item) => item.id === openCanvasMatch[1]);
+        if (!project) {
+          await route.fulfill({
+            body: JSON.stringify(
+              mockErrorEnvelope('PROJECT_NOT_FOUND', '项目不存在')
+            ),
+            contentType: 'application/json',
+            status: 404,
+          });
+          return;
+        }
+
+        await route.fulfill({
+          body: JSON.stringify(
+            mockEnvelope({
+              canvasUrl: `/canvas?project_id=${project.id}&board=${project.opentuWorkspaceId}`,
+              featureFlags: {
+                agentEnabled: false,
+                experimentalToolsEnabled: false,
+                imageTaskEnabled: false,
+              },
+              models: [],
+              opentuWorkspaceId: project.opentuWorkspaceId,
+              projectId: project.id,
+            })
+          ),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+
+      await route.fallback();
+    });
+  }
+
+  async gotoHome() {
+    await this.page.goto('/?sw=0');
+    await expect(
+      this.page.getByRole('heading', { name: '梦图' })
+    ).toBeVisible({ timeout: 60000 });
+  }
+
+  async createProjectAndOpenCanvas(title: string) {
+    await this.gotoHome();
+    await this.projectNameInput.fill(title);
+    await this.createProjectButton.click();
+
+    const projectItem = this.page.locator('article').filter({ hasText: title });
+    await expect(projectItem).toBeVisible();
+    await projectItem.getByRole('button', { name: new RegExp(title) }).click();
+    await expect(this.page.locator('.drawnix')).toBeVisible({
+      timeout: 60000,
+    });
+  }
+}
+
 export class DrawnixApp {
   readonly page: Page;
   

@@ -11,9 +11,11 @@ import {
 } from './http/cookies';
 import { fail, ok } from './http/response';
 import type { AppEnv } from './http/types';
+import { ProjectService } from './projects/service';
 
 export interface AppDependencies {
   authService: AuthService;
+  projectService: ProjectService;
   secureCookies?: boolean;
 }
 
@@ -59,6 +61,49 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   app.get('/api/me', requireAuth(dependencies), async (c) => {
     return ok(c, await dependencies.authService.getMe(c.get('auth')));
   });
+
+  app.get('/api/home/summary', requireAuth(dependencies), async (c) => {
+    return ok(c, await dependencies.projectService.homeSummary(c.get('auth')));
+  });
+
+  app.get('/api/projects', requireAuth(dependencies), async (c) => {
+    return ok(c, await dependencies.projectService.listProjects(c.get('auth')));
+  });
+
+  app.post('/api/projects', requireAuth(dependencies), async (c) => {
+    const body = await readJson(c);
+    return ok(
+      c,
+      await dependencies.projectService.createProject(c.get('auth'), {
+        title: requiredProjectTitle(body),
+      }),
+      201
+    );
+  });
+
+  app.get('/api/projects/:projectId', requireAuth(dependencies), async (c) => {
+    return ok(
+      c,
+      await dependencies.projectService.getProject(
+        c.get('auth'),
+        requiredParam(c, 'projectId')
+      )
+    );
+  });
+
+  app.post(
+    '/api/projects/:projectId/open-canvas',
+    requireAuth(dependencies),
+    async (c) => {
+      return ok(
+        c,
+        await dependencies.projectService.openCanvas(
+          c.get('auth'),
+          requiredParam(c, 'projectId')
+        )
+      );
+    }
+  );
 
   app.post('/api/me/terms/accept', requireAuth(dependencies), async (c) => {
     const body = await readJson(c);
@@ -259,6 +304,14 @@ function requiredString(body: Record<string, unknown>, field: string): string {
   const value = body[field];
   if (typeof value !== 'string' || !value.trim()) {
     throw new AppError('BAD_REQUEST', 400, `${field} is required`);
+  }
+  return value;
+}
+
+function requiredProjectTitle(body: Record<string, unknown>): string {
+  const value = body.title;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new AppError('PROJECT_TITLE_REQUIRED', 400, '请输入项目名称');
   }
   return value;
 }

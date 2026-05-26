@@ -12,6 +12,13 @@
         "command": "tsc -p tsconfig.lib.json --noEmit",
         "cwd": "packages/react-text"
       }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "eslint src --ext .ts,.tsx,.js,.jsx",
+        "cwd": "packages/react-text"
+      }
     }
   }
 }
