@@ -18,6 +18,7 @@ import {
   ApiClientError,
   createProject,
   getHomeSummary,
+  listAssets,
   listProjects,
   openProjectCanvas,
 } from './api-client';
@@ -34,6 +35,7 @@ export function ProjectHomePage({ onOpenCanvas }: ProjectHomePageProps) {
   const [status, setStatus] = useState<HomeStatus>('loading');
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [assetCount, setAssetCount] = useState(0);
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
   const [creating, setCreating] = useState(false);
@@ -49,6 +51,11 @@ export function ProjectHomePage({ onOpenCanvas }: ProjectHomePageProps) {
       ]);
       setSummary(nextSummary);
       setProjects(nextProjects);
+      try {
+        setAssetCount((await listAssets()).length);
+      } catch {
+        setAssetCount(nextSummary.recentAssets.length);
+      }
       setStatus('ready');
     } catch (error) {
       if (error instanceof ApiClientError && error.code === 'UNAUTHENTICATED') {
@@ -158,7 +165,7 @@ export function ProjectHomePage({ onOpenCanvas }: ProjectHomePageProps) {
             label="当前点数"
             value={summary?.quota.balanceAmount ?? 0}
           />
-          <SummaryPanel label="最近资产" value={summary?.recentAssets.length ?? 0} />
+          <SummaryPanel label="最近资产" value={assetCount} />
           <SummaryPanel label="最近任务" value={summary?.recentTasks.length ?? 0} />
         </section>
 

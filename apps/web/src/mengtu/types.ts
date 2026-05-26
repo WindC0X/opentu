@@ -49,3 +49,39 @@ export interface CanvasBootContext {
   opentuWorkspaceId: string;
   projectId: string;
 }
+
+export type AssetVisibilityStatus = 'normal' | 'discarded' | 'hidden' | 'deleted';
+export type AssetVariantType =
+  | 'original'
+  | 'provider_input'
+  | 'thumb'
+  | 'preview';
+
+export interface AssetSummary {
+  id: string;
+  projectId: string;
+  assetKind: 'image' | 'mask' | 'preset';
+  origin: 'upload' | 'generated' | 'mask' | 'preset';
+  visibilityStatus: AssetVisibilityStatus;
+  favorite: boolean;
+  selected: boolean;
+  mimeType: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  sha256: string;
+  aiGenerated: boolean;
+  aigcMetadataStatus: 'unknown' | 'present' | 'removed' | 'not_applicable';
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+  variants: Array<{
+    exifRemoved: boolean;
+    height: number;
+    mimeType: string;
+    sizeBytes: number;
+    type: AssetVariantType;
+    url: string;
+    width: number;
+  }>;
+}

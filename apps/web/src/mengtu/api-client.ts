@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  AssetSummary,
   CanvasBootContext,
   HomeSummary,
   ProjectSummary,
@@ -42,6 +43,34 @@ export async function openProjectCanvas(
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   });
+}
+
+export async function listAssets(projectId?: string): Promise<AssetSummary[]> {
+  const search = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  const result = await request<{ assets: AssetSummary[] }>(`/api/assets${search}`);
+  return result.assets;
+}
+
+export async function uploadAsset(
+  projectId: string,
+  file: File
+): Promise<AssetSummary> {
+  const form = new FormData();
+  form.append('projectId', projectId);
+  form.append('file', file);
+  const result = await request<{ asset: AssetSummary }>('/api/assets/upload', {
+    body: form,
+    method: 'POST',
+  });
+  return result.asset;
+}
+
+export async function deleteAsset(assetId: string): Promise<AssetSummary> {
+  const result = await request<{ asset: AssetSummary }>(
+    `/api/assets/${assetId}`,
+    { method: 'DELETE' }
+  );
+  return result.asset;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

@@ -45,6 +45,44 @@ export const canvasSyncStatus = pgEnum('mt_canvas_sync_status', [
   'succeeded',
   'failed',
 ]);
+export const assetKind = pgEnum('mt_asset_kind', ['image', 'mask', 'preset']);
+export const assetOrigin = pgEnum('mt_asset_origin', [
+  'upload',
+  'generated',
+  'mask',
+  'preset',
+]);
+export const assetVisibilityStatus = pgEnum('mt_asset_visibility_status', [
+  'normal',
+  'discarded',
+  'hidden',
+  'deleted',
+]);
+export const aigcMetadataStatus = pgEnum('mt_aigc_metadata_status', [
+  'unknown',
+  'present',
+  'removed',
+  'not_applicable',
+]);
+export const assetVariantType = pgEnum('mt_asset_variant_type', [
+  'original',
+  'provider_input',
+  'thumb',
+  'preview',
+]);
+export const assetRelationType = pgEnum('mt_asset_relation_type', [
+  'source',
+  'mask',
+  'reference',
+  'result',
+]);
+export const assetReferenceRole = pgEnum('mt_asset_reference_role', [
+  'general',
+  'subject',
+  'style',
+  'composition',
+  'background',
+]);
 
 const tenantId = () => uuid('tenant_id').notNull();
 const createdAt = () =>
@@ -302,6 +340,120 @@ export const mtCanvasSyncRecords = pgTable(
       table.tenantId,
       table.projectId,
       table.status
+    ),
+  })
+);
+
+export const mtAssets = pgTable(
+  'mt_assets',
+  {
+    aigcMetadataStatus: aigcMetadataStatus('aigc_metadata_status')
+      .notNull()
+      .default('not_applicable'),
+    aiGenerated: boolean('ai_generated').notNull().default(false),
+    assetKind: assetKind('asset_kind').notNull().default('image'),
+    createdAt: createdAt(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    favorite: boolean('favorite').notNull().default(false),
+    generationTaskId: uuid('generation_task_id'),
+    hasProviderWatermark: boolean('has_provider_watermark'),
+    height: integer('height').notNull(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    mimeType: varchar('mime_type', { length: 80 }).notNull(),
+    modelKey: varchar('model_key', { length: 120 }),
+    modelVersion: varchar('model_version', { length: 120 }),
+    origin: assetOrigin('origin').notNull().default('upload'),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => mtUsers.id),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => mtProjects.id),
+    provider: varchar('provider', { length: 120 }),
+    selected: boolean('selected').notNull().default(false),
+    sha256: varchar('sha256', { length: 64 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    tenantId: tenantId(),
+    updatedAt: updatedAt(),
+    visibilityStatus: assetVisibilityStatus('visibility_status')
+      .notNull()
+      .default('normal'),
+    width: integer('width').notNull(),
+  },
+  (table) => ({
+    ownerStatusIdx: index('mt_assets_owner_status_idx').on(
+      table.tenantId,
+      table.ownerUserId,
+      table.visibilityStatus
+    ),
+    projectCreatedIdx: index('mt_assets_project_created_idx').on(
+      table.tenantId,
+      table.projectId,
+      table.createdAt
+    ),
+    shaOwnerIdx: index('mt_assets_owner_sha_idx').on(
+      table.tenantId,
+      table.ownerUserId,
+      table.sha256
+    ),
+  })
+);
+
+export const mtAssetVariants = pgTable(
+  'mt_asset_variants',
+  {
+    assetId: uuid('asset_id')
+      .notNull()
+      .references(() => mtAssets.id),
+    createdAt: createdAt(),
+    createdByJobId: uuid('created_by_job_id'),
+    exifRemoved: boolean('exif_removed').notNull().default(false),
+    height: integer('height').notNull(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    mimeType: varchar('mime_type', { length: 80 }).notNull(),
+    sha256: varchar('sha256', { length: 64 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    storageKey: text('storage_key').notNull(),
+    tenantId: tenantId(),
+    variantType: assetVariantType('variant_type').notNull(),
+    width: integer('width').notNull(),
+  },
+  (table) => ({
+    assetVariantIdx: uniqueIndex('mt_asset_variants_asset_type_uidx').on(
+      table.assetId,
+      table.variantType
+    ),
+    storageKeyIdx: uniqueIndex('mt_asset_variants_storage_key_uidx').on(
+      table.storageKey
+    ),
+  })
+);
+
+export const mtAssetRelations = pgTable(
+  'mt_asset_relations',
+  {
+    candidateIndex: integer('candidate_index'),
+    createdAt: createdAt(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    maskAssetId: uuid('mask_asset_id').references(() => mtAssets.id),
+    referenceAssetId: uuid('reference_asset_id').references(() => mtAssets.id),
+    referenceRole: assetReferenceRole('reference_role'),
+    relationType: assetRelationType('relation_type').notNull(),
+    resultAssetId: uuid('result_asset_id')
+      .notNull()
+      .references(() => mtAssets.id),
+    sourceAssetId: uuid('source_asset_id').references(() => mtAssets.id),
+    taskId: uuid('task_id'),
+    tenantId: tenantId(),
+  },
+  (table) => ({
+    resultIdx: index('mt_asset_relations_result_idx').on(
+      table.tenantId,
+      table.resultAssetId
+    ),
+    taskIdx: index('mt_asset_relations_task_idx').on(
+      table.tenantId,
+      table.taskId
     ),
   })
 );

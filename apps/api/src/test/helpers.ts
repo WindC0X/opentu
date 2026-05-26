@@ -1,9 +1,12 @@
 import { AuthService } from '../auth/service';
 import { hashPassword } from '../auth/password';
 import { DEFAULT_TENANT_ID, User } from '../auth/types';
+import { AssetService } from '../assets/service';
 import { ProjectService } from '../projects/service';
+import { InMemoryAssetRepository } from '../repositories/in-memory-asset-repository';
 import { InMemoryAuthRepository } from '../repositories/in-memory-auth-repository';
 import { InMemoryProjectRepository } from '../repositories/in-memory-project-repository';
+import { InMemoryStorageService } from '../storage/in-memory-storage-service';
 
 export async function createTestAuthContext() {
   const repository = new InMemoryAuthRepository();
@@ -36,11 +39,26 @@ export async function createTestAppContext() {
   const projectService = new ProjectService(projectRepository, {
     now: () => new Date('2026-05-26T00:00:00.000Z'),
   });
+  const assetRepository = new InMemoryAssetRepository();
+  const storageService = new InMemoryStorageService();
+  const assetService = new AssetService(
+    assetRepository,
+    projectRepository,
+    storageService,
+    auth.repository,
+    {
+      now: () => new Date('2026-05-27T00:00:00.000Z'),
+      storagePrefix: 'test',
+    }
+  );
 
   return {
+    assetRepository,
+    assetService,
     ...auth,
     projectRepository,
     projectService,
+    storageService,
   };
 }
 

@@ -69,6 +69,8 @@ export interface Asset {
   contentHash?: string; // 文件内容哈希，用于本地去重
   dedupeAssetIds?: string[]; // 去重组内的本地素材 ID（仅本地来源）
   dedupeUrls?: string[]; // 去重组内的缓存 URL（仅本地来源）
+  favorite?: boolean; // 平台收藏标记
+  selected?: boolean; // 平台选中标记
 
   // 可选扩展
   thumbnail?: string; // 缩略图URL（视频用）
@@ -80,6 +82,15 @@ export interface Asset {
   clipId?: string; // 音频片段 ID（仅 AI 音频）
   providerTaskId?: string; // 供应商任务 ID（仅 AI 音频）
   cacheWarning?: CacheWarning; // 缓存失败/不可用提醒
+  platformAssetId?: string; // 梦图平台资产 ID
+  platformProjectId?: string; // 梦图平台项目 ID
+  platformVisibilityStatus?: 'normal' | 'discarded' | 'hidden' | 'deleted';
+  variantUrls?: {
+    original?: string;
+    providerInput?: string;
+    thumb?: string;
+    preview?: string;
+  };
 }
 
 /**
@@ -98,10 +109,21 @@ export interface StoredAsset {
   createdAt: number;
   size?: number;
   contentHash?: string; // 文件内容哈希，用于去重
+  favorite?: boolean;
+  selected?: boolean;
   prompt?: string; // AI 生成的提示词（仅 AI_GENERATED）
   modelName?: string; // 生成模型名称（仅 AI_GENERATED）
   characterMeta?: CharacterAssetMeta; // 角色素材元数据
   cacheWarning?: CacheWarning; // 缓存失败/不可用提醒
+  platformAssetId?: string;
+  platformProjectId?: string;
+  platformVisibilityStatus?: 'normal' | 'discarded' | 'hidden' | 'deleted';
+  variantUrls?: {
+    original?: string;
+    providerInput?: string;
+    thumb?: string;
+    preview?: string;
+  };
 }
 
 /**

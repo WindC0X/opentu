@@ -19,6 +19,13 @@ import {
 } from 'react';
 import { MessagePlugin } from '../utils/message-plugin';
 import { assetStorageService } from '../services/asset-storage-service';
+import {
+  getCurrentPlatformProjectId,
+  isPlatformAsset,
+  listPlatformAssets,
+  softDeletePlatformAsset,
+  uploadPlatformAsset,
+} from '../services/asset-integration-service';
 import { taskQueueService } from '../services/task-queue';
 import { markAssetAsCharacter } from '../services/character-asset-metadata-service';
 import {
@@ -879,7 +886,21 @@ export function AssetProvider({ children }: AssetProviderProps) {
         );
 
         // 5. 合并所有来源，按创建时间倒序排列
+        let platformAssets: Asset[] = [];
+        const platformProjectId = getCurrentPlatformProjectId();
+        if (platformProjectId) {
+          try {
+            platformAssets = await listPlatformAssets(platformProjectId);
+          } catch (platformError) {
+            console.warn(
+              '[AssetContext] Failed to load platform assets, keeping local cache fallback:',
+              platformError
+            );
+          }
+        }
+
         const allAssets = [
+          ...platformAssets,
           ...groupedLocalAssets,
           ...nonAudioGeneratedAssets,
           ...nonAudioAiAssets,
@@ -1043,6 +1064,32 @@ export function AssetProvider({ children }: AssetProviderProps) {
             ? file.type
             : file.type || 'application/octet-stream';
 
+        const platformProjectId = getCurrentPlatformProjectId();
+        if (
+          platformProjectId &&
+          type === AssetTypeEnum.IMAGE &&
+          source === AssetSourceEnum.LOCAL
+        ) {
+          try {
+            const platformAsset = await uploadPlatformAsset(
+              file,
+              platformProjectId,
+              assetName
+            );
+            setAssets((prev) => mergeVisibleAsset(prev, platformAsset));
+            MessagePlugin.success({
+              content: '素材已上传到平台',
+              duration: 2000,
+            });
+            return platformAsset;
+          } catch (platformError) {
+            console.warn(
+              '[AssetContext] Platform upload failed, falling back to local cache:',
+              platformError
+            );
+          }
+        }
+
         // console.log('[AssetContext] Calling assetStorageService.addAsset...');
         const asset = await assetStorageService.addAsset({
           type,
@@ -1115,7 +1162,9 @@ export function AssetProvider({ children }: AssetProviderProps) {
         const asset = assets.find((a) => a.id === id);
         const cleanupTargets = asset ? getLocalCleanupTargets(asset) : null;
 
-        if (id.startsWith('unified-cache-')) {
+        if (asset && isPlatformAsset(asset)) {
+          await softDeletePlatformAsset(asset.platformAssetId ?? asset.id);
+        } else if (id.startsWith('unified-cache-')) {
           if (cleanupTargets) {
             await Promise.all(
               cleanupTargets.urls.map((url) =>
@@ -1227,6 +1276,7 @@ export function AssetProvider({ children }: AssetProviderProps) {
 
         // 区分本地素材、AI 生成素材和缓存素材
         const localIds: string[] = [];
+        const platformIds: string[] = [];
         const aiIds: string[] = [];
         const cacheIds: string[] = [];
         const localUrlSet = new Set<string>();
@@ -1234,6 +1284,10 @@ export function AssetProvider({ children }: AssetProviderProps) {
 
         for (const id of ids) {
           const asset = assets.find((a) => a.id === id);
+          if (asset && isPlatformAsset(asset)) {
+            platformIds.push(id);
+            continue;
+          }
           if (asset?.source === AssetSourceEnum.AI_GENERATED) {
             aiIds.push(id);
             continue;
@@ -1260,6 +1314,18 @@ export function AssetProvider({ children }: AssetProviderProps) {
             cacheIds.push(id);
           } else {
             localIds.push(id);
+          }
+        }
+
+        for (const id of platformIds) {
+          try {
+            const asset = assets.find((a) => a.id === id);
+            await softDeletePlatformAsset(asset?.platformAssetId ?? id);
+            await audioPlaylistService.removeAssetFromAllPlaylists(id);
+            successIds.push(id);
+          } catch (err) {
+            console.error(`Failed to soft delete platform asset ${id}:`, err);
+            errors.push({ id, error: err as Error });
           }
         }
 

@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto';
 
 import { Hono, type Context, type Next } from 'hono';
 
+import { AssetService } from './assets/service';
+import type { AssetVariantType } from './assets/types';
 import { AuthService } from './auth/service';
 import { AppError, toAppError } from './errors';
 import {
@@ -14,6 +16,7 @@ import type { AppEnv } from './http/types';
 import { ProjectService } from './projects/service';
 
 export interface AppDependencies {
+  assetService: AssetService;
   authService: AuthService;
   projectService: ProjectService;
   secureCookies?: boolean;
@@ -65,6 +68,95 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   app.get('/api/home/summary', requireAuth(dependencies), async (c) => {
     return ok(c, await dependencies.projectService.homeSummary(c.get('auth')));
   });
+
+  app.post('/api/assets/upload', requireAuth(dependencies), async (c) => {
+    const upload = await readUpload(c);
+    return ok(
+      c,
+      await dependencies.assetService.uploadAsset(c.get('auth'), upload),
+      201
+    );
+  });
+
+  app.get('/api/assets', requireAuth(dependencies), async (c) => {
+    const projectId = c.req.query('project_id') ?? undefined;
+    return ok(
+      c,
+      await dependencies.assetService.listAssets(c.get('auth'), { projectId })
+    );
+  });
+
+  app.get('/api/assets/:assetId', requireAuth(dependencies), async (c) => {
+    return ok(
+      c,
+      await dependencies.assetService.getAsset(
+        c.get('auth'),
+        requiredParam(c, 'assetId')
+      )
+    );
+  });
+
+  app.get(
+    '/api/assets/:assetId/variants/:variantType',
+    requireAuth(dependencies),
+    async (c) => {
+      const result = await dependencies.assetService.readVariant(
+        c.get('auth'),
+        requiredParam(c, 'assetId'),
+        requiredVariantType(c)
+      );
+      return new Response(result.body, {
+        headers: {
+          'cache-control': 'private, max-age=60',
+          'content-length': String(result.variant.sizeBytes),
+          'content-type': result.variant.mimeType,
+          'x-mengtu-asset-id': result.asset.id,
+          'x-mengtu-variant-type': result.variant.variantType,
+        },
+      });
+    }
+  );
+
+  app.patch('/api/assets/:assetId', requireAuth(dependencies), async (c) => {
+    const body = await readJson(c);
+    return ok(
+      c,
+      await dependencies.assetService.updateAsset(
+        c.get('auth'),
+        requiredParam(c, 'assetId'),
+        {
+          favorite: optionalBoolean(body, 'favorite'),
+          selected: optionalBoolean(body, 'selected'),
+          visibilityStatus: optionalAssetVisibilityStatus(body),
+        }
+      )
+    );
+  });
+
+  app.delete('/api/assets/:assetId', requireAuth(dependencies), async (c) => {
+    return ok(
+      c,
+      await dependencies.assetService.softDeleteAsset(
+        c.get('auth'),
+        requiredParam(c, 'assetId')
+      )
+    );
+  });
+
+  app.post(
+    '/api/assets/:assetId/restore',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) => {
+      return ok(
+        c,
+        await dependencies.assetService.restoreAsset(
+          c.get('auth'),
+          requiredParam(c, 'assetId')
+        )
+      );
+    }
+  );
 
   app.get('/api/projects', requireAuth(dependencies), async (c) => {
     return ok(c, await dependencies.projectService.listProjects(c.get('auth')));
@@ -405,6 +497,91 @@ function optionalUserStatus(
     throw new AppError('BAD_REQUEST', 400, 'status must be active or disabled');
   }
   return value;
+}
+
+function optionalBoolean(
+  body: Record<string, unknown>,
+  field: string
+): boolean | undefined {
+  const value = body[field];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new AppError('BAD_REQUEST', 400, `${field} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalAssetVisibilityStatus(
+  body: Record<string, unknown>
+): 'normal' | 'discarded' | 'hidden' | undefined {
+  const value = body.visibilityStatus;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value !== 'normal' && value !== 'discarded' && value !== 'hidden') {
+    throw new AppError(
+      'BAD_REQUEST',
+      400,
+      'visibilityStatus must be normal, discarded, or hidden'
+    );
+  }
+  return value;
+}
+
+function requiredVariantType(c: Context<AppEnv>): AssetVariantType {
+  const value = requiredParam(c, 'variantType');
+  if (
+    value === 'original' ||
+    value === 'provider_input' ||
+    value === 'thumb' ||
+    value === 'preview'
+  ) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'Invalid asset variant type');
+}
+
+async function readUpload(c: Context<AppEnv>): Promise<{
+  body: Buffer;
+  fileName: string;
+  mimeType: string;
+  projectId: string;
+}> {
+  const form = await c.req.parseBody();
+  const projectId = form.projectId;
+  const file = form.file;
+  if (typeof projectId !== 'string' || !projectId.trim()) {
+    throw new AppError('BAD_REQUEST', 400, 'projectId is required');
+  }
+  if (!isUploadFile(file)) {
+    throw new AppError('BAD_REQUEST', 400, 'file is required');
+  }
+  return {
+    body: Buffer.from(await file.arrayBuffer()),
+    fileName: file.name,
+    mimeType: file.type,
+    projectId,
+  };
+}
+
+interface UploadFileLike {
+  arrayBuffer(): Promise<ArrayBuffer>;
+  name: string;
+  size: number;
+  type: string;
+}
+
+function isUploadFile(value: unknown): value is UploadFileLike {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as UploadFileLike).arrayBuffer === 'function' &&
+    typeof (value as UploadFileLike).name === 'string' &&
+    typeof (value as UploadFileLike).size === 'number' &&
+    typeof (value as UploadFileLike).type === 'string'
+  );
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -5,8 +5,10 @@ import { createTestAppContext, createUserWithQuota } from './test/helpers';
 
 describe('S03 auth/access API', () => {
   it('registers by invite, logs in, redeems quota, and blocks disabled login', async () => {
-    const { repository, service, projectService } = await createTestAppContext();
+    const { assetService, repository, service, projectService } =
+      await createTestAppContext();
     const app = createApp({
+      assetService,
       authService: service,
       projectService,
       secureCookies: false,
@@ -107,9 +109,16 @@ describe('S03 auth/access API', () => {
 
 describe('S04 projects/home API', () => {
   it('creates owner projects, returns summary, and opens canvas owner-only', async () => {
-    const { projectRepository, projectService, repository, service } =
+    const {
+      assetService,
+      projectRepository,
+      projectService,
+      repository,
+      service,
+    } =
       await createTestAppContext();
     const app = createApp({
+      assetService,
       authService: service,
       projectService,
       secureCookies: false,
@@ -215,6 +224,154 @@ describe('S04 projects/home API', () => {
   });
 });
 
+describe('S06 assets/storage API', () => {
+  it('uploads, lists, proxies, audits admin original reads, and soft-deletes owner assets', async () => {
+    const {
+      assetRepository,
+      assetService,
+      projectService,
+      repository,
+      service,
+      storageService,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      projectService,
+      secureCookies: false,
+    });
+
+    await createUserWithQuota(repository, {
+      email: 'asset-owner@mengtu.local',
+      password: 'owner-password',
+      username: 'asset-owner',
+    });
+    await createUserWithQuota(repository, {
+      email: 'asset-other@mengtu.local',
+      password: 'other-password',
+      username: 'asset-other',
+    });
+
+    const ownerLogin = await post(app, '/api/auth/login', {
+      login: 'asset-owner@mengtu.local',
+      password: 'owner-password',
+    });
+    const otherLogin = await post(app, '/api/auth/login', {
+      login: 'asset-other@mengtu.local',
+      password: 'other-password',
+    });
+    const adminLogin = await post(app, '/api/auth/login', {
+      login: 'admin@mengtu.local',
+      password: 'admin-password',
+    });
+
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'Assets Project' },
+      ownerLogin.cookie
+    );
+    const projectId = project.json.data.project.id as string;
+
+    const invalid = await upload(
+      app,
+      {
+        file: new File([Buffer.from('not an image')], 'note.txt', {
+          type: 'text/plain',
+        }),
+        projectId,
+      },
+      ownerLogin.cookie
+    );
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.json.error.code).toBe('UPLOAD_INVALID_FORMAT');
+
+    const uploaded = await upload(
+      app,
+      {
+        file: new File([tinyPng()], 'pixel.png', { type: 'image/png' }),
+        projectId,
+      },
+      ownerLogin.cookie
+    );
+    expect(uploaded.response.status).toBe(201);
+    expect(uploaded.json.data.asset).toMatchObject({
+      assetKind: 'image',
+      origin: 'upload',
+      visibilityStatus: 'normal',
+      variants: expect.arrayContaining([
+        expect.objectContaining({ type: 'original', exifRemoved: false }),
+        expect.objectContaining({ type: 'provider_input', exifRemoved: true }),
+        expect.objectContaining({ type: 'thumb', exifRemoved: true }),
+      ]),
+    });
+
+    const assetId = uploaded.json.data.asset.id as string;
+    expect(assetRepository.assets.get(assetId)?.ownerUserId).toBe(
+      ownerLogin.json.data.user.id
+    );
+    expect(storageService.objects.size).toBe(3);
+
+    const listed = await get(app, '/api/assets', ownerLogin.cookie);
+    expect(listed.response.status).toBe(200);
+    expect(listed.json.data.assets).toHaveLength(1);
+
+    const forbiddenList = await get(app, '/api/assets', otherLogin.cookie);
+    expect(forbiddenList.response.status).toBe(200);
+    expect(forbiddenList.json.data.assets).toEqual([]);
+
+    const forbiddenRead = await get(
+      app,
+      `/api/assets/${assetId}/variants/original`,
+      otherLogin.cookie
+    );
+    expect(forbiddenRead.response.status).toBe(404);
+
+    const ownerOriginal = await rawGet(
+      app,
+      `/api/assets/${assetId}/variants/original`,
+      ownerLogin.cookie
+    );
+    expect(ownerOriginal.status).toBe(200);
+    expect(ownerOriginal.headers.get('content-type')).toBe('image/png');
+
+    const adminOriginal = await rawGet(
+      app,
+      `/api/assets/${assetId}/variants/original`,
+      adminLogin.cookie
+    );
+    expect(adminOriginal.status).toBe(200);
+    expect([...repository.auditLogs.values()]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'asset.original.read',
+          targetId: assetId,
+          targetType: 'asset',
+        }),
+      ])
+    );
+
+    const discarded = await patch(
+      app,
+      `/api/assets/${assetId}`,
+      { favorite: true, visibilityStatus: 'discarded' },
+      ownerLogin.cookie
+    );
+    expect(discarded.response.status).toBe(200);
+    expect(discarded.json.data.asset.favorite).toBe(true);
+    expect(discarded.json.data.asset.visibilityStatus).toBe('discarded');
+
+    const deleted = await del(app, `/api/assets/${assetId}`, ownerLogin.cookie);
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.json.data.asset.visibilityStatus).toBe('deleted');
+    expect(deleted.json.data.asset.deletedAt).toBeTruthy();
+
+    const hiddenAfterDelete = await get(app, '/api/assets', ownerLogin.cookie);
+    expect(hiddenAfterDelete.json.data.assets).toEqual([]);
+    expect(storageService.objects.size).toBe(3);
+  });
+});
+
 async function get(
   app: ReturnType<typeof createApp>,
   path: string,
@@ -239,6 +396,47 @@ async function patch(
   cookie?: string
 ) {
   return send(app, path, 'PATCH', body, cookie);
+}
+
+async function del(
+  app: ReturnType<typeof createApp>,
+  path: string,
+  cookie?: string
+) {
+  return send(app, path, 'DELETE', undefined, cookie);
+}
+
+async function rawGet(
+  app: ReturnType<typeof createApp>,
+  path: string,
+  cookie?: string
+) {
+  return app.request(path, {
+    headers: cookie ? { cookie } : undefined,
+    method: 'GET',
+  });
+}
+
+async function upload(
+  app: ReturnType<typeof createApp>,
+  input: { file: File; projectId: string },
+  cookie?: string
+) {
+  const form = new FormData();
+  form.append('projectId', input.projectId);
+  form.append('file', input.file);
+  const headers: Record<string, string> = {};
+  if (cookie) {
+    headers.cookie = cookie;
+  }
+
+  const response = await app.request('/api/assets/upload', {
+    body: form,
+    headers,
+    method: 'POST',
+  });
+  const json = await response.json();
+  return { json, response };
 }
 
 async function send(
@@ -269,4 +467,11 @@ async function send(
     response,
     setCookie,
   };
+}
+
+function tinyPng(): Buffer {
+  return Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+    'base64'
+  );
 }
