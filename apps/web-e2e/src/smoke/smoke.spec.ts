@@ -5,8 +5,178 @@
  */
 import { test, expect } from '../fixtures/test-base';
 import { MengtuHomeApp } from '../fixtures/test-app';
+import type { Page } from '@playwright/test';
 
 const WORKBENCH_READY_TIMEOUT = 60000;
+
+const s07Envelope = <T,>(data: T) => ({
+  data,
+  error: null,
+  request_id: 'req_smoke_s07',
+});
+
+async function installS07ImageTaskApiMocks(page: Page) {
+  const now = '2026-05-28T00:00:00.000Z';
+  let createCount = 0;
+  let insertCount = 0;
+  let task: Record<string, unknown> | null = null;
+
+  await page.route('**/api/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+
+    if (request.method() === 'GET' && path === '/api/models') {
+      await route.fulfill({
+        body: JSON.stringify(
+          s07Envelope({
+            models: [
+              {
+                capabilities: {
+                  maxBatchSize: 4,
+                  operationType: 'text_to_image',
+                  supportedRatios: ['1:1', '16:9', '9:16'],
+                  supportsBatch: true,
+                },
+                displayName: 'Mock Image v1',
+                modelKey: 'mock-image-v1',
+                price: { amount: 10, unit: 'per_image', version: 1 },
+                providerKey: 'mock',
+              },
+            ],
+          })
+        ),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (request.method() === 'POST' && path === '/api/image-tasks') {
+      const body = JSON.parse(request.postData() || '{}') as {
+        batch_size?: number;
+        model_key?: string;
+        project_id?: string;
+        prompt?: string;
+        ratio?: string;
+      };
+      createCount += 1;
+      task = {
+        actualModelKey: 'mock-image-v1',
+        actualProvider: 'mock',
+        assets: [
+          {
+            aiGenerated: true,
+            aigcMetadataStatus: 'present',
+            assetKind: 'image',
+            createdAt: now,
+            deletedAt: null,
+            favorite: false,
+            height: 1,
+            id: 'asset_smoke_s07',
+            metadata: { width: 1, height: 1 },
+            mimeType: 'image/png',
+            origin: 'generated',
+            ownerUserId: 'user_smoke',
+            projectId: body.project_id,
+            providerJobId: 'task_smoke_s07',
+            selected: false,
+            sha256: 'hash_smoke_s07',
+            sizeBytes: 68,
+            softDeleted: false,
+            tags: [],
+            title: 'Smoke S07 result',
+            updatedAt: now,
+            variants: [
+              {
+                assetId: 'asset_smoke_s07',
+                contentHash: 'hash_smoke_s07',
+                createdAt: now,
+                exifRemoved: true,
+                height: 1,
+                id: 'variant_smoke_s07',
+                mimeType: 'image/png',
+                sizeBytes: 68,
+                storageKey: 'generated/smoke/s07.png',
+                type: 'original',
+                url: '/api/assets/asset_smoke_s07/variants/original',
+                width: 1,
+              },
+            ],
+            visibilityStatus: 'active',
+            width: 1,
+          },
+        ],
+        batchSize: body.batch_size ?? 1,
+        canvasSync: {
+          assetIds: ['asset_smoke_s07'],
+          imageTaskId: 'task_smoke_s07',
+          projectId: body.project_id,
+          retryCount: 0,
+          status: 'failed',
+        },
+        canvasSyncStatus: 'failed',
+        createdAt: now,
+        failureCode: null,
+        failureCount: 0,
+        failureMessage: null,
+        finalPrompt: body.prompt ?? 'Smoke S07 prompt',
+        id: 'task_smoke_s07',
+        modelFamily: 'mock',
+        modelVersion: '2026-05-27',
+        operationType: 'text_to_image',
+        optimizedPrompt: null,
+        ownerUserId: 'user_smoke',
+        priceVersion: 1,
+        projectId: body.project_id,
+        quotedPriceAmount: 10,
+        quotedPriceUnit: 'points',
+        ratio: body.ratio ?? '1:1',
+        requestedModelKey: body.model_key ?? 'mock-image-v1',
+        requestedProvider: 'mock',
+        settledAt: now,
+        settledPriceAmount: 10,
+        status: 'succeeded',
+        successCount: 1,
+        updatedAt: now,
+        userPrompt: body.prompt ?? 'Smoke S07 prompt',
+      };
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ task })),
+        contentType: 'application/json',
+        status: 201,
+      });
+      return;
+    }
+
+    const insertMatch = path.match(/^\/api\/image-tasks\/([^/]+)\/insert-to-canvas$/);
+    if (request.method() === 'POST' && insertMatch && task) {
+      insertCount += 1;
+      task = {
+        ...task,
+        canvasSync: {
+          ...(task.canvasSync as Record<string, unknown>),
+          status: 'succeeded',
+        },
+        canvasSyncStatus: 'succeeded',
+        updatedAt: now,
+      };
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ task })),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    await route.fallback();
+  });
+
+  return {
+    createdCount: () => createCount,
+    insertedCount: () => insertCount,
+  };
+}
 
 test.describe('@smoke 核心功能验证', () => {
   /**
@@ -160,5 +330,60 @@ test.describe('@smoke 核心功能验证', () => {
     await page.waitForTimeout(300);
     // 关闭菜单
     await page.keyboard.press('Escape');
+  });
+
+  test('S07 mock 文生图：平台任务创建并标记入画布', async ({ page }) => {
+    const home = new MengtuHomeApp(page);
+    await home.installApiMocks();
+    const s07Mocks = await installS07ImageTaskApiMocks(page);
+    await home.createProjectAndOpenCanvas('Smoke S07 文生图');
+
+    await expect(page.locator('.drawnix')).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
+
+    const result = await page.evaluate(async () => {
+      const projectId = new URLSearchParams(window.location.search).get(
+        'project_id'
+      );
+      const created = await fetch('/api/image-tasks', {
+        body: JSON.stringify({
+          batch_size: 1,
+          idempotency_key: 'smoke-s07',
+          model_key: 'mock-image-v1',
+          operation_type: 'text_to_image',
+          project_id: projectId,
+          prompt: 'Smoke S07 文生图',
+          ratio: '1:1',
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      const createdJson = await created.json();
+      const taskId = createdJson.data.task.id;
+      const inserted = await fetch(`/api/image-tasks/${taskId}/insert-to-canvas`, {
+        method: 'POST',
+      });
+      const insertedJson = await inserted.json();
+
+      return {
+        assetVariantUrl:
+          insertedJson.data.task.assets[0].variants[0].url,
+        canvasSyncStatus: insertedJson.data.task.canvasSyncStatus,
+        createStatus: created.status,
+        insertStatus: inserted.status,
+        taskStatus: insertedJson.data.task.status,
+      };
+    });
+
+    expect(result).toMatchObject({
+      canvasSyncStatus: 'succeeded',
+      createStatus: 201,
+      insertStatus: 200,
+      taskStatus: 'succeeded',
+    });
+    expect(result.assetVariantUrl).toContain('/api/assets/asset_smoke_s07');
+    expect(s07Mocks.createdCount()).toBe(1);
+    expect(s07Mocks.insertedCount()).toBe(1);
   });
 });

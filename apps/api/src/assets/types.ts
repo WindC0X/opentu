@@ -153,6 +153,18 @@ export interface CreateAssetVariantInput {
   createdAt: Date;
 }
 
+export interface CreateAssetRelationInput {
+  candidateIndex?: number | null;
+  maskAssetId?: string | null;
+  referenceAssetId?: string | null;
+  referenceRole?: AssetReferenceRole | null;
+  relationType: AssetRelationType;
+  resultAssetId: string;
+  sourceAssetId?: string | null;
+  taskId: string | null;
+  tenantId: string;
+}
+
 export interface UpdateAssetInput {
   deletedAt?: Date | null;
   favorite?: boolean;
@@ -162,6 +174,7 @@ export interface UpdateAssetInput {
 }
 
 export interface AssetRepository {
+  createAssetRelation(input: CreateAssetRelationInput): Promise<AssetRelation>;
   createAssetWithVariants(
     asset: CreateAssetInput,
     variants: CreateAssetVariantInput[]
@@ -178,6 +191,10 @@ export interface AssetRepository {
     projectId?: string;
     tenantId: string;
   }): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>>;
+  listAssetsByTask(
+    tenantId: string,
+    taskId: string
+  ): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>>;
   listVariants(tenantId: string, assetId: string): Promise<AssetVariant[]>;
   updateAsset(id: string, patch: UpdateAssetInput): Promise<Asset>;
 }

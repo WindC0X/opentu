@@ -64,6 +64,10 @@ import {
 } from '../utils/lyrics-task-utils';
 import { getImageGenerationTaskInsertGroupKey } from '../utils/image-generation-anchor-task';
 import { findImageGenerationAnchorForTaskOnBoard } from '../utils/image-generation-anchor-lookup';
+import {
+  insertPlatformImageTaskToCanvas,
+  isPlatformManagedImageTask,
+} from '../services/platform-image-task-service';
 
 /**
  * 配置项
@@ -149,9 +153,45 @@ function releaseTaskInsertion(taskId: string): void {
   insertedTaskIds.delete(taskId);
 }
 
-function finalizeTaskInsertion(taskId: string): void {
+function finalizeTaskInsertion(taskOrTaskId: Task | string): void {
+  const taskId = typeof taskOrTaskId === 'string' ? taskOrTaskId : taskOrTaskId.id;
   insertedTaskIds.add(taskId);
   getTaskQueueService().markAsInserted(taskId, 'auto_insert');
+
+  if (
+    typeof taskOrTaskId !== 'string' &&
+    isPlatformManagedImageTask(taskOrTaskId) &&
+    taskOrTaskId.platformTaskId
+  ) {
+    insertPlatformImageTaskToCanvas(taskOrTaskId.platformTaskId)
+      .then((platformTask) => {
+        const latestTask = getTaskQueueService().getTask(taskId);
+        if (!latestTask) {
+          return;
+        }
+        getTaskQueueService().updateTaskStatus(taskId, latestTask.status, {
+          canvasSyncStatus: platformTask.canvasSyncStatus,
+        });
+      })
+      .catch((error) => {
+        const latestTask = getTaskQueueService().getTask(taskId);
+        if (!latestTask) {
+          return;
+        }
+        getTaskQueueService().updateTaskStatus(taskId, latestTask.status, {
+          canvasSyncStatus: 'failed',
+          error: {
+            code: 'PLATFORM_CANVAS_SYNC_FAILED',
+            message: error instanceof Error ? error.message : String(error),
+            details: {
+              originalError:
+                error instanceof Error ? error.message : String(error),
+              timestamp: Date.now(),
+            },
+          },
+        });
+      });
+  }
 }
 
 function updatePPTSlideImageAfterInsert(
@@ -960,7 +1000,7 @@ export function useAutoInsertToCanvas(
               type === 'image' ? insertedElementId : undefined,
               type === 'image' ? insertedSize : undefined
             );
-            finalizeTaskInsertion(task.id);
+            finalizeTaskInsertion(task);
           } else {
             // 多个同 Prompt 任务，水平排列（展开每个任务的多图）
             const isLyricsAudioTask = isLyricsTask(firstInsertTask);
@@ -1266,7 +1306,7 @@ export function useAutoInsertToCanvas(
                 type === 'image' ? insertedElementId : undefined,
                 type === 'image' ? insertedSize : undefined
               );
-              finalizeTaskInsertion(task.id);
+              finalizeTaskInsertion(task);
             }
           }
         } catch (error) {
@@ -1314,7 +1354,7 @@ export function useAutoInsertToCanvas(
         // Note: 成功时 SW 已通过 workflow:stepStatus 事件标记为 completed
         // 只有失败时才需要本地更新（拆分是客户端操作，SW 不知道拆分结果）
         if (result.success) {
-          finalizeTaskInsertion(task.id);
+          finalizeTaskInsertion(task);
           return;
         }
 
@@ -1416,7 +1456,7 @@ export function useAutoInsertToCanvas(
         })
           .then(() => {
             workflowCompletionService.completePostProcessing(task.id, 1);
-            finalizeTaskInsertion(task.id);
+            finalizeTaskInsertion(task);
           })
           .catch((error) => {
             releaseTaskInsertion(task.id);

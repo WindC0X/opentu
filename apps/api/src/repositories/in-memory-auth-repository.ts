@@ -117,6 +117,8 @@ export class InMemoryAuthRepository implements AuthRepository {
       id: randomUUID(),
       idempotencyKey: input.idempotencyKey,
       operatorAdminId: input.operatorAdminId ?? null,
+      pricePolicyId: input.pricePolicyId ?? null,
+      priceVersion: input.priceVersion ?? null,
       reason: input.reason ?? null,
       relatedRedemptionId: input.relatedRedemptionId ?? null,
       relatedTaskId: input.relatedTaskId ?? null,

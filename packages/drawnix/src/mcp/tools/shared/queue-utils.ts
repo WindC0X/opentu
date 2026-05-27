@@ -9,6 +9,7 @@ import { taskQueueService } from '../../../services/task-queue';
 import type { MCPExecuteOptions, MCPResult, MCPTaskResult } from '../../types';
 import type { TaskType } from '../../../types/task.types';
 import type { GenerationParams } from '../../../types/shared/core.types';
+import { withPlatformImageTaskMetadata } from '../../../services/platform-image-task-service';
 
 // ============================================================================
 // 类型定义
@@ -126,7 +127,10 @@ export function createQueueTask(
     const globalIndex = paramsGlobalIndex || options.globalIndex;
 
     const createdTasks: any[] = [];
-    const toolPayload = config.buildTaskPayload();
+    const toolPayload = withPlatformImageTaskMetadata(
+      config.buildTaskPayload(),
+      config.taskType
+    );
 
     // 分支 1: retry
     if (options.retryTaskId) {

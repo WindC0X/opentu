@@ -1,4 +1,5 @@
 import type { AuthenticatedSession, QuotaSummary } from '../auth/types';
+import type { ImageModelView, ImageTaskView } from '../image-tasks/types';
 
 export type ProjectStatus = 'active' | 'archived' | 'deleted';
 export type CanvasSyncStatus = 'pending' | 'running' | 'succeeded' | 'failed';
@@ -66,7 +67,7 @@ export interface CanvasBootContext {
     experimentalToolsEnabled: boolean;
     imageTaskEnabled: boolean;
   };
-  models: [];
+  models: ImageModelView[];
   opentuWorkspaceId: string;
   projectId: string;
 }
@@ -78,7 +79,7 @@ export interface HomeSummary {
   };
   quota: QuotaSummary;
   recentAssets: [];
-  recentTasks: [];
+  recentTasks: ImageTaskView[];
   user: {
     id: string;
     role: AuthenticatedSession['user']['role'];

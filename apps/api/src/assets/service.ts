@@ -34,6 +34,18 @@ interface UploadAssetInput {
   projectId: string;
 }
 
+export interface GeneratedAssetInput {
+  body: Buffer;
+  candidateIndex: number;
+  jobId?: string | null;
+  mimeType: string;
+  modelKey: string;
+  modelVersion: string;
+  projectId: string;
+  provider: string;
+  taskId: string;
+}
+
 interface VariantReadResult {
   asset: Asset;
   body: Buffer;
@@ -184,6 +196,18 @@ export class AssetService {
     };
   }
 
+  async createGeneratedAssets(
+    auth: AuthenticatedSession,
+    inputs: GeneratedAssetInput[]
+  ): Promise<{ assets: AssetView[] }> {
+    const assets: AssetView[] = [];
+    for (const input of inputs) {
+      const record = await this.createGeneratedAsset(auth, input);
+      assets.push(record.asset);
+    }
+    return { assets };
+  }
+
   async getAsset(
     auth: AuthenticatedSession,
     assetId: string
@@ -302,6 +326,127 @@ export class AssetService {
       updated.id
     );
     return { asset: toAssetView(updated, variants) };
+  }
+
+  private async createGeneratedAsset(
+    auth: AuthenticatedSession,
+    input: GeneratedAssetInput
+  ): Promise<{ asset: AssetView }> {
+    const project = await this.projectRepository.findProjectById(
+      this.tenantId,
+      input.projectId
+    );
+    if (!project || project.deletedAt || project.status !== 'active') {
+      throw new AppError('PROJECT_NOT_FOUND', 404, '项目不存在');
+    }
+    if (project.ownerUserId !== auth.user.id) {
+      throw new AppError('FORBIDDEN', 403, '无权访问该项目');
+    }
+
+    const metadata = inspectImage(input.body);
+    if (metadata.mimeType !== input.mimeType) {
+      throw new AppError('ASSET_PERSIST_FAILED', 500, '供应商图片 MIME 不匹配');
+    }
+
+    const assetId = randomUUID();
+    const createdAt = this.now();
+    const providerInput = sanitizeImageForProvider(
+      input.body,
+      metadata.mimeType
+    );
+    const variants = [
+      {
+        body: input.body,
+        exifRemoved: false,
+        height: metadata.height,
+        type: 'original' as const,
+        width: metadata.width,
+      },
+      {
+        body: providerInput,
+        exifRemoved: true,
+        height: metadata.height,
+        type: 'provider_input' as const,
+        width: metadata.width,
+      },
+      {
+        body: providerInput,
+        exifRemoved: true,
+        height: Math.min(metadata.height, 512),
+        type: 'thumb' as const,
+        width: Math.min(metadata.width, 512),
+      },
+    ];
+
+    const variantRecords = [];
+    for (const variant of variants) {
+      const storageKey = buildAssetObjectKey({
+        assetId,
+        mimeType: metadata.mimeType,
+        prefix: this.storagePrefix,
+        projectId: project.id,
+        tenantId: this.tenantId,
+        userId: auth.user.id,
+        variantType: variant.type,
+      });
+      await this.storage.putObject({
+        body: variant.body,
+        contentType: metadata.mimeType,
+        key: storageKey,
+      });
+      variantRecords.push({
+        assetId,
+        createdAt,
+        createdByJobId: input.jobId ?? null,
+        exifRemoved: variant.exifRemoved,
+        height: variant.height,
+        mimeType: metadata.mimeType,
+        sha256: sha256(variant.body),
+        sizeBytes: variant.body.byteLength,
+        storageKey,
+        tenantId: this.tenantId,
+        variantType: variant.type,
+        width: variant.width,
+      });
+    }
+
+    const record = await this.assetRepository.createAssetWithVariants(
+      {
+        aigcMetadataStatus: 'removed',
+        aiGenerated: true,
+        assetKind: 'image',
+        createdAt,
+        favorite: false,
+        generationTaskId: input.taskId,
+        height: metadata.height,
+        id: assetId,
+        mimeType: metadata.mimeType,
+        modelKey: input.modelKey,
+        modelVersion: input.modelVersion,
+        origin: 'generated',
+        ownerUserId: auth.user.id,
+        projectId: project.id,
+        provider: input.provider,
+        selected: false,
+        sha256: metadata.sha256,
+        sizeBytes: metadata.sizeBytes,
+        tenantId: this.tenantId,
+        updatedAt: createdAt,
+        visibilityStatus: 'normal',
+        width: metadata.width,
+      },
+      variantRecords
+    );
+
+    await this.assetRepository.createAssetRelation({
+      candidateIndex: input.candidateIndex,
+      relationType: 'result',
+      resultAssetId: record.asset.id,
+      taskId: input.taskId,
+      tenantId: this.tenantId,
+    });
+
+    return { asset: toAssetView(record.asset, record.variants) };
   }
 
   private assertUploadFile(input: UploadAssetInput): void {

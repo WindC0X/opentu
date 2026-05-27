@@ -2,9 +2,12 @@ import { AuthService } from '../auth/service';
 import { hashPassword } from '../auth/password';
 import { DEFAULT_TENANT_ID, User } from '../auth/types';
 import { AssetService } from '../assets/service';
+import { ImageTaskService } from '../image-tasks/service';
+import { QuotaService } from '../quota/service';
 import { ProjectService } from '../projects/service';
 import { InMemoryAssetRepository } from '../repositories/in-memory-asset-repository';
 import { InMemoryAuthRepository } from '../repositories/in-memory-auth-repository';
+import { InMemoryImageTaskRepository } from '../repositories/in-memory-image-task-repository';
 import { InMemoryProjectRepository } from '../repositories/in-memory-project-repository';
 import { InMemoryStorageService } from '../storage/in-memory-storage-service';
 
@@ -33,13 +36,16 @@ export async function createTestAuthContext() {
   return { admin, repository, service };
 }
 
-export async function createTestAppContext() {
+export async function createTestAppContext(
+  options: { imageTaskAutoRunWorker?: boolean } = {}
+) {
   const auth = await createTestAuthContext();
   const projectRepository = new InMemoryProjectRepository();
   const projectService = new ProjectService(projectRepository, {
     now: () => new Date('2026-05-26T00:00:00.000Z'),
   });
   const assetRepository = new InMemoryAssetRepository();
+  const imageTaskRepository = new InMemoryImageTaskRepository();
   const storageService = new InMemoryStorageService();
   const assetService = new AssetService(
     assetRepository,
@@ -51,10 +57,24 @@ export async function createTestAppContext() {
       storagePrefix: 'test',
     }
   );
+  const quotaService = new QuotaService(auth.repository);
+  const imageTaskService = new ImageTaskService(
+    imageTaskRepository,
+    projectRepository,
+    assetRepository,
+    assetService,
+    quotaService,
+    {
+      autoRunWorker: options.imageTaskAutoRunWorker,
+      now: () => new Date('2026-05-27T01:00:00.000Z'),
+    }
+  );
 
   return {
     assetRepository,
     assetService,
+    imageTaskRepository,
+    imageTaskService,
     ...auth,
     projectRepository,
     projectService,

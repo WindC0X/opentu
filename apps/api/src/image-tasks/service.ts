@@ -1,0 +1,462 @@
+import { randomUUID } from 'crypto';
+
+import { AssetService, type GeneratedAssetInput } from '../assets/service';
+import { toAssetView } from '../assets/service';
+import type { AssetRepository } from '../assets/types';
+import type { AuthenticatedSession } from '../auth/types';
+import { DEFAULT_TENANT_ID } from '../auth/types';
+import { AppError } from '../errors';
+import type { ProjectRepository } from '../projects/types';
+import { MockImageProvider } from '../providers/mock-provider';
+import {
+  MOCK_MODEL_KEY,
+  MOCK_MODEL_VERSION,
+  MOCK_PROVIDER_CONFIG_ID,
+  MOCK_PROVIDER_KEY,
+  listMockImageModels,
+} from '../providers/mock-provider';
+import { QuotaService } from '../quota/service';
+import type {
+  CreateImageTaskInput,
+  ImageTask,
+  ImageTaskQuote,
+  ImageTaskRepository,
+  ImageTaskView,
+} from './types';
+
+interface ImageTaskServiceOptions {
+  autoRunWorker?: boolean;
+  now?: () => Date;
+  tenantId?: string;
+}
+
+export class ImageTaskService {
+  private readonly autoRunWorker: boolean;
+  private readonly now: () => Date;
+  private readonly provider: MockImageProvider;
+  private readonly tenantId: string;
+
+  constructor(
+    private readonly repository: ImageTaskRepository,
+    private readonly projectRepository: ProjectRepository,
+    private readonly assetRepository: AssetRepository,
+    private readonly assetService: AssetService,
+    private readonly quotaService: QuotaService,
+    options: ImageTaskServiceOptions = {}
+  ) {
+    this.autoRunWorker = options.autoRunWorker ?? true;
+    this.now = options.now ?? (() => new Date());
+    this.provider = new MockImageProvider();
+    this.tenantId = options.tenantId ?? DEFAULT_TENANT_ID;
+  }
+
+  listModels() {
+    return { models: listMockImageModels() };
+  }
+
+  quote(input: {
+    batchSize: 1 | 2 | 4;
+    modelKey: string;
+    operationType: 'text_to_image';
+    ratio: string;
+  }): { quote: ImageTaskQuote } {
+    return { quote: this.quotaService.quote(input) };
+  }
+
+  async createTask(
+    auth: AuthenticatedSession,
+    input: CreateImageTaskInput
+  ): Promise<{ task: ImageTaskView }> {
+    const normalized = this.normalizeCreateInput(input);
+    const project = await this.requireOwnedProject(auth, normalized.projectId);
+    const existing = await this.repository.findTaskByIdempotencyKey(
+      this.tenantId,
+      auth.user.id,
+      normalized.idempotencyKey
+    );
+    if (existing) {
+      return { task: await this.toTaskView(existing) };
+    }
+
+    const quote = this.quotaService.quote(normalized);
+    const plannedTaskId = randomUUID();
+    const hold = await this.quotaService.hold(auth, quote, {
+      idempotencyKey: normalized.idempotencyKey,
+      taskId: plannedTaskId,
+    });
+    const task = await this.repository.createTask({
+      auth,
+      holdLedgerId: hold.id,
+      id: plannedTaskId,
+      input: {
+        ...normalized,
+        idempotencyKey: normalized.idempotencyKey,
+      },
+      quote,
+    });
+
+    await this.repository.createOutboxEvent({
+      aggregateId: task.id,
+      aggregateType: 'image_task',
+      eventType: 'image_task_created',
+      idempotencyKey: `image_task_created:${task.id}`,
+      payload: {
+        imageTaskId: task.id,
+        projectId: project.id,
+        requestedModelKey: task.requestedModelKey,
+      },
+      tenantId: this.tenantId,
+    });
+
+    if (this.autoRunWorker) {
+      await this.runMockWorker(auth, task, normalized, quote);
+    }
+
+    const latest = await this.repository.findTaskById(this.tenantId, task.id);
+    return { task: await this.toTaskView(latest ?? task) };
+  }
+
+  async getTask(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<{ task: ImageTaskView }> {
+    const task = await this.requireVisibleTask(auth, taskId);
+    return { task: await this.toTaskView(task) };
+  }
+
+  async listProjectTasks(
+    auth: AuthenticatedSession,
+    projectId: string
+  ): Promise<{ tasks: ImageTaskView[] }> {
+    await this.requireOwnedProject(auth, projectId);
+    const tasks = await this.repository.listProjectTasks({
+      ownerUserId: auth.user.id,
+      projectId,
+      tenantId: this.tenantId,
+    });
+    return {
+      tasks: await Promise.all(tasks.map((task) => this.toTaskView(task))),
+    };
+  }
+
+  async cancelTask(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<{ task: ImageTaskView }> {
+    const task = await this.requireVisibleTask(auth, taskId);
+    if (task.status !== 'queued') {
+      throw new AppError('BAD_REQUEST', 400, '只有排队任务可以取消');
+    }
+    const quote = this.quoteFromTask(task);
+    await this.quotaService.release(auth, quote, {
+      amount: task.quotedPriceAmount,
+      idempotencyKey: `cancel:${task.id}`,
+      taskId: task.id,
+    });
+    const updated = await this.repository.updateTask(task.id, {
+      canvasSyncStatus: 'not_required',
+      failureCount: task.batchSize,
+      status: 'cancelled',
+    });
+    await this.repository.createOutboxEvent({
+      aggregateId: task.id,
+      aggregateType: 'image_task',
+      eventType: 'image_task_failed',
+      idempotencyKey: `image_task_cancelled:${task.id}`,
+      payload: { imageTaskId: task.id, reason: 'cancelled' },
+      tenantId: this.tenantId,
+    });
+    return { task: await this.toTaskView(updated) };
+  }
+
+  async retryTask(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<{ task: ImageTaskView }> {
+    const task = await this.requireVisibleTask(auth, taskId);
+    if (task.status !== 'failed' && task.status !== 'cancelled') {
+      throw new AppError('BAD_REQUEST', 400, '只有失败或取消任务可以重试');
+    }
+    return this.createTask(auth, {
+      batchSize: task.batchSize,
+      idempotencyKey: `retry:${task.id}:${Date.now()}`,
+      modelKey: task.requestedModelKey,
+      operationType: task.operationType,
+      prompt: task.userPrompt,
+      projectId: task.projectId,
+      ratio: task.ratio,
+    });
+  }
+
+  async insertToCanvas(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<{ task: ImageTaskView }> {
+    const task = await this.requireVisibleTask(auth, taskId);
+    if (task.status !== 'succeeded') {
+      throw new AppError('BAD_REQUEST', 400, '任务未成功，不能插入画布');
+    }
+    await this.repository.updateCanvasSyncRecord({
+      imageTaskId: task.id,
+      status: 'succeeded',
+      tenantId: this.tenantId,
+    });
+    const updated = await this.repository.updateTask(task.id, {
+      canvasSyncStatus: 'succeeded',
+    });
+    return { task: await this.toTaskView(updated) };
+  }
+
+  private async runMockWorker(
+    auth: AuthenticatedSession,
+    task: ImageTask,
+    input: CreateImageTaskInput,
+    quote: ImageTaskQuote
+  ): Promise<void> {
+    await this.repository.updateTask(task.id, {
+      actualModelKey: MOCK_MODEL_KEY,
+      actualProvider: MOCK_PROVIDER_KEY,
+      status: 'running',
+    });
+
+    const providerResult = await this.provider.generate(task, input);
+    await this.repository.createProviderUsage({
+      imageTaskId: task.id,
+      latencyMs: 1,
+      providerConfigId: MOCK_PROVIDER_CONFIG_ID,
+      providerCostAmount: 0,
+      providerCostCurrency: 'USD',
+      providerModelId: MOCK_MODEL_KEY,
+      rawErrorCode:
+        providerResult.status === 'failed' ? 'MOCK_PROVIDER_FAILED' : null,
+      rawErrorMessage:
+        providerResult.status === 'failed' ? 'Mock provider failed' : null,
+      requestId: providerResult.providerRequestId,
+      requestSnapshot: {
+        batchSize: input.batchSize,
+        modelKey: input.modelKey,
+        promptLength: input.prompt.length,
+      },
+      responseSnapshot: providerResult.usageSnapshot,
+      status: providerResult.status,
+      tenantId: this.tenantId,
+    });
+
+    if (providerResult.successCount === 0) {
+      await this.quotaService.release(auth, quote, {
+        amount: quote.amount,
+        idempotencyKey: `provider_fail:${task.id}`,
+        taskId: task.id,
+      });
+      await this.repository.updateTask(task.id, {
+        canvasSyncStatus: 'not_required',
+        failureCode: 'PROVIDER_UNAVAILABLE',
+        failureCount: input.batchSize,
+        failureMessage: 'Mock provider failed',
+        status: 'failed',
+      });
+      return;
+    }
+
+    await this.repository.updateTask(task.id, { status: 'persisting' });
+
+    if (input.prompt.includes('__mock_persist_fail__')) {
+      await this.quotaService.release(auth, quote, {
+        amount: quote.amount,
+        idempotencyKey: `persist_fail:${task.id}`,
+        taskId: task.id,
+      });
+      await this.repository.updateTask(task.id, {
+        canvasSyncStatus: 'not_required',
+        failureCode: 'ASSET_PERSIST_FAILED',
+        failureCount: input.batchSize,
+        failureMessage: 'Mock asset persistence failure',
+        status: 'failed',
+      });
+      return;
+    }
+
+    const generatedInputs: GeneratedAssetInput[] = providerResult.images.map(
+      (image) => ({
+        body: image.body,
+        candidateIndex: image.candidateIndex,
+        jobId: task.id,
+        mimeType: image.mimeType,
+        modelKey: MOCK_MODEL_KEY,
+        modelVersion: MOCK_MODEL_VERSION,
+        projectId: input.projectId,
+        provider: MOCK_PROVIDER_KEY,
+        taskId: task.id,
+      })
+    );
+    const generated = await this.assetService.createGeneratedAssets(
+      auth,
+      generatedInputs
+    );
+
+    const successAmount =
+      (quote.amount / input.batchSize) * providerResult.successCount;
+    const releaseAmount = quote.amount - successAmount;
+    await this.quotaService.consume(auth, quote, {
+      amount: successAmount,
+      idempotencyKey: `success:${task.id}`,
+      taskId: task.id,
+    });
+    await this.quotaService.release(auth, quote, {
+      amount: releaseAmount,
+      idempotencyKey: `partial_release:${task.id}`,
+      taskId: task.id,
+    });
+
+    const canvasSyncStatus = input.prompt.includes('__mock_canvas_fail__')
+      ? 'failed'
+      : 'succeeded';
+    await this.repository.createCanvasSyncRecord({
+      assetIds: generated.assets.map((asset) => asset.id),
+      imageTaskId: task.id,
+      projectId: task.projectId,
+      status: canvasSyncStatus,
+      tenantId: this.tenantId,
+    });
+    await this.repository.createOutboxEvent({
+      aggregateId: task.id,
+      aggregateType: 'image_task',
+      eventType: 'image_task_succeeded',
+      idempotencyKey: `image_task_succeeded:${task.id}`,
+      payload: {
+        assetIds: generated.assets.map((asset) => asset.id),
+        imageTaskId: task.id,
+      },
+      tenantId: this.tenantId,
+    });
+    await this.repository.createOutboxEvent({
+      aggregateId: task.id,
+      aggregateType: 'image_task',
+      eventType: 'canvas_sync_requested',
+      idempotencyKey: `canvas_sync_requested:${task.id}`,
+      payload: {
+        assetIds: generated.assets.map((asset) => asset.id),
+        imageTaskId: task.id,
+        projectId: task.projectId,
+      },
+      tenantId: this.tenantId,
+    });
+    await this.repository.updateTask(task.id, {
+      canvasSyncStatus,
+      failureCount: providerResult.failureCount,
+      settledAt: this.now(),
+      settledPriceAmount: successAmount,
+      status: 'succeeded',
+      successCount: providerResult.successCount,
+    });
+  }
+
+  private normalizeCreateInput(input: CreateImageTaskInput): CreateImageTaskInput {
+    const prompt = input.prompt.trim();
+    if (!prompt) {
+      throw new AppError('BAD_REQUEST', 400, 'prompt is required');
+    }
+    if (input.operationType !== 'text_to_image') {
+      throw new AppError(
+        'MODEL_UNSUPPORTED_OPERATION',
+        400,
+        'S07 仅支持文生图任务'
+      );
+    }
+    if (![1, 2, 4].includes(input.batchSize)) {
+      throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
+    }
+    return {
+      ...input,
+      idempotencyKey: input.idempotencyKey || randomUUID(),
+      modelKey: input.modelKey || MOCK_MODEL_KEY,
+      prompt,
+      ratio: input.ratio || '1:1',
+    };
+  }
+
+  private async requireOwnedProject(auth: AuthenticatedSession, projectId: string) {
+    const project = await this.projectRepository.findProjectById(
+      this.tenantId,
+      projectId
+    );
+    if (!project || project.deletedAt || project.status !== 'active') {
+      throw new AppError('PROJECT_NOT_FOUND', 404, '项目不存在');
+    }
+    if (project.ownerUserId !== auth.user.id) {
+      throw new AppError('FORBIDDEN', 403, '无权访问该项目');
+    }
+    return project;
+  }
+
+  private async requireVisibleTask(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<ImageTask> {
+    const task = await this.repository.findTaskById(this.tenantId, taskId);
+    if (!task) {
+      throw new AppError('IMAGE_TASK_NOT_FOUND', 404, '任务不存在');
+    }
+    if (task.ownerUserId !== auth.user.id && auth.user.role !== 'admin') {
+      throw new AppError('IMAGE_TASK_NOT_FOUND', 404, '任务不存在');
+    }
+    return task;
+  }
+
+  private quoteFromTask(task: ImageTask): ImageTaskQuote {
+    return {
+      amount: task.quotedPriceAmount,
+      batchSize: task.batchSize,
+      modelKey: task.requestedModelKey,
+      operationType: task.operationType,
+      pricePolicyId: task.pricePolicyId,
+      priceVersion: task.priceVersion,
+      ratio: task.ratio,
+      unit: task.quotedPriceUnit,
+    };
+  }
+
+  private async toTaskView(task: ImageTask): Promise<ImageTaskView> {
+    const assetRecords = await this.assetRepository.listAssetsByTask(
+      this.tenantId,
+      task.id
+    );
+    const canvasSync = (
+      await this.repository.listCanvasSyncRecords(this.tenantId, task.id)
+    )[0] ?? null;
+    return {
+      actualModelKey: task.actualModelKey,
+      actualProvider: task.actualProvider,
+      assets: assetRecords.map((record) =>
+        toAssetView(record.asset, record.variants)
+      ),
+      batchSize: task.batchSize,
+      canvasSync,
+      canvasSyncStatus: task.canvasSyncStatus,
+      createdAt: task.createdAt,
+      failureCode: task.failureCode,
+      failureCount: task.failureCount,
+      failureMessage: task.failureMessage,
+      finalPrompt: task.finalPrompt,
+      id: task.id,
+      modelFamily: task.modelFamily,
+      modelVersion: task.modelVersion,
+      operationType: task.operationType,
+      optimizedPrompt: task.optimizedPrompt,
+      ownerUserId: task.ownerUserId,
+      priceVersion: task.priceVersion,
+      projectId: task.projectId,
+      quotedPriceAmount: task.quotedPriceAmount,
+      quotedPriceUnit: task.quotedPriceUnit,
+      ratio: task.ratio,
+      requestedModelKey: task.requestedModelKey,
+      requestedProvider: task.requestedProvider,
+      settledAt: task.settledAt,
+      settledPriceAmount: task.settledPriceAmount,
+      status: task.status,
+      successCount: task.successCount,
+      updatedAt: task.updatedAt,
+      userPrompt: task.userPrompt,
+    };
+  }
+}

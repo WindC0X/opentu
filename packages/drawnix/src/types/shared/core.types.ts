@@ -232,6 +232,20 @@ export interface GenerationParams {
   inspirationBoardImageCount?: number;
   /** Whether to auto-insert the result to canvas when task completes */
   autoInsertToCanvas?: boolean;
+  /** Whether this image task is owned by the Mengtu platform task API */
+  platformManagedImageTask?: boolean;
+  /** Mengtu platform project that owns this generation task */
+  platformProjectId?: string;
+  /** Stable idempotency key used when creating the platform image task */
+  platformIdempotencyKey?: string;
+  /** Platform image model key, independent from browser provider model labels */
+  platformModelKey?: string;
+  /** Platform text-to-image operation marker */
+  platformOperationType?: 'text_to_image';
+  /** Platform-supported image ratio, e.g. 1:1, 16:9, 9:16 */
+  platformRatio?: string;
+  /** Whether the platform should run prompt optimization for this task */
+  platformPromptOptimize?: boolean;
   /** Additional parameters for specific generation types */
   [key: string]: any;
 }
@@ -360,6 +374,24 @@ export interface TaskError {
   details?: TaskErrorDetails;
 }
 
+export type PlatformImageTaskCanvasSyncStatus =
+  | 'not_required'
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed';
+
+export interface PlatformImageTaskPriceQuoteMirror {
+  amount: number;
+  batchSize: 1 | 2 | 4;
+  modelKey: string;
+  operationType: 'text_to_image';
+  pricePolicyId?: string;
+  priceVersion: number;
+  ratio: string;
+  unit: 'points';
+}
+
 // ============================================================================
 // Task Interface
 // ============================================================================
@@ -395,6 +427,14 @@ export interface Task {
   progress?: number;
   /** Remote task ID from API (e.g., videoId for video generation) */
   remoteId?: string;
+  /** Mengtu platform image task ID when this task is a local UI mirror */
+  platformTaskId?: string;
+  /** Mengtu generated asset IDs created by the platform task */
+  platformAssetIds?: string[];
+  /** Platform canvas sync status mirrored for image result insertion */
+  canvasSyncStatus?: PlatformImageTaskCanvasSyncStatus;
+  /** Platform quote frozen when the image task was created */
+  priceQuote?: PlatformImageTaskPriceQuoteMirror;
   /** Provider/model route snapshot used to resume async tasks with the original supplier */
   invocationRoute?: TaskInvocationRouteSnapshot;
   /** Current execution phase for recovery support */

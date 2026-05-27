@@ -49,6 +49,10 @@ import {
   createTaskInvocationRouteSnapshotFromTask,
   mergeTaskInvocationRoute,
 } from './task-invocation-route';
+import {
+  cancelPlatformImageTask,
+  isPlatformManagedImageTask,
+} from './platform-image-task-service';
 import { callGoogleGenerateContentWithLog } from '../utils/gemini-api/logged-calls';
 import { executeVideoAnalysis } from './video-analysis-service';
 import {
@@ -117,6 +121,10 @@ const STORAGE_SYNC_FIELDS = [
   'insertedToCanvas',
   'executionPhase',
   'savedToLibrary',
+  'platformTaskId',
+  'platformAssetIds',
+  'canvasSyncStatus',
+  'priceQuote',
 ] as const satisfies readonly (keyof Task)[];
 
 function stableStringify(value: unknown): string | undefined {
@@ -1908,19 +1916,34 @@ class TaskQueueService {
       sanitizeGenerationParams(params)
     );
 
-    // Create new task - starts as PROCESSING since it will be executed immediately
+    const platformManaged = isPlatformManagedImageTask(sanitizedParams, type);
+
+    // Create new task - browser-managed tasks start as PROCESSING, platform
+    // image tasks start as a local PENDING mirror and are submitted by the
+    // platform sync hook.
     const now = Date.now();
+    const taskId = generateTaskId();
+    const taskParams: GenerationParams = platformManaged
+      ? {
+          ...sanitizedParams,
+          platformIdempotencyKey:
+            sanitizedParams.platformIdempotencyKey || `drawnix:${taskId}`,
+        }
+      : sanitizedParams;
     const task: Task = {
-      id: generateTaskId(),
+      id: taskId,
       type,
-      status: TaskStatus.PROCESSING,
-      params: sanitizedParams,
+      status: platformManaged ? TaskStatus.PENDING : TaskStatus.PROCESSING,
+      params: taskParams,
       createdAt: now,
       updatedAt: now,
-      startedAt: now,
-      executionPhase: TaskExecutionPhase.SUBMITTING,
+      startedAt: platformManaged ? undefined : now,
+      executionPhase: platformManaged
+        ? TaskExecutionPhase.POLLING
+        : TaskExecutionPhase.SUBMITTING,
       // Initialize progress for video tasks
-      ...((type === TaskType.VIDEO ||
+      ...((platformManaged ||
+        type === TaskType.VIDEO ||
         type === TaskType.AUDIO ||
         (type === TaskType.CHAT &&
           (typeof sanitizedParams.videoAnalyzerAction === 'string' ||
@@ -1928,7 +1951,9 @@ class TaskQueueService {
         progress: 0,
       }),
     };
-    const invocationRoute = createTaskInvocationRouteSnapshotFromTask(task);
+    const invocationRoute = platformManaged
+      ? null
+      : createTaskInvocationRouteSnapshotFromTask(task);
     if (invocationRoute) {
       task.invocationRoute = invocationRoute;
     }
@@ -1948,10 +1973,12 @@ class TaskQueueService {
     // 归档超出限制的旧任务
     this.enforceRetentionLimit();
 
-    // Execute task asynchronously (fire-and-forget)
-    this.executeTask(task).catch((error) => {
-      console.error('[TaskQueueService] Task execution error:', error);
-    });
+    if (!platformManaged) {
+      // Execute task asynchronously (fire-and-forget)
+      this.executeTask(task).catch((error) => {
+        console.error('[TaskQueueService] Task execution error:', error);
+      });
+    }
 
     // 任务开始执行后剥离大字段（base64 参考图等）
     this.stripLargeParams(task.id);
@@ -2148,6 +2175,14 @@ class TaskQueueService {
 
     this.blockedTaskIds.add(taskId);
     this.taskAbortControllers.get(taskId)?.abort();
+    if (isPlatformManagedImageTask(task) && task.platformTaskId) {
+      cancelPlatformImageTask(task.platformTaskId).catch((error) => {
+        console.warn(
+          '[TaskQueueService] Failed to cancel platform image task:',
+          error
+        );
+      });
+    }
     this.updateTaskStatus(taskId, TaskStatus.CANCELLED);
     // console.log(`[TaskQueueService] Cancelled task ${taskId}`);
   }
@@ -2180,7 +2215,11 @@ class TaskQueueService {
       return;
     }
 
-    // Reset task for retry - set to PROCESSING for immediate execution
+    const platformManaged = isPlatformManagedImageTask(task);
+
+    // Reset task for retry - browser-managed tasks execute immediately;
+    // platform image tasks wait for the platform sync hook to submit a new
+    // platform task using a fresh idempotency key.
     const now = Date.now();
     trackTaskAnalytics('generation_retry_after_failure', task, {
       previousStatus: task.status,
@@ -2188,15 +2227,31 @@ class TaskQueueService {
       previousErrorMessage: task.error?.message,
     });
     this.blockedTaskIds.delete(taskId);
-    this.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
+    this.updateTaskStatus(
+      taskId,
+      platformManaged ? TaskStatus.PENDING : TaskStatus.PROCESSING,
+      {
       error: undefined,
       result: undefined,
-      startedAt: now, // Set new start time
+      startedAt: platformManaged ? undefined : now, // Set new start time
       completedAt: undefined, // Clear completion time
       remoteId: undefined, // Clear remote ID for fresh submission
-      executionPhase: TaskExecutionPhase.SUBMITTING,
+      platformTaskId: undefined,
+      platformAssetIds: undefined,
+      canvasSyncStatus: platformManaged ? 'pending' : undefined,
+      priceQuote: undefined,
+      params: platformManaged
+        ? {
+            ...task.params,
+            platformIdempotencyKey: `drawnix:${taskId}:retry:${now}`,
+          }
+        : task.params,
+      executionPhase: platformManaged
+        ? TaskExecutionPhase.POLLING
+        : TaskExecutionPhase.SUBMITTING,
       insertedToCanvas: false,
       progress:
+        platformManaged ||
         task.type === TaskType.VIDEO ||
         task.type === TaskType.AUDIO ||
         (task.type === TaskType.CHAT &&
@@ -2204,11 +2259,12 @@ class TaskQueueService {
             typeof task.params.musicAnalyzerAction === 'string'))
           ? 0
           : undefined, // Reset progress for async media
-    });
+      }
+    );
 
     // Execute task after retry
     const updatedTask = this.tasks.get(taskId);
-    if (updatedTask) {
+    if (updatedTask && !platformManaged) {
       this.executeTask(updatedTask).catch((error) => {
         console.error('[TaskQueueService] Retry execution error:', error);
       });

@@ -5,11 +5,12 @@ import { createTestAppContext, createUserWithQuota } from './test/helpers';
 
 describe('S03 auth/access API', () => {
   it('registers by invite, logs in, redeems quota, and blocks disabled login', async () => {
-    const { assetService, repository, service, projectService } =
+    const { assetService, imageTaskService, repository, service, projectService } =
       await createTestAppContext();
     const app = createApp({
       assetService,
       authService: service,
+      imageTaskService,
       projectService,
       secureCookies: false,
     });
@@ -111,6 +112,7 @@ describe('S04 projects/home API', () => {
   it('creates owner projects, returns summary, and opens canvas owner-only', async () => {
     const {
       assetService,
+      imageTaskService,
       projectRepository,
       projectService,
       repository,
@@ -120,6 +122,7 @@ describe('S04 projects/home API', () => {
     const app = createApp({
       assetService,
       authService: service,
+      imageTaskService,
       projectService,
       secureCookies: false,
     });
@@ -214,8 +217,11 @@ describe('S04 projects/home API', () => {
       featureFlags: {
         agentEnabled: false,
         experimentalToolsEnabled: false,
-        imageTaskEnabled: false,
+        imageTaskEnabled: true,
       },
+      models: expect.arrayContaining([
+        expect.objectContaining({ modelKey: 'mock-image-v1' }),
+      ]),
       projectId,
     });
     expect(projectRepository.projects.get(projectId)?.lastOpenedAt).toEqual(
@@ -229,6 +235,7 @@ describe('S06 assets/storage API', () => {
     const {
       assetRepository,
       assetService,
+      imageTaskService,
       projectService,
       repository,
       service,
@@ -237,6 +244,7 @@ describe('S06 assets/storage API', () => {
     const app = createApp({
       assetService,
       authService: service,
+      imageTaskService,
       projectService,
       secureCookies: false,
     });
@@ -372,6 +380,332 @@ describe('S06 assets/storage API', () => {
   });
 });
 
+describe('S07 image task API', () => {
+  it('blocks insufficient quota without creating a provider task', async () => {
+    const {
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    await createUserWithQuota(repository, {
+      email: 's07-poor@mengtu.local',
+      password: 'user-password',
+      username: 's07-poor',
+    });
+    const login = await post(app, '/api/auth/login', {
+      login: 's07-poor@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'No Quota Project' },
+      login.cookie
+    );
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's07-no-quota',
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        project_id: project.json.data.project.id,
+        prompt: '一只蓝色鲸鱼',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(402);
+    expect(created.json.error.code).toBe('INSUFFICIENT_QUOTA');
+    expect(imageTaskRepository.tasks.size).toBe(0);
+    expect(imageTaskRepository.providerUsage.size).toBe(0);
+
+    const invalidModel = await post(
+      app,
+      '/api/image-tasks/quote',
+      {
+        batch_size: 1,
+        model_key: 'unknown-model',
+        operation_type: 'text_to_image',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(invalidModel.response.status).toBe(400);
+    expect(invalidModel.json.error.code).toBe('MODEL_UNSUPPORTED_OPERATION');
+  });
+
+  it('creates a mock text-to-image task, settles quota, persists assets, and records outbox events', async () => {
+    const {
+      assetRepository,
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's07-success@mengtu.local',
+      password: 'user-password',
+      username: 's07-success',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's07-success@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'Image Task Project' },
+      login.cookie
+    );
+
+    const quote = await post(
+      app,
+      '/api/image-tasks/quote',
+      {
+        batch_size: 1,
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(quote.response.status).toBe(200);
+    expect(quote.json.data.quote.amount).toBe(10);
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's07-success',
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        project_id: project.json.data.project.id,
+        prompt: '一张蓝色鲸鱼海报',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.task).toMatchObject({
+      assets: [expect.objectContaining({ aiGenerated: true, origin: 'generated' })],
+      canvasSyncStatus: 'succeeded',
+      quotedPriceAmount: 10,
+      settledPriceAmount: 10,
+      status: 'succeeded',
+      successCount: 1,
+    });
+    expect(assetRepository.relations.size).toBe(1);
+    expect(imageTaskRepository.outboxEvents.size).toBeGreaterThanOrEqual(3);
+    const account = await repository.findQuotaAccountByUserId(
+      '00000000-0000-0000-0000-000000000001',
+      user.id
+    );
+    expect(account).toMatchObject({ balanceAmount: 90, heldAmount: 0 });
+    expect([...repository.quotaLedger.values()]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ amount: 10, entryType: 'hold' }),
+        expect.objectContaining({ amount: 10, entryType: 'consume' }),
+      ])
+    );
+  });
+
+  it('settles partial batches, releases persist failures, and retries canvas sync', async () => {
+    const {
+      assetService,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's07-edge@mengtu.local',
+      password: 'user-password',
+      username: 's07-edge',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's07-edge@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'Image Edge Project' },
+      login.cookie
+    );
+    const projectId = project.json.data.project.id;
+
+    const partial = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 4,
+        idempotency_key: 's07-partial',
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        project_id: projectId,
+        prompt: '__mock_partial__ 批量部分成功',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(partial.json.data.task).toMatchObject({
+      failureCount: 1,
+      settledPriceAmount: 30,
+      status: 'succeeded',
+      successCount: 3,
+    });
+
+    const persistFailed = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's07-persist-fail',
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        project_id: projectId,
+        prompt: '__mock_persist_fail__ 对象存储失败',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(persistFailed.json.data.task).toMatchObject({
+      failureCode: 'ASSET_PERSIST_FAILED',
+      status: 'failed',
+    });
+
+    const canvasFailed = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's07-canvas-fail',
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        project_id: projectId,
+        prompt: '__mock_canvas_fail__ 画布同步失败',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    const taskId = canvasFailed.json.data.task.id as string;
+    expect(canvasFailed.json.data.task.canvasSyncStatus).toBe('failed');
+
+    const retried = await post(
+      app,
+      `/api/image-tasks/${taskId}/insert-to-canvas`,
+      {},
+      login.cookie
+    );
+    expect(retried.json.data.task.canvasSyncStatus).toBe('succeeded');
+
+    const account = await repository.findQuotaAccountByUserId(
+      '00000000-0000-0000-0000-000000000001',
+      user.id
+    );
+    expect(account).toMatchObject({ balanceAmount: 60, heldAmount: 0 });
+  });
+
+  it('cancels queued image tasks and releases quota when the worker is disabled', async () => {
+    const {
+      assetService,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext({ imageTaskAutoRunWorker: false });
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's07-cancel@mengtu.local',
+      password: 'user-password',
+      username: 's07-cancel',
+    });
+    await seedQuota(repository, user.id, 20);
+    const login = await post(app, '/api/auth/login', {
+      login: 's07-cancel@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'Cancel Project' },
+      login.cookie
+    );
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's07-cancel',
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        project_id: project.json.data.project.id,
+        prompt: '排队任务',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(created.json.data.task.status).toBe('queued');
+
+    const cancelled = await post(
+      app,
+      `/api/image-tasks/${created.json.data.task.id}/cancel`,
+      {},
+      login.cookie
+    );
+    expect(cancelled.json.data.task.status).toBe('cancelled');
+    const account = await repository.findQuotaAccountByUserId(
+      '00000000-0000-0000-0000-000000000001',
+      user.id
+    );
+    expect(account).toMatchObject({ balanceAmount: 20, heldAmount: 0 });
+  });
+});
+
 async function get(
   app: ReturnType<typeof createApp>,
   path: string,
@@ -474,4 +808,22 @@ function tinyPng(): Buffer {
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
     'base64'
   );
+}
+
+async function seedQuota(
+  repository: Awaited<ReturnType<typeof createTestAppContext>>['repository'],
+  userId: string,
+  amount: number
+) {
+  const account = await repository.findQuotaAccountByUserId(
+    '00000000-0000-0000-0000-000000000001',
+    userId
+  );
+  if (!account) {
+    throw new Error('missing quota account');
+  }
+  await repository.updateQuotaAccount(account.id, {
+    balanceAmount: amount,
+    heldAmount: 0,
+  });
 }

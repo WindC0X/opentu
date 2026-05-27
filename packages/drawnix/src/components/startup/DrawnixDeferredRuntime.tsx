@@ -3,6 +3,7 @@ import type { PlaitElement } from '@plait/core';
 import type { DrawnixBoard } from '../../hooks/use-drawnix';
 import { useTaskStorage } from '../../hooks/useTaskStorage';
 import { useTaskExecutor } from '../../hooks/useTaskExecutor';
+import { usePlatformImageTaskSync } from '../../hooks/usePlatformImageTaskSync';
 import { useAutoInsertToCanvas } from '../../hooks/useAutoInsertToCanvas';
 import { useImageGenerationAnchorSync } from '../../hooks/useImageGenerationAnchorSync';
 import { useBeforeUnload } from '../../hooks/useBeforeUnload';
@@ -50,6 +51,7 @@ export function DrawnixDeferredRuntime({
 }: DrawnixDeferredRuntimeProps) {
   const isTaskStorageReady = useTaskStorage();
   const providerProfiles = useProviderProfiles();
+  usePlatformImageTaskSync();
 
   useEffect(() => {
     if (providerProfiles.length === 0) {

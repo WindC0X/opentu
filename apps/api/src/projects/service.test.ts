@@ -100,8 +100,11 @@ describe('ProjectService', () => {
       featureFlags: {
         agentEnabled: false,
         experimentalToolsEnabled: false,
-        imageTaskEnabled: false,
+        imageTaskEnabled: true,
       },
+      models: expect.arrayContaining([
+        expect.objectContaining({ modelKey: 'mock-image-v1' }),
+      ]),
       opentuWorkspaceId: 'workspace-owner-2',
       projectId: created.project.id,
     });

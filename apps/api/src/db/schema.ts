@@ -40,6 +40,7 @@ export const projectStatus = pgEnum('mt_project_status', [
   'deleted',
 ]);
 export const canvasSyncStatus = pgEnum('mt_canvas_sync_status', [
+  'not_required',
   'pending',
   'running',
   'succeeded',
@@ -82,6 +83,65 @@ export const assetReferenceRole = pgEnum('mt_asset_reference_role', [
   'style',
   'composition',
   'background',
+]);
+export const imageTaskOperationType = pgEnum('mt_image_task_operation_type', [
+  'text_to_image',
+  'image_to_image',
+  'inpaint',
+  'reference_generate',
+  'prompt_optimize',
+]);
+export const imageTaskStatus = pgEnum('mt_image_task_status', [
+  'queued',
+  'running',
+  'persisting',
+  'succeeded',
+  'failed',
+  'cancelled',
+]);
+export const providerUsageStatus = pgEnum('mt_provider_usage_status', [
+  'succeeded',
+  'failed',
+  'timeout',
+  'partial_succeeded',
+]);
+export const pricePolicyUnit = pgEnum('mt_price_policy_unit', [
+  'per_task',
+  'per_image',
+  'fixed',
+]);
+export const pricePolicyStatus = pgEnum('mt_price_policy_status', [
+  'draft',
+  'active',
+  'retired',
+]);
+export const providerStatus = pgEnum('mt_provider_status', [
+  'active',
+  'degraded',
+  'disabled',
+]);
+export const modelVisibility = pgEnum('mt_model_visibility', [
+  'public',
+  'beta',
+  'admin_only',
+  'disabled',
+]);
+export const modelHealthStatus = pgEnum('mt_model_health_status', [
+  'healthy',
+  'degraded',
+  'disabled',
+]);
+export const modelSupportLevel = pgEnum('mt_model_support_level', [
+  'native',
+  'wrapped',
+  'experimental',
+  'unsupported',
+]);
+export const outboxStatus = pgEnum('mt_outbox_status', [
+  'pending',
+  'processing',
+  'published',
+  'failed',
 ]);
 
 const tenantId = () => uuid('tenant_id').notNull();
@@ -237,6 +297,8 @@ export const mtQuotaLedger = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     idempotencyKey: varchar('idempotency_key', { length: 200 }).notNull(),
     operatorAdminId: uuid('operator_admin_id').references(() => mtUsers.id),
+    pricePolicyId: uuid('price_policy_id'),
+    priceVersion: integer('price_version'),
     reason: text('reason'),
     relatedRedemptionId: uuid('related_redemption_id'),
     relatedTaskId: uuid('related_task_id'),
@@ -454,6 +516,243 @@ export const mtAssetRelations = pgTable(
     taskIdx: index('mt_asset_relations_task_idx').on(
       table.tenantId,
       table.taskId
+    ),
+  })
+);
+
+export const mtPricePolicies = pgTable(
+  'mt_price_policies',
+  {
+    amount: integer('amount').notNull(),
+    createdAt: createdAt(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    modelKey: varchar('model_key', { length: 120 }),
+    operationType: imageTaskOperationType('operation_type').notNull(),
+    policyKey: varchar('policy_key', { length: 120 }).notNull(),
+    status: pricePolicyStatus('status').notNull().default('active'),
+    tenantId: tenantId(),
+    unit: pricePolicyUnit('unit').notNull(),
+    updatedAt: updatedAt(),
+    version: integer('version').notNull(),
+  },
+  (table) => ({
+    policyVersionIdx: uniqueIndex('mt_price_policies_key_version_uidx').on(
+      table.tenantId,
+      table.policyKey,
+      table.version
+    ),
+  })
+);
+
+export const mtProviderConfigs = pgTable(
+  'mt_provider_configs',
+  {
+    createdAt: createdAt(),
+    dataRegion: varchar('data_region', { length: 120 }),
+    dataRetentionPolicy: text('data_retention_policy'),
+    dataTrainingUsage: text('data_training_usage'),
+    displayName: varchar('display_name', { length: 160 }).notNull(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    isDefault: boolean('is_default').notNull().default(false),
+    lastReviewedAt: timestamp('last_reviewed_at', { withTimezone: true }),
+    privacyUrl: text('privacy_url'),
+    providerKey: varchar('provider_key', { length: 120 }).notNull(),
+    reviewNotes: text('review_notes'),
+    status: providerStatus('status').notNull().default('active'),
+    tenantId: tenantId(),
+    termsUrl: text('terms_url'),
+    updatedAt: updatedAt(),
+  },
+  (table) => ({
+    providerKeyIdx: uniqueIndex('mt_provider_configs_key_uidx').on(
+      table.tenantId,
+      table.providerKey
+    ),
+  })
+);
+
+export const mtModelConfigs = pgTable(
+  'mt_model_configs',
+  {
+    createdAt: createdAt(),
+    displayName: varchar('display_name', { length: 160 }).notNull(),
+    fallbackGroupId: uuid('fallback_group_id'),
+    healthStatus: modelHealthStatus('health_status')
+      .notNull()
+      .default('healthy'),
+    id: uuid('id').primaryKey().defaultRandom(),
+    modelFamily: varchar('model_family', { length: 120 }).notNull(),
+    modelKey: varchar('model_key', { length: 120 }).notNull(),
+    modelVersion: varchar('model_version', { length: 120 }).notNull(),
+    pricePolicyId: uuid('price_policy_id')
+      .notNull()
+      .references(() => mtPricePolicies.id),
+    providerConfigId: uuid('provider_config_id')
+      .notNull()
+      .references(() => mtProviderConfigs.id),
+    providerModelId: varchar('provider_model_id', { length: 160 }).notNull(),
+    tenantId: tenantId(),
+    updatedAt: updatedAt(),
+    visibility: modelVisibility('visibility').notNull().default('public'),
+  },
+  (table) => ({
+    modelKeyIdx: uniqueIndex('mt_model_configs_key_uidx').on(
+      table.tenantId,
+      table.modelKey
+    ),
+  })
+);
+
+export const mtModelCapabilities = pgTable(
+  'mt_model_capabilities',
+  {
+    createdAt: createdAt(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    maxBatchSize: integer('max_batch_size').notNull().default(1),
+    maxReferenceImages: integer('max_reference_images').notNull().default(0),
+    modelKey: varchar('model_key', { length: 120 }).notNull(),
+    operationType: imageTaskOperationType('operation_type').notNull(),
+    supportLevel: modelSupportLevel('support_level').notNull().default('native'),
+    supported: boolean('supported').notNull().default(true),
+    supportedRatios: jsonb('supported_ratios').notNull().default([]),
+    supportedSizes: jsonb('supported_sizes').notNull().default([]),
+    supportsBatch: boolean('supports_batch').notNull().default(false),
+    supportsMask: boolean('supports_mask').notNull().default(false),
+    supportsSeed: boolean('supports_seed').notNull().default(false),
+    tenantId: tenantId(),
+    updatedAt: updatedAt(),
+  },
+  (table) => ({
+    modelOperationIdx: uniqueIndex('mt_model_capabilities_operation_uidx').on(
+      table.tenantId,
+      table.modelKey,
+      table.operationType
+    ),
+  })
+);
+
+export const mtImageTasks = pgTable(
+  'mt_image_tasks',
+  {
+    actualModelKey: varchar('actual_model_key', { length: 120 }),
+    actualProvider: varchar('actual_provider', { length: 120 }),
+    batchSize: integer('batch_size').notNull(),
+    canvasSyncStatus: canvasSyncStatus('canvas_sync_status')
+      .notNull()
+      .default('pending'),
+    createdAt: createdAt(),
+    failureCode: varchar('failure_code', { length: 120 }),
+    failureCount: integer('failure_count').notNull().default(0),
+    failureMessage: text('failure_message'),
+    finalPrompt: text('final_prompt').notNull(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    idempotencyKey: varchar('idempotency_key', { length: 200 }).notNull(),
+    internalErrorDetail: text('internal_error_detail'),
+    modelFamily: varchar('model_family', { length: 120 }).notNull(),
+    modelVersion: varchar('model_version', { length: 120 }).notNull(),
+    normalizedParams: jsonb('normalized_params').notNull().default({}),
+    operationType: imageTaskOperationType('operation_type').notNull(),
+    optimizedPrompt: text('optimized_prompt'),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => mtUsers.id),
+    parentTaskId: uuid('parent_task_id'),
+    pricePolicyId: uuid('price_policy_id')
+      .notNull()
+      .references(() => mtPricePolicies.id),
+    priceVersion: integer('price_version').notNull(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => mtProjects.id),
+    providerUsageId: uuid('provider_usage_id'),
+    quotaHoldLedgerId: uuid('quota_hold_ledger_id')
+      .notNull()
+      .references(() => mtQuotaLedger.id),
+    quotedPriceAmount: integer('quoted_price_amount').notNull(),
+    quotedPriceUnit: varchar('quoted_price_unit', { length: 40 })
+      .notNull()
+      .default('points'),
+    ratio: varchar('ratio', { length: 20 }).notNull(),
+    rawProviderParams: jsonb('raw_provider_params').notNull().default({}),
+    requestedModelKey: varchar('requested_model_key', { length: 120 }).notNull(),
+    requestedProvider: varchar('requested_provider', { length: 120 }).notNull(),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    settledPriceAmount: integer('settled_price_amount'),
+    status: imageTaskStatus('status').notNull().default('queued'),
+    successCount: integer('success_count').notNull().default(0),
+    tenantId: tenantId(),
+    updatedAt: updatedAt(),
+    userPrompt: text('user_prompt').notNull(),
+  },
+  (table) => ({
+    idempotencyIdx: uniqueIndex('mt_image_tasks_idempotency_uidx').on(
+      table.tenantId,
+      table.ownerUserId,
+      table.idempotencyKey
+    ),
+    projectStatusIdx: index('mt_image_tasks_project_status_idx').on(
+      table.tenantId,
+      table.projectId,
+      table.status
+    ),
+  })
+);
+
+export const mtProviderUsage = pgTable(
+  'mt_provider_usage',
+  {
+    createdAt: createdAt(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    imageTaskId: uuid('image_task_id')
+      .notNull()
+      .references(() => mtImageTasks.id),
+    latencyMs: integer('latency_ms'),
+    providerConfigId: uuid('provider_config_id')
+      .notNull()
+      .references(() => mtProviderConfigs.id),
+    providerCostAmount: integer('provider_cost_amount'),
+    providerCostCurrency: varchar('provider_cost_currency', { length: 16 }),
+    providerModelId: varchar('provider_model_id', { length: 160 }),
+    rawErrorCode: varchar('raw_error_code', { length: 120 }),
+    rawErrorMessage: text('raw_error_message'),
+    requestId: varchar('request_id', { length: 160 }),
+    requestSnapshot: jsonb('request_snapshot').notNull().default({}),
+    responseSnapshot: jsonb('response_snapshot').notNull().default({}),
+    status: providerUsageStatus('status').notNull(),
+    tenantId: tenantId(),
+  },
+  (table) => ({
+    taskIdx: index('mt_provider_usage_task_idx').on(
+      table.tenantId,
+      table.imageTaskId
+    ),
+  })
+);
+
+export const mtOutboxEvents = pgTable(
+  'mt_outbox_events',
+  {
+    aggregateId: uuid('aggregate_id').notNull(),
+    aggregateType: varchar('aggregate_type', { length: 80 }).notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    createdAt: createdAt(),
+    eventType: varchar('event_type', { length: 120 }).notNull(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    idempotencyKey: varchar('idempotency_key', { length: 200 }).notNull(),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+    payload: jsonb('payload').notNull().default({}),
+    status: outboxStatus('status').notNull().default('pending'),
+    tenantId: tenantId(),
+    updatedAt: updatedAt(),
+  },
+  (table) => ({
+    idempotencyIdx: uniqueIndex('mt_outbox_events_idempotency_uidx').on(
+      table.tenantId,
+      table.idempotencyKey
+    ),
+    statusIdx: index('mt_outbox_events_status_idx').on(
+      table.tenantId,
+      table.status
     ),
   })
 );

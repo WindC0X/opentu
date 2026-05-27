@@ -28,6 +28,7 @@ import {
   resolveTaskInvocationRouteModel,
   shouldUseStrictTaskInvocationRoute,
 } from '../services/task-invocation-route';
+import { isPlatformManagedImageTask } from '../services/platform-image-task-service';
 
 /**
  * 从 API 错误体中提取原始错误消息
@@ -454,6 +455,10 @@ export function useTaskExecutor(): void {
     const executeTask = async (task: Task) => {
       const taskId = task.id;
 
+      if (isPlatformManagedImageTask(task)) {
+        return;
+      }
+
       // Check if this is a character task
       if (task.type === TaskType.CHARACTER) {
         return executeCharacterTask(task);
@@ -564,6 +569,7 @@ export function useTaskExecutor(): void {
 
     // 将任务加入执行队列（带并发控制）
     const enqueueTask = (task: Task) => {
+      if (isPlatformManagedImageTask(task)) return;
       if (executingTasksRef.current.has(task.id)) return;
       // 避免重复入队
       if (pendingQueueRef.current.some((t) => t.id === task.id)) return;
@@ -583,13 +589,16 @@ export function useTaskExecutor(): void {
 
       // Process pending tasks
       const pendingTasks = tasks.filter(
-        (task) => task.status === TaskStatus.PENDING
+        (task) =>
+          task.status === TaskStatus.PENDING &&
+          !isPlatformManagedImageTask(task)
       );
 
       // Process resumable tasks (processing with remoteId) — video tasks excluded, handled by FallbackMediaExecutor
       const resumableTasks = tasks.filter(
         (task) =>
           task.status === TaskStatus.PROCESSING &&
+          !isPlatformManagedImageTask(task) &&
           isResumableAsyncImageTask(task)
       );
       const resumableAudioTasks = tasks.filter(
@@ -620,7 +629,9 @@ export function useTaskExecutor(): void {
 
       const tasks = legacyTaskQueueService.getAllTasks();
       const processingTasks = tasks.filter(
-        (task) => task.status === TaskStatus.PROCESSING
+        (task) =>
+          task.status === TaskStatus.PROCESSING &&
+          !isPlatformManagedImageTask(task)
       );
 
       processingTasks.forEach((task) => {
@@ -657,7 +668,10 @@ export function useTaskExecutor(): void {
           const task = event.task;
 
           // Execute pending tasks
-          if (task.status === TaskStatus.PENDING) {
+          if (
+            task.status === TaskStatus.PENDING &&
+            !isPlatformManagedImageTask(task)
+          ) {
             enqueueTask(task);
           }
           // Resume async image tasks that have remoteId and are in processing state (video tasks excluded, handled by FallbackMediaExecutor)
@@ -665,6 +679,7 @@ export function useTaskExecutor(): void {
             !executingTasksRef.current.has(task.id) &&
             task.remoteId &&
             task.status === TaskStatus.PROCESSING &&
+            !isPlatformManagedImageTask(task) &&
             isResumableAsyncImageTask(task)
           ) {
             enqueueTask(task);

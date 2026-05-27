@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../errors';
 import type { AuthenticatedSession } from '../auth/types';
 import { DEFAULT_TENANT_ID } from '../auth/types';
+import { listMockImageModels } from '../providers/mock-provider';
 import type {
   CanvasBootContext,
   HomeSummary,
@@ -90,9 +91,9 @@ export class ProjectService {
       featureFlags: {
         agentEnabled: false,
         experimentalToolsEnabled: false,
-        imageTaskEnabled: false,
+        imageTaskEnabled: true,
       },
-      models: [],
+      models: listMockImageModels(),
       opentuWorkspaceId,
       projectId: opened.id,
     };

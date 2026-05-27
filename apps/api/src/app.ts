@@ -13,11 +13,14 @@ import {
 } from './http/cookies';
 import { fail, ok } from './http/response';
 import type { AppEnv } from './http/types';
+import { ImageTaskService } from './image-tasks/service';
+import type { CreateImageTaskInput } from './image-tasks/types';
 import { ProjectService } from './projects/service';
 
 export interface AppDependencies {
   assetService: AssetService;
   authService: AuthService;
+  imageTaskService: ImageTaskService;
   projectService: ProjectService;
   secureCookies?: boolean;
 }
@@ -68,6 +71,106 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   app.get('/api/home/summary', requireAuth(dependencies), async (c) => {
     return ok(c, await dependencies.projectService.homeSummary(c.get('auth')));
   });
+
+  app.get('/api/models', requireAuth(dependencies), async (c) => {
+    return ok(c, dependencies.imageTaskService.listModels());
+  });
+
+  app.get('/api/prices/quote', requireAuth(dependencies), async (c) => {
+    return ok(
+      c,
+      dependencies.imageTaskService.quote({
+        batchSize: queryBatchSize(c),
+        modelKey: c.req.query('model_key') ?? c.req.query('modelKey') ?? 'mock-image-v1',
+        operationType: queryOperationType(c),
+        ratio: c.req.query('ratio') ?? '1:1',
+      })
+    );
+  });
+
+  app.post('/api/image-tasks/quote', requireAuth(dependencies), async (c) => {
+    const body = await readJson(c);
+    return ok(c, dependencies.imageTaskService.quote(imageTaskQuoteBody(body)));
+  });
+
+  app.post('/api/image-tasks', requireAuth(dependencies), async (c) => {
+    const body = await readJson(c);
+    return ok(
+      c,
+      await dependencies.imageTaskService.createTask(
+        c.get('auth'),
+        imageTaskCreateBody(body)
+      ),
+      201
+    );
+  });
+
+  app.get('/api/image-tasks/:taskId', requireAuth(dependencies), async (c) => {
+    return ok(
+      c,
+      await dependencies.imageTaskService.getTask(
+        c.get('auth'),
+        requiredParam(c, 'taskId')
+      )
+    );
+  });
+
+  app.get(
+    '/api/projects/:projectId/image-tasks',
+    requireAuth(dependencies),
+    async (c) => {
+      return ok(
+        c,
+        await dependencies.imageTaskService.listProjectTasks(
+          c.get('auth'),
+          requiredParam(c, 'projectId')
+        )
+      );
+    }
+  );
+
+  app.post(
+    '/api/image-tasks/:taskId/cancel',
+    requireAuth(dependencies),
+    async (c) => {
+      return ok(
+        c,
+        await dependencies.imageTaskService.cancelTask(
+          c.get('auth'),
+          requiredParam(c, 'taskId')
+        )
+      );
+    }
+  );
+
+  app.post(
+    '/api/image-tasks/:taskId/retry',
+    requireAuth(dependencies),
+    async (c) => {
+      return ok(
+        c,
+        await dependencies.imageTaskService.retryTask(
+          c.get('auth'),
+          requiredParam(c, 'taskId')
+        ),
+        201
+      );
+    }
+  );
+
+  app.post(
+    '/api/image-tasks/:taskId/insert-to-canvas',
+    requireAuth(dependencies),
+    async (c) => {
+      return ok(
+        c,
+        await dependencies.imageTaskService.insertToCanvas(
+          c.get('auth'),
+          requiredParam(c, 'taskId')
+        )
+      );
+    }
+  );
 
   app.post('/api/assets/upload', requireAuth(dependencies), async (c) => {
     const upload = await readUpload(c);
@@ -450,6 +553,122 @@ function optionalInteger(
     throw new AppError('BAD_REQUEST', 400, `${field} must be an integer`);
   }
   return value as number;
+}
+
+function queryBatchSize(c: Context<AppEnv>): 1 | 2 | 4 {
+  const raw = c.req.query('batch_size') ?? c.req.query('batchSize') ?? '1';
+  const value = Number(raw);
+  if (value === 1 || value === 2 || value === 4) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
+}
+
+function queryOperationType(c: Context<AppEnv>): 'text_to_image' {
+  const value =
+    c.req.query('operation_type') ?? c.req.query('operationType') ?? 'text_to_image';
+  if (value === 'text_to_image') {
+    return value;
+  }
+  throw new AppError(
+    'MODEL_UNSUPPORTED_OPERATION',
+    400,
+    'S07 仅支持文生图任务'
+  );
+}
+
+function imageTaskQuoteBody(body: Record<string, unknown>): {
+  batchSize: 1 | 2 | 4;
+  modelKey: string;
+  operationType: 'text_to_image';
+  ratio: string;
+} {
+  return {
+    batchSize: bodyBatchSize(body),
+    modelKey: optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
+    operationType: bodyOperationType(body),
+    ratio: optionalBodyString(body, 'ratio') ?? '1:1',
+  };
+}
+
+function imageTaskCreateBody(
+  body: Record<string, unknown>
+): CreateImageTaskInput {
+  return {
+    batchSize: bodyBatchSize(body),
+    idempotencyKey:
+      optionalBodyString(body, 'idempotency_key', 'idempotencyKey') ??
+      randomUUID(),
+    modelKey: optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
+    operationType: bodyOperationType(body),
+    prompt: requiredBodyString(body, 'prompt'),
+    projectId: requiredBodyString(body, 'project_id', 'projectId'),
+    promptOptimize:
+      optionalBodyBoolean(body, 'prompt_optimize', 'promptOptimize') ?? false,
+    ratio: optionalBodyString(body, 'ratio') ?? '1:1',
+  };
+}
+
+function bodyBatchSize(body: Record<string, unknown>): 1 | 2 | 4 {
+  const value = body.batch_size ?? body.batchSize ?? 1;
+  if (value === 1 || value === 2 || value === 4) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
+}
+
+function bodyOperationType(body: Record<string, unknown>): 'text_to_image' {
+  const value = body.operation_type ?? body.operationType ?? 'text_to_image';
+  if (value === 'text_to_image') {
+    return value;
+  }
+  throw new AppError(
+    'MODEL_UNSUPPORTED_OPERATION',
+    400,
+    'S07 仅支持文生图任务'
+  );
+}
+
+function requiredBodyString(
+  body: Record<string, unknown>,
+  snakeField: string,
+  camelField?: string
+): string {
+  const value = body[snakeField] ?? (camelField ? body[camelField] : undefined);
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new AppError('BAD_REQUEST', 400, `${snakeField} is required`);
+  }
+  return value;
+}
+
+function optionalBodyString(
+  body: Record<string, unknown>,
+  snakeField: string,
+  camelField?: string
+): string | undefined {
+  const value = body[snakeField] ?? (camelField ? body[camelField] : undefined);
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new AppError('BAD_REQUEST', 400, `${snakeField} must be a string`);
+  }
+  return value;
+}
+
+function optionalBodyBoolean(
+  body: Record<string, unknown>,
+  snakeField: string,
+  camelField?: string
+): boolean | undefined {
+  const value = body[snakeField] ?? (camelField ? body[camelField] : undefined);
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new AppError('BAD_REQUEST', 400, `${snakeField} must be a boolean`);
+  }
+  return value;
 }
 
 function optionalDate(

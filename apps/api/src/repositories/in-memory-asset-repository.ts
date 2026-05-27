@@ -3,9 +3,11 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../errors';
 import type {
   Asset,
+  AssetRelation,
   AssetRepository,
   AssetVariant,
   AssetVariantType,
+  CreateAssetRelationInput,
   CreateAssetInput,
   CreateAssetVariantInput,
   UpdateAssetInput,
@@ -13,7 +15,28 @@ import type {
 
 export class InMemoryAssetRepository implements AssetRepository {
   readonly assets = new Map<string, Asset>();
+  readonly relations = new Map<string, AssetRelation>();
   readonly variants = new Map<string, AssetVariant>();
+
+  async createAssetRelation(
+    input: CreateAssetRelationInput
+  ): Promise<AssetRelation> {
+    const relation: AssetRelation = {
+      candidateIndex: input.candidateIndex ?? null,
+      createdAt: new Date(),
+      id: randomUUID(),
+      maskAssetId: input.maskAssetId ?? null,
+      referenceAssetId: input.referenceAssetId ?? null,
+      referenceRole: input.referenceRole ?? null,
+      relationType: input.relationType,
+      resultAssetId: input.resultAssetId,
+      sourceAssetId: input.sourceAssetId ?? null,
+      taskId: input.taskId,
+      tenantId: input.tenantId,
+    };
+    this.relations.set(relation.id, relation);
+    return relation;
+  }
 
   async createAssetWithVariants(
     input: CreateAssetInput,
@@ -106,6 +129,29 @@ export class InMemoryAssetRepository implements AssetRepository {
       .map((asset) => ({
         asset,
         variants: this.listVariantsSync(input.tenantId, asset.id),
+      }));
+  }
+
+  async listAssetsByTask(
+    tenantId: string,
+    taskId: string
+  ): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>> {
+    const resultAssetIds = new Set(
+      [...this.relations.values()]
+        .filter(
+          (relation) =>
+            relation.tenantId === tenantId && relation.taskId === taskId
+        )
+        .map((relation) => relation.resultAssetId)
+    );
+    return [...this.assets.values()]
+      .filter(
+        (asset) => asset.tenantId === tenantId && resultAssetIds.has(asset.id)
+      )
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((asset) => ({
+        asset,
+        variants: this.listVariantsSync(tenantId, asset.id),
       }));
   }
 

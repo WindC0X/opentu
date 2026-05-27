@@ -105,6 +105,8 @@ export interface QuotaLedgerEntry {
   relatedRedemptionId: string | null;
   reason: string | null;
   operatorAdminId: string | null;
+  pricePolicyId: string | null;
+  priceVersion: number | null;
   idempotencyKey: string;
   createdAt: Date;
 }
@@ -211,6 +213,8 @@ export interface CreateQuotaLedgerEntryInput {
   relatedRedemptionId?: string | null;
   reason?: string | null;
   operatorAdminId?: string | null;
+  pricePolicyId?: string | null;
+  priceVersion?: number | null;
   idempotencyKey: string;
 }
 

@@ -3,6 +3,9 @@ import type {
   AssetSummary,
   CanvasBootContext,
   HomeSummary,
+  ImageModelSummary,
+  ImageTaskQuote,
+  ImageTaskSummary,
   ProjectSummary,
 } from './types';
 
@@ -49,6 +52,101 @@ export async function listAssets(projectId?: string): Promise<AssetSummary[]> {
   const search = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
   const result = await request<{ assets: AssetSummary[] }>(`/api/assets${search}`);
   return result.assets;
+}
+
+export async function listImageModels(): Promise<ImageModelSummary[]> {
+  const result = await request<{ models: ImageModelSummary[] }>('/api/models');
+  return result.models;
+}
+
+export async function quoteImageTask(input: {
+  batchSize: 1 | 2 | 4;
+  modelKey: string;
+  operationType?: 'text_to_image';
+  ratio: string;
+}): Promise<ImageTaskQuote> {
+  const result = await request<{ quote: ImageTaskQuote }>('/api/image-tasks/quote', {
+    body: JSON.stringify({
+      batchSize: input.batchSize,
+      modelKey: input.modelKey,
+      operationType: input.operationType ?? 'text_to_image',
+      ratio: input.ratio,
+    }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+  return result.quote;
+}
+
+export async function createImageTask(input: {
+  batchSize: 1 | 2 | 4;
+  idempotencyKey: string;
+  modelKey: string;
+  operationType?: 'text_to_image';
+  prompt: string;
+  projectId: string;
+  promptOptimize?: boolean;
+  ratio: string;
+}): Promise<ImageTaskSummary> {
+  const result = await request<{ task: ImageTaskSummary }>('/api/image-tasks', {
+    body: JSON.stringify({
+      batchSize: input.batchSize,
+      idempotencyKey: input.idempotencyKey,
+      modelKey: input.modelKey,
+      operationType: input.operationType ?? 'text_to_image',
+      prompt: input.prompt,
+      projectId: input.projectId,
+      promptOptimize: input.promptOptimize ?? false,
+      ratio: input.ratio,
+    }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+  return result.task;
+}
+
+export async function getImageTask(taskId: string): Promise<ImageTaskSummary> {
+  const result = await request<{ task: ImageTaskSummary }>(
+    `/api/image-tasks/${encodeURIComponent(taskId)}`
+  );
+  return result.task;
+}
+
+export async function listProjectImageTasks(
+  projectId: string
+): Promise<ImageTaskSummary[]> {
+  const result = await request<{ tasks: ImageTaskSummary[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/image-tasks`
+  );
+  return result.tasks;
+}
+
+export async function cancelImageTask(
+  taskId: string
+): Promise<ImageTaskSummary> {
+  const result = await request<{ task: ImageTaskSummary }>(
+    `/api/image-tasks/${encodeURIComponent(taskId)}/cancel`,
+    { method: 'POST' }
+  );
+  return result.task;
+}
+
+export async function retryImageTask(taskId: string): Promise<ImageTaskSummary> {
+  const result = await request<{ task: ImageTaskSummary }>(
+    `/api/image-tasks/${encodeURIComponent(taskId)}/retry`,
+    { method: 'POST' }
+  );
+  return result.task;
+}
+
+export async function insertImageTaskToCanvas(
+  taskId: string
+): Promise<ImageTaskSummary> {
+  const result = await request<{ task: ImageTaskSummary }>(
+    `/api/image-tasks/${encodeURIComponent(taskId)}/insert-to-canvas`,
+    { method: 'POST' }
+  );
+  return result.task;
 }
 
 export async function uploadAsset(

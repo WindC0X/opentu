@@ -3,9 +3,11 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 
 import type {
   Asset,
+  AssetRelation,
   AssetRepository,
   AssetVariant,
   AssetVariantType,
+  CreateAssetRelationInput,
   CreateAssetInput,
   CreateAssetVariantInput,
   UpdateAssetInput,
@@ -17,6 +19,26 @@ type Db = PostgresJsDatabase<typeof schema>;
 
 export class DrizzleAssetRepository implements AssetRepository {
   constructor(private readonly db: Db) {}
+
+  async createAssetRelation(
+    input: CreateAssetRelationInput
+  ): Promise<AssetRelation> {
+    const [row] = await this.db
+      .insert(schema.mtAssetRelations)
+      .values({
+        candidateIndex: input.candidateIndex ?? null,
+        maskAssetId: input.maskAssetId ?? null,
+        referenceAssetId: input.referenceAssetId ?? null,
+        referenceRole: input.referenceRole ?? null,
+        relationType: input.relationType,
+        resultAssetId: input.resultAssetId,
+        sourceAssetId: input.sourceAssetId ?? null,
+        taskId: input.taskId,
+        tenantId: input.tenantId,
+      })
+      .returning();
+    return mapRelation(requireRow(row));
+  }
 
   async createAssetWithVariants(
     input: CreateAssetInput,
@@ -138,6 +160,33 @@ export class DrizzleAssetRepository implements AssetRepository {
     return records;
   }
 
+  async listAssetsByTask(
+    tenantId: string,
+    taskId: string
+  ): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>> {
+    const relationRows = await this.db
+      .select()
+      .from(schema.mtAssetRelations)
+      .where(
+        and(
+          eq(schema.mtAssetRelations.tenantId, tenantId),
+          eq(schema.mtAssetRelations.taskId, taskId)
+        )
+      );
+
+    const records = [];
+    for (const relation of relationRows) {
+      const asset = await this.findAssetById(tenantId, relation.resultAssetId);
+      if (asset) {
+        records.push({
+          asset,
+          variants: await this.listVariants(tenantId, asset.id),
+        });
+      }
+    }
+    return records;
+  }
+
   async listVariants(
     tenantId: string,
     assetId: string
@@ -214,6 +263,22 @@ function mapVariant(row: typeof schema.mtAssetVariants.$inferSelect): AssetVaria
     tenantId: row.tenantId,
     variantType: row.variantType,
     width: row.width,
+  };
+}
+
+function mapRelation(row: typeof schema.mtAssetRelations.$inferSelect): AssetRelation {
+  return {
+    candidateIndex: row.candidateIndex,
+    createdAt: row.createdAt,
+    id: row.id,
+    maskAssetId: row.maskAssetId,
+    referenceAssetId: row.referenceAssetId,
+    referenceRole: row.referenceRole,
+    relationType: row.relationType,
+    resultAssetId: row.resultAssetId,
+    sourceAssetId: row.sourceAssetId,
+    taskId: row.taskId,
+    tenantId: row.tenantId,
   };
 }
 
