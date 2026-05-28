@@ -809,4 +809,26 @@ test.describe('@smoke 核心功能验证', () => {
       page.getByRole('cell', { name: '2', exact: true }).first()
     ).toBeVisible();
   });
+
+  test('/admin direct route：直达与刷新保持后台路由', async ({ page }) => {
+    await installS09AdminApiMocks(page, 'user');
+    await page.goto('/admin?sw=0');
+    await expect(page.getByRole('heading', { name: '无后台权限' })).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
+
+    await page.unroute('**/api/**');
+    await installS09AdminApiMocks(page, 'admin');
+    await page.goto('/admin?sw=0');
+    await expect(page.getByRole('heading', { name: '运营控制台' })).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
+    await expect(page).toHaveURL(/\/admin\?sw=0/);
+
+    await page.reload();
+    await expect(page.getByRole('heading', { name: '运营控制台' })).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
+    await expect(page).toHaveURL(/\/admin\?sw=0/);
+  });
 });
