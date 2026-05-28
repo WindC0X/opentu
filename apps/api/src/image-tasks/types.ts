@@ -1,7 +1,11 @@
 import type { AuthenticatedSession } from '../auth/types';
-import type { AssetView } from '../assets/types';
+import type { AssetReferenceRole, AssetView } from '../assets/types';
 
-export type ImageTaskOperationType = 'text_to_image';
+export type ImageTaskOperationType =
+  | 'text_to_image'
+  | 'image_to_image'
+  | 'inpaint'
+  | 'reference_generate';
 export type ImageTaskStatus =
   | 'queued'
   | 'running'
@@ -99,9 +103,12 @@ export interface CanvasSyncRecordView {
 export interface ImageModelView {
   capabilities: {
     maxBatchSize: 1 | 2 | 4;
+    maxReferenceImages: number;
     operationType: ImageTaskOperationType;
+    operationTypes: ImageTaskOperationType[];
     supportedRatios: string[];
     supportsBatch: boolean;
+    supportsMask: boolean;
   };
   displayName: string;
   modelKey: string;
@@ -116,23 +123,35 @@ export interface ImageModelView {
 export interface ImageTaskQuote {
   amount: number;
   batchSize: 1 | 2 | 4;
+  maskAssetId?: string | null;
   modelKey: string;
   operationType: ImageTaskOperationType;
   pricePolicyId: string;
   priceVersion: number;
   ratio: string;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
+  sourceAssetId?: string | null;
   unit: 'points';
+}
+
+export interface ImageTaskReferenceAssetInput {
+  assetId: string;
+  order: number;
+  role: AssetReferenceRole;
 }
 
 export interface CreateImageTaskInput {
   batchSize: 1 | 2 | 4;
   idempotencyKey: string;
+  maskAssetId?: string | null;
   modelKey: string;
   operationType: ImageTaskOperationType;
   prompt: string;
   projectId: string;
   promptOptimize?: boolean;
   ratio: string;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
+  sourceAssetId?: string | null;
 }
 
 export interface ImageTaskView {
@@ -150,6 +169,7 @@ export interface ImageTaskView {
   id: string;
   modelFamily: string;
   modelVersion: string;
+  maskAssetId: string | null;
   operationType: ImageTaskOperationType;
   optimizedPrompt: string | null;
   ownerUserId: string;
@@ -158,10 +178,12 @@ export interface ImageTaskView {
   quotedPriceAmount: number;
   quotedPriceUnit: 'points';
   ratio: string;
+  referenceAssets: ImageTaskReferenceAssetInput[];
   requestedModelKey: string;
   requestedProvider: string;
   settledAt: Date | null;
   settledPriceAmount: number | null;
+  sourceAssetId: string | null;
   status: ImageTaskStatus;
   successCount: number;
   updatedAt: Date;

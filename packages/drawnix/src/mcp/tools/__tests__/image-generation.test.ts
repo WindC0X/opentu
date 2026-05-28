@@ -243,6 +243,40 @@ describe('image-generation MCP tool', () => {
     expect(queueConfig.buildTaskPayload().params).not.toHaveProperty('count');
   });
 
+  it('passes image edit references and mask into queue task params', async () => {
+    mocks.createQueueTask.mockReturnValue({
+      success: true,
+      type: 'image',
+      taskId: 'task-1',
+    });
+
+    await imageGenerationTool.execute(
+      {
+        prompt: 'Queue an image edit',
+        model: 'gpt-image-2',
+        generationMode: 'image_edit',
+        referenceImages: ['https://example.com/source.png'],
+        maskImage: 'https://example.com/mask.png',
+      },
+      { mode: 'queue' }
+    );
+
+    const queueConfig = mocks.createQueueTask.mock.calls[0]?.[2];
+
+    expect(queueConfig.buildTaskPayload()).toMatchObject({
+      generationMode: 'image_edit',
+      maskImage: 'https://example.com/mask.png',
+      referenceImages: ['https://example.com/source.png'],
+      uploadedImages: [
+        {
+          name: 'reference-1',
+          type: 'url',
+          url: 'https://example.com/source.png',
+        },
+      ],
+    });
+  });
+
   it('passes PPT slide replacement metadata into queue task params', async () => {
     mocks.createQueueTask.mockReturnValue({
       success: true,

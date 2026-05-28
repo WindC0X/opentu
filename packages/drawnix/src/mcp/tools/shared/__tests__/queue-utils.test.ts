@@ -90,4 +90,33 @@ describe('queue-utils', () => {
       });
     });
   });
+
+  it('adds S08 platform metadata for image edit queue tasks', () => {
+    window.history.pushState({}, '', '/canvas?project_id=project-1');
+    createQueueTask(
+      {
+        prompt: 'edit prompt',
+      },
+      {},
+      {
+        ...createConfig(),
+        buildTaskPayload: () => ({
+          generationMode: 'image_edit',
+          maskImage: 'https://example.com/mask.png',
+          prompt: 'edit prompt',
+          referenceImages: ['https://example.com/source.png'],
+          size: '1x1',
+        }),
+      }
+    );
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platformManagedImageTask: true,
+        platformOperationType: 'inpaint',
+        platformProjectId: 'project-1',
+      }),
+      TaskType.IMAGE
+    );
+  });
 });

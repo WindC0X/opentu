@@ -32,7 +32,12 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
         idempotencyKey: input.input.idempotencyKey,
         modelFamily: 'mock-image',
         modelVersion: MOCK_MODEL_VERSION,
-        normalizedParams: { ratio: input.input.ratio },
+        normalizedParams: {
+          maskAssetId: input.input.maskAssetId ?? null,
+          ratio: input.input.ratio,
+          referenceAssets: input.input.referenceAssets ?? [],
+          sourceAssetId: input.input.sourceAssetId ?? null,
+        },
         operationType: input.input.operationType,
         optimizedPrompt: input.input.promptOptimize
           ? `${input.input.prompt} optimized`
@@ -206,7 +211,8 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
         imageTaskId: taskId,
         projectId: rows[0]!.projectId,
         retryCount: Math.max(...rows.map((row) => row.retryCount)),
-        status: rows[0]!.status === 'not_required' ? 'pending' : rows[0]!.status,
+        status:
+          rows[0]!.status === 'not_required' ? 'pending' : rows[0]!.status,
       },
     ];
   }
@@ -303,7 +309,7 @@ function mapTask(row: typeof schema.mtImageTasks.$inferSelect): ImageTask {
     modelFamily: row.modelFamily,
     modelVersion: row.modelVersion,
     normalizedParams: asRecord(row.normalizedParams),
-    operationType: row.operationType as 'text_to_image',
+    operationType: row.operationType as ImageTask['operationType'],
     optimizedPrompt: row.optimizedPrompt,
     ownerUserId: row.ownerUserId,
     parentTaskId: row.parentTaskId,
@@ -350,7 +356,9 @@ function mapProviderUsage(
   };
 }
 
-function mapOutboxEvent(row: typeof schema.mtOutboxEvents.$inferSelect): OutboxEvent {
+function mapOutboxEvent(
+  row: typeof schema.mtOutboxEvents.$inferSelect
+): OutboxEvent {
   return {
     aggregateId: row.aggregateId,
     aggregateType: row.aggregateType,

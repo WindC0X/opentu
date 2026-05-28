@@ -13,6 +13,7 @@ import {
 } from './image-metadata';
 import type {
   Asset,
+  AssetReferenceRole,
   AssetRepository,
   AssetVariant,
   AssetVariantType,
@@ -28,21 +29,39 @@ interface AssetServiceOptions {
 }
 
 interface UploadAssetInput {
+  assetKind?: 'image' | 'mask';
   body: Buffer;
   fileName: string;
   mimeType: string;
   projectId: string;
 }
 
+export interface ImageTaskAssetReferenceInput {
+  maskAssetId?: string | null;
+  referenceAssets?: Array<{
+    assetId: string;
+    order: number;
+    role: AssetReferenceRole;
+  }>;
+  sourceAssetId?: string | null;
+}
+
 export interface GeneratedAssetInput {
   body: Buffer;
   candidateIndex: number;
   jobId?: string | null;
+  maskAssetId?: string | null;
   mimeType: string;
   modelKey: string;
   modelVersion: string;
   projectId: string;
   provider: string;
+  referenceAssets?: Array<{
+    assetId: string;
+    order: number;
+    role: AssetReferenceRole;
+  }>;
+  sourceAssetId?: string | null;
   taskId: string;
 }
 
@@ -155,17 +174,18 @@ export class AssetService {
       });
     }
 
+    const assetKind = input.assetKind ?? 'image';
     const record = await this.assetRepository.createAssetWithVariants(
       {
         aigcMetadataStatus: 'not_applicable',
         aiGenerated: false,
-        assetKind: 'image',
+        assetKind,
         createdAt,
         favorite: false,
         height: metadata.height,
         id: assetId,
         mimeType: metadata.mimeType,
-        origin: 'upload',
+        origin: assetKind === 'mask' ? 'mask' : 'upload',
         ownerUserId: auth.user.id,
         projectId: project.id,
         selected: false,
@@ -192,7 +212,9 @@ export class AssetService {
       tenantId: this.tenantId,
     });
     return {
-      assets: records.map((record) => toAssetView(record.asset, record.variants)),
+      assets: records.map((record) =>
+        toAssetView(record.asset, record.variants)
+      ),
     };
   }
 
@@ -328,6 +350,52 @@ export class AssetService {
     return { asset: toAssetView(updated, variants) };
   }
 
+  async validateImageTaskAssetReferences(
+    auth: AuthenticatedSession,
+    projectId: string,
+    input: ImageTaskAssetReferenceInput
+  ): Promise<void> {
+    if (input.sourceAssetId) {
+      const asset = await this.requireReadableAsset(
+        auth,
+        input.sourceAssetId,
+        false
+      );
+      this.assertTaskAssetProject(asset, projectId);
+      if (asset.assetKind !== 'image') {
+        throw new AppError('ASSET_NOT_FOUND', 404, '源图资产不存在或不可访问');
+      }
+    }
+
+    if (input.maskAssetId) {
+      const asset = await this.requireReadableAsset(
+        auth,
+        input.maskAssetId,
+        false
+      );
+      this.assertTaskAssetProject(asset, projectId);
+      if (asset.assetKind !== 'mask') {
+        throw new AppError('ASSET_NOT_FOUND', 404, 'mask 资产不存在或不可访问');
+      }
+    }
+
+    for (const reference of input.referenceAssets ?? []) {
+      const asset = await this.requireReadableAsset(
+        auth,
+        reference.assetId,
+        false
+      );
+      this.assertTaskAssetProject(asset, projectId);
+      if (asset.assetKind !== 'image') {
+        throw new AppError(
+          'ASSET_NOT_FOUND',
+          404,
+          '参考图资产不存在或不可访问'
+        );
+      }
+    }
+  }
+
   private async createGeneratedAsset(
     auth: AuthenticatedSession,
     input: GeneratedAssetInput
@@ -442,11 +510,51 @@ export class AssetService {
       candidateIndex: input.candidateIndex,
       relationType: 'result',
       resultAssetId: record.asset.id,
+      maskAssetId: input.maskAssetId ?? null,
+      sourceAssetId: input.sourceAssetId ?? null,
       taskId: input.taskId,
       tenantId: this.tenantId,
     });
+    if (input.sourceAssetId) {
+      await this.assetRepository.createAssetRelation({
+        candidateIndex: input.candidateIndex,
+        relationType: 'source',
+        resultAssetId: record.asset.id,
+        sourceAssetId: input.sourceAssetId,
+        taskId: input.taskId,
+        tenantId: this.tenantId,
+      });
+    }
+    if (input.maskAssetId) {
+      await this.assetRepository.createAssetRelation({
+        candidateIndex: input.candidateIndex,
+        maskAssetId: input.maskAssetId,
+        relationType: 'mask',
+        resultAssetId: record.asset.id,
+        sourceAssetId: input.sourceAssetId ?? null,
+        taskId: input.taskId,
+        tenantId: this.tenantId,
+      });
+    }
+    for (const reference of input.referenceAssets ?? []) {
+      await this.assetRepository.createAssetRelation({
+        candidateIndex: input.candidateIndex,
+        referenceAssetId: reference.assetId,
+        referenceRole: reference.role,
+        relationType: 'reference',
+        resultAssetId: record.asset.id,
+        taskId: input.taskId,
+        tenantId: this.tenantId,
+      });
+    }
 
     return { asset: toAssetView(record.asset, record.variants) };
+  }
+
+  private assertTaskAssetProject(asset: Asset, projectId: string): void {
+    if (asset.projectId !== projectId || asset.visibilityStatus === 'deleted') {
+      throw new AppError('ASSET_NOT_FOUND', 404, '资产不存在或不可访问');
+    }
   }
 
   private assertUploadFile(input: UploadAssetInput): void {

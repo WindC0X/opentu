@@ -5,7 +5,11 @@ import type {
   QuotaAccount,
   QuotaLedgerEntry,
 } from '../auth/types';
-import type { ImageTaskQuote } from '../image-tasks/types';
+import type {
+  ImageTaskOperationType,
+  ImageTaskQuote,
+  ImageTaskReferenceAssetInput,
+} from '../image-tasks/types';
 import {
   MOCK_PRICE_PER_IMAGE,
   MOCK_PRICE_POLICY_ID,
@@ -18,12 +22,15 @@ export class QuotaService {
 
   quote(input: {
     batchSize: 1 | 2 | 4;
+    maskAssetId?: string | null;
     modelKey: string;
-    operationType: 'text_to_image';
+    operationType: ImageTaskOperationType;
     ratio: string;
+    referenceAssets?: ImageTaskReferenceAssetInput[];
+    sourceAssetId?: string | null;
   }): ImageTaskQuote {
     const model = requireMockImageModel(input.modelKey);
-    if (input.operationType !== 'text_to_image') {
+    if (!model.capabilities.operationTypes.includes(input.operationType)) {
       throw new AppError(
         'MODEL_UNSUPPORTED_OPERATION',
         400,
@@ -44,15 +51,31 @@ export class QuotaService {
         '模型不支持当前批量数量'
       );
     }
+    if (input.operationType === 'inpaint' && !model.capabilities.supportsMask) {
+      throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持 mask');
+    }
+    if (
+      input.referenceAssets &&
+      input.referenceAssets.length > model.capabilities.maxReferenceImages
+    ) {
+      throw new AppError(
+        'MODEL_UNSUPPORTED_OPERATION',
+        400,
+        '模型不支持当前参考图数量'
+      );
+    }
 
     return {
       amount: MOCK_PRICE_PER_IMAGE * input.batchSize,
       batchSize: input.batchSize,
+      maskAssetId: input.maskAssetId ?? null,
       modelKey: input.modelKey,
       operationType: input.operationType,
       pricePolicyId: MOCK_PRICE_POLICY_ID,
       priceVersion: MOCK_PRICE_VERSION,
       ratio: input.ratio,
+      referenceAssets: input.referenceAssets ?? [],
+      sourceAssetId: input.sourceAssetId ?? null,
       unit: 'points',
     };
   }

@@ -14,7 +14,11 @@ import {
 import { fail, ok } from './http/response';
 import type { AppEnv } from './http/types';
 import { ImageTaskService } from './image-tasks/service';
-import type { CreateImageTaskInput } from './image-tasks/types';
+import type {
+  CreateImageTaskInput,
+  ImageTaskOperationType,
+  ImageTaskReferenceAssetInput,
+} from './image-tasks/types';
 import { ProjectService } from './projects/service';
 
 export interface AppDependencies {
@@ -79,9 +83,12 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   app.get('/api/prices/quote', requireAuth(dependencies), async (c) => {
     return ok(
       c,
-      dependencies.imageTaskService.quote({
+      await dependencies.imageTaskService.quote({
         batchSize: queryBatchSize(c),
-        modelKey: c.req.query('model_key') ?? c.req.query('modelKey') ?? 'mock-image-v1',
+        modelKey:
+          c.req.query('model_key') ??
+          c.req.query('modelKey') ??
+          'mock-image-v1',
         operationType: queryOperationType(c),
         ratio: c.req.query('ratio') ?? '1:1',
       })
@@ -90,7 +97,13 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
 
   app.post('/api/image-tasks/quote', requireAuth(dependencies), async (c) => {
     const body = await readJson(c);
-    return ok(c, dependencies.imageTaskService.quote(imageTaskQuoteBody(body)));
+    return ok(
+      c,
+      await dependencies.imageTaskService.quote(
+        imageTaskQuoteBody(body),
+        c.get('auth')
+      )
+    );
   });
 
   app.post('/api/image-tasks', requireAuth(dependencies), async (c) => {
@@ -564,30 +577,39 @@ function queryBatchSize(c: Context<AppEnv>): 1 | 2 | 4 {
   throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
 }
 
-function queryOperationType(c: Context<AppEnv>): 'text_to_image' {
+function queryOperationType(c: Context<AppEnv>): ImageTaskOperationType {
   const value =
-    c.req.query('operation_type') ?? c.req.query('operationType') ?? 'text_to_image';
-  if (value === 'text_to_image') {
+    c.req.query('operation_type') ??
+    c.req.query('operationType') ??
+    'text_to_image';
+  if (isImageTaskOperationType(value)) {
     return value;
   }
-  throw new AppError(
-    'MODEL_UNSUPPORTED_OPERATION',
-    400,
-    'S07 仅支持文生图任务'
-  );
+  throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前操作');
 }
 
 function imageTaskQuoteBody(body: Record<string, unknown>): {
   batchSize: 1 | 2 | 4;
+  maskAssetId?: string | null;
   modelKey: string;
-  operationType: 'text_to_image';
+  operationType: ImageTaskOperationType;
+  projectId?: string;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
   ratio: string;
+  sourceAssetId?: string | null;
 } {
   return {
     batchSize: bodyBatchSize(body),
-    modelKey: optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
+    maskAssetId:
+      optionalBodyString(body, 'mask_asset_id', 'maskAssetId') ?? null,
+    modelKey:
+      optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
     operationType: bodyOperationType(body),
+    projectId: optionalBodyString(body, 'project_id', 'projectId'),
+    referenceAssets: bodyReferenceAssets(body),
     ratio: optionalBodyString(body, 'ratio') ?? '1:1',
+    sourceAssetId:
+      optionalBodyString(body, 'source_asset_id', 'sourceAssetId') ?? null,
   };
 }
 
@@ -599,13 +621,19 @@ function imageTaskCreateBody(
     idempotencyKey:
       optionalBodyString(body, 'idempotency_key', 'idempotencyKey') ??
       randomUUID(),
-    modelKey: optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
+    maskAssetId:
+      optionalBodyString(body, 'mask_asset_id', 'maskAssetId') ?? null,
+    modelKey:
+      optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
     operationType: bodyOperationType(body),
     prompt: requiredBodyString(body, 'prompt'),
     projectId: requiredBodyString(body, 'project_id', 'projectId'),
     promptOptimize:
       optionalBodyBoolean(body, 'prompt_optimize', 'promptOptimize') ?? false,
     ratio: optionalBodyString(body, 'ratio') ?? '1:1',
+    referenceAssets: bodyReferenceAssets(body),
+    sourceAssetId:
+      optionalBodyString(body, 'source_asset_id', 'sourceAssetId') ?? null,
   };
 }
 
@@ -617,15 +645,68 @@ function bodyBatchSize(body: Record<string, unknown>): 1 | 2 | 4 {
   throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
 }
 
-function bodyOperationType(body: Record<string, unknown>): 'text_to_image' {
+function bodyOperationType(
+  body: Record<string, unknown>
+): ImageTaskOperationType {
   const value = body.operation_type ?? body.operationType ?? 'text_to_image';
-  if (value === 'text_to_image') {
+  if (isImageTaskOperationType(value)) {
     return value;
   }
-  throw new AppError(
-    'MODEL_UNSUPPORTED_OPERATION',
-    400,
-    'S07 仅支持文生图任务'
+  throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前操作');
+}
+
+function bodyReferenceAssets(
+  body: Record<string, unknown>
+): ImageTaskReferenceAssetInput[] {
+  const value = body.reference_assets ?? body.referenceAssets;
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new AppError('BAD_REQUEST', 400, 'reference_assets must be an array');
+  }
+  return value.map((item, index) => {
+    if (!isObject(item)) {
+      throw new AppError(
+        'BAD_REQUEST',
+        400,
+        'reference_assets item must be an object'
+      );
+    }
+    return {
+      assetId: requiredBodyString(item, 'asset_id', 'assetId'),
+      order: optionalInteger(item, 'order') ?? index,
+      role: bodyReferenceRole(item.role ?? item.referenceRole),
+    };
+  });
+}
+
+function bodyReferenceRole(
+  value: unknown
+): ImageTaskReferenceAssetInput['role'] {
+  if (value === undefined || value === null || value === '') {
+    return 'general';
+  }
+  if (
+    value === 'general' ||
+    value === 'subject' ||
+    value === 'style' ||
+    value === 'composition' ||
+    value === 'background'
+  ) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'Invalid reference asset role');
+}
+
+function isImageTaskOperationType(
+  value: unknown
+): value is ImageTaskOperationType {
+  return (
+    value === 'text_to_image' ||
+    value === 'image_to_image' ||
+    value === 'inpaint' ||
+    value === 'reference_generate'
   );
 }
 
@@ -763,12 +844,14 @@ function requiredVariantType(c: Context<AppEnv>): AssetVariantType {
 }
 
 async function readUpload(c: Context<AppEnv>): Promise<{
+  assetKind?: 'image' | 'mask';
   body: Buffer;
   fileName: string;
   mimeType: string;
   projectId: string;
 }> {
   const form = await c.req.parseBody();
+  const assetKind = form.assetKind ?? form.asset_kind;
   const projectId = form.projectId;
   const file = form.file;
   if (typeof projectId !== 'string' || !projectId.trim()) {
@@ -778,11 +861,22 @@ async function readUpload(c: Context<AppEnv>): Promise<{
     throw new AppError('BAD_REQUEST', 400, 'file is required');
   }
   return {
+    assetKind: optionalUploadAssetKind(assetKind),
     body: Buffer.from(await file.arrayBuffer()),
     fileName: file.name,
     mimeType: file.type,
     projectId,
   };
+}
+
+function optionalUploadAssetKind(value: unknown): 'image' | 'mask' | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (value === 'image' || value === 'mask') {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'assetKind must be image or mask');
 }
 
 interface UploadFileLike {

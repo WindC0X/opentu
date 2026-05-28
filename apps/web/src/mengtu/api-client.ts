@@ -5,6 +5,8 @@ import type {
   HomeSummary,
   ImageModelSummary,
   ImageTaskQuote,
+  ImageTaskOperationType,
+  ImageTaskReferenceAssetInput,
   ImageTaskSummary,
   ProjectSummary,
 } from './types';
@@ -49,8 +51,12 @@ export async function openProjectCanvas(
 }
 
 export async function listAssets(projectId?: string): Promise<AssetSummary[]> {
-  const search = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-  const result = await request<{ assets: AssetSummary[] }>(`/api/assets${search}`);
+  const search = projectId
+    ? `?project_id=${encodeURIComponent(projectId)}`
+    : '';
+  const result = await request<{ assets: AssetSummary[] }>(
+    `/api/assets${search}`
+  );
   return result.assets;
 }
 
@@ -61,43 +67,60 @@ export async function listImageModels(): Promise<ImageModelSummary[]> {
 
 export async function quoteImageTask(input: {
   batchSize: 1 | 2 | 4;
+  maskAssetId?: string | null;
   modelKey: string;
-  operationType?: 'text_to_image';
+  operationType?: ImageTaskOperationType;
+  projectId?: string;
   ratio: string;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
+  sourceAssetId?: string | null;
 }): Promise<ImageTaskQuote> {
-  const result = await request<{ quote: ImageTaskQuote }>('/api/image-tasks/quote', {
-    body: JSON.stringify({
-      batchSize: input.batchSize,
-      modelKey: input.modelKey,
-      operationType: input.operationType ?? 'text_to_image',
-      ratio: input.ratio,
-    }),
-    headers: { 'content-type': 'application/json' },
-    method: 'POST',
-  });
+  const result = await request<{ quote: ImageTaskQuote }>(
+    '/api/image-tasks/quote',
+    {
+      body: JSON.stringify({
+        batchSize: input.batchSize,
+        maskAssetId: input.maskAssetId ?? null,
+        modelKey: input.modelKey,
+        operationType: input.operationType ?? 'text_to_image',
+        projectId: input.projectId,
+        ratio: input.ratio,
+        referenceAssets: input.referenceAssets ?? [],
+        sourceAssetId: input.sourceAssetId ?? null,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }
+  );
   return result.quote;
 }
 
 export async function createImageTask(input: {
   batchSize: 1 | 2 | 4;
   idempotencyKey: string;
+  maskAssetId?: string | null;
   modelKey: string;
-  operationType?: 'text_to_image';
+  operationType?: ImageTaskOperationType;
   prompt: string;
   projectId: string;
   promptOptimize?: boolean;
   ratio: string;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
+  sourceAssetId?: string | null;
 }): Promise<ImageTaskSummary> {
   const result = await request<{ task: ImageTaskSummary }>('/api/image-tasks', {
     body: JSON.stringify({
       batchSize: input.batchSize,
       idempotencyKey: input.idempotencyKey,
+      maskAssetId: input.maskAssetId ?? null,
       modelKey: input.modelKey,
       operationType: input.operationType ?? 'text_to_image',
       prompt: input.prompt,
       projectId: input.projectId,
       promptOptimize: input.promptOptimize ?? false,
       ratio: input.ratio,
+      referenceAssets: input.referenceAssets ?? [],
+      sourceAssetId: input.sourceAssetId ?? null,
     }),
     headers: { 'content-type': 'application/json' },
     method: 'POST',
@@ -131,7 +154,9 @@ export async function cancelImageTask(
   return result.task;
 }
 
-export async function retryImageTask(taskId: string): Promise<ImageTaskSummary> {
+export async function retryImageTask(
+  taskId: string
+): Promise<ImageTaskSummary> {
   const result = await request<{ task: ImageTaskSummary }>(
     `/api/image-tasks/${encodeURIComponent(taskId)}/retry`,
     { method: 'POST' }
@@ -151,10 +176,14 @@ export async function insertImageTaskToCanvas(
 
 export async function uploadAsset(
   projectId: string,
-  file: File
+  file: File,
+  assetKind?: 'image' | 'mask'
 ): Promise<AssetSummary> {
   const form = new FormData();
   form.append('projectId', projectId);
+  if (assetKind) {
+    form.append('assetKind', assetKind);
+  }
   form.append('file', file);
   const result = await request<{ asset: AssetSummary }>('/api/assets/upload', {
     body: form,

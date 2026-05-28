@@ -4,15 +4,22 @@ import { createTestAppContext, createUserWithQuota } from '../test/helpers';
 
 describe('AssetService', () => {
   it('creates upload assets with stable object keys and required variants', async () => {
-    const { assetService, projectService, repository, service, storageService } =
-      await createTestAppContext();
+    const {
+      assetService,
+      projectService,
+      repository,
+      service,
+      storageService,
+    } = await createTestAppContext();
     const user = await createUserWithQuota(repository, {
       email: 'asset-service@mengtu.local',
       password: 'user-password',
       username: 'asset-service',
     });
     const auth = await service.authenticateSession(
-      (await service.login(user.email, 'user-password')).session.token
+      (
+        await service.login(user.email, 'user-password')
+      ).session.token
     );
     const createdProject = await projectService.createProject(auth, {
       title: 'Asset Service',
@@ -49,6 +56,39 @@ describe('AssetService', () => {
     );
   });
 
+  it('creates mask uploads without changing normal image upload defaults', async () => {
+    const { assetService, projectService, repository, service } =
+      await createTestAppContext();
+    const user = await createUserWithQuota(repository, {
+      email: 'asset-mask-service@mengtu.local',
+      password: 'user-password',
+      username: 'asset-mask-service',
+    });
+    const auth = await service.authenticateSession(
+      (
+        await service.login(user.email, 'user-password')
+      ).session.token
+    );
+    const createdProject = await projectService.createProject(auth, {
+      title: 'Mask Asset Service',
+    });
+
+    const result = await assetService.uploadAsset(auth, {
+      assetKind: 'mask',
+      body: tinyPng(),
+      fileName: 'mask.png',
+      mimeType: 'image/png',
+      projectId: createdProject.project.id,
+    });
+
+    expect(result.asset).toMatchObject({
+      assetKind: 'mask',
+      origin: 'mask',
+      projectId: createdProject.project.id,
+      visibilityStatus: 'normal',
+    });
+  });
+
   it('rejects mismatched MIME and owner-crossed project uploads', async () => {
     const { assetService, projectService, repository, service } =
       await createTestAppContext();
@@ -63,10 +103,14 @@ describe('AssetService', () => {
       username: 'other-service',
     });
     const ownerAuth = await service.authenticateSession(
-      (await service.login(owner.email, 'owner-password')).session.token
+      (
+        await service.login(owner.email, 'owner-password')
+      ).session.token
     );
     const otherAuth = await service.authenticateSession(
-      (await service.login(other.email, 'other-password')).session.token
+      (
+        await service.login(other.email, 'other-password')
+      ).session.token
     );
     const createdProject = await projectService.createProject(ownerAuth, {
       title: 'Owner Project',

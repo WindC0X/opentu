@@ -99,12 +99,18 @@ export class DrizzleAssetRepository implements AssetRepository {
     };
   }
 
-  async findAssetById(tenantId: string, assetId: string): Promise<Asset | null> {
+  async findAssetById(
+    tenantId: string,
+    assetId: string
+  ): Promise<Asset | null> {
     const [row] = await this.db
       .select()
       .from(schema.mtAssets)
       .where(
-        and(eq(schema.mtAssets.tenantId, tenantId), eq(schema.mtAssets.id, assetId))
+        and(
+          eq(schema.mtAssets.tenantId, tenantId),
+          eq(schema.mtAssets.id, assetId)
+        )
       )
       .limit(1);
     return row ? mapAsset(row) : null;
@@ -138,7 +144,9 @@ export class DrizzleAssetRepository implements AssetRepository {
     const conditions = [
       eq(schema.mtAssets.tenantId, input.tenantId),
       eq(schema.mtAssets.ownerUserId, input.ownerUserId),
-      input.projectId ? eq(schema.mtAssets.projectId, input.projectId) : undefined,
+      input.projectId
+        ? eq(schema.mtAssets.projectId, input.projectId)
+        : undefined,
       input.includeDeleted
         ? undefined
         : ne(schema.mtAssets.visibilityStatus, 'deleted'),
@@ -174,9 +182,12 @@ export class DrizzleAssetRepository implements AssetRepository {
         )
       );
 
+    const resultAssetIds = [
+      ...new Set(relationRows.map((relation) => relation.resultAssetId)),
+    ];
     const records = [];
-    for (const relation of relationRows) {
-      const asset = await this.findAssetById(tenantId, relation.resultAssetId);
+    for (const resultAssetId of resultAssetIds) {
+      const asset = await this.findAssetById(tenantId, resultAssetId);
       if (asset) {
         records.push({
           asset,
@@ -248,7 +259,9 @@ function mapAsset(row: typeof schema.mtAssets.$inferSelect): Asset {
   };
 }
 
-function mapVariant(row: typeof schema.mtAssetVariants.$inferSelect): AssetVariant {
+function mapVariant(
+  row: typeof schema.mtAssetVariants.$inferSelect
+): AssetVariant {
   return {
     assetId: row.assetId,
     createdAt: row.createdAt,
@@ -266,7 +279,9 @@ function mapVariant(row: typeof schema.mtAssetVariants.$inferSelect): AssetVaria
   };
 }
 
-function mapRelation(row: typeof schema.mtAssetRelations.$inferSelect): AssetRelation {
+function mapRelation(
+  row: typeof schema.mtAssetRelations.$inferSelect
+): AssetRelation {
   return {
     candidateIndex: row.candidateIndex,
     createdAt: row.createdAt,

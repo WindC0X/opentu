@@ -38,7 +38,10 @@ export class InMemoryImageTaskRepository implements ImageTaskRepository {
       modelFamily: 'mock-image',
       modelVersion: MOCK_MODEL_VERSION,
       normalizedParams: {
+        maskAssetId: input.input.maskAssetId ?? null,
         ratio: input.input.ratio,
+        referenceAssets: input.input.referenceAssets ?? [],
+        sourceAssetId: input.input.sourceAssetId ?? null,
       },
       operationType: input.input.operationType,
       optimizedPrompt: input.input.promptOptimize

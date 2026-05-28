@@ -5,8 +5,13 @@ import { createTestAppContext, createUserWithQuota } from './test/helpers';
 
 describe('S03 auth/access API', () => {
   it('registers by invite, logs in, redeems quota, and blocks disabled login', async () => {
-    const { assetService, imageTaskService, repository, service, projectService } =
-      await createTestAppContext();
+    const {
+      assetService,
+      imageTaskService,
+      repository,
+      service,
+      projectService,
+    } = await createTestAppContext();
     const app = createApp({
       assetService,
       authService: service,
@@ -117,8 +122,7 @@ describe('S04 projects/home API', () => {
       projectService,
       repository,
       service,
-    } =
-      await createTestAppContext();
+    } = await createTestAppContext();
     const app = createApp({
       assetService,
       authService: service,
@@ -515,7 +519,9 @@ describe('S07 image task API', () => {
 
     expect(created.response.status).toBe(201);
     expect(created.json.data.task).toMatchObject({
-      assets: [expect.objectContaining({ aiGenerated: true, origin: 'generated' })],
+      assets: [
+        expect.objectContaining({ aiGenerated: true, origin: 'generated' }),
+      ],
       canvasSyncStatus: 'succeeded',
       quotedPriceAmount: 10,
       settledPriceAmount: 10,
@@ -706,6 +712,376 @@ describe('S07 image task API', () => {
   });
 });
 
+describe('S08 image edit versioning API', () => {
+  it('quotes and creates inpaint tasks with source, mask, and reference asset lineage', async () => {
+    const {
+      assetRepository,
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's08-versioning@mengtu.local',
+      password: 'user-password',
+      username: 's08-versioning',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's08-versioning@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S08 Image Edit Project' },
+      login.cookie
+    );
+    const projectId = project.json.data.project.id as string;
+
+    const source = await upload(
+      app,
+      {
+        file: new File([tinyPng()], 'source.png', { type: 'image/png' }),
+        projectId,
+      },
+      login.cookie
+    );
+    const mask = await upload(
+      app,
+      {
+        assetKind: 'mask',
+        file: new File([tinyPng()], 'mask.png', { type: 'image/png' }),
+        projectId,
+      },
+      login.cookie
+    );
+    const reference = await upload(
+      app,
+      {
+        file: new File([tinyPng()], 'reference.png', { type: 'image/png' }),
+        projectId,
+      },
+      login.cookie
+    );
+
+    const sourceAssetId = source.json.data.asset.id as string;
+    const maskAssetId = mask.json.data.asset.id as string;
+    const referenceAssetId = reference.json.data.asset.id as string;
+    expect(mask.json.data.asset).toMatchObject({
+      assetKind: 'mask',
+      origin: 'mask',
+    });
+
+    const quote = await post(
+      app,
+      '/api/image-tasks/quote',
+      {
+        batch_size: 1,
+        mask_asset_id: maskAssetId,
+        model_key: 'mock-image-v1',
+        operation_type: 'inpaint',
+        project_id: projectId,
+        ratio: '1:1',
+        reference_assets: [
+          { asset_id: referenceAssetId, order: 0, role: 'style' },
+        ],
+        source_asset_id: sourceAssetId,
+      },
+      login.cookie
+    );
+    expect(quote.response.status).toBe(200);
+    expect(quote.json.data.quote).toMatchObject({
+      amount: 10,
+      maskAssetId,
+      operationType: 'inpaint',
+      sourceAssetId,
+    });
+    expect(quote.json.data.quote.referenceAssets).toEqual([
+      { assetId: referenceAssetId, order: 0, role: 'style' },
+    ]);
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's08-inpaint-versioning',
+        mask_asset_id: maskAssetId,
+        model_key: 'mock-image-v1',
+        operation_type: 'inpaint',
+        project_id: projectId,
+        prompt: '将背景替换为柔和日落',
+        ratio: '1:1',
+        reference_assets: [
+          { asset_id: referenceAssetId, order: 0, role: 'style' },
+        ],
+        source_asset_id: sourceAssetId,
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.task).toMatchObject({
+      assets: [
+        expect.objectContaining({ aiGenerated: true, origin: 'generated' }),
+      ],
+      maskAssetId,
+      operationType: 'inpaint',
+      quotedPriceAmount: 10,
+      settledPriceAmount: 10,
+      sourceAssetId,
+      status: 'succeeded',
+    });
+    expect(created.json.data.task.referenceAssets).toEqual([
+      { assetId: referenceAssetId, order: 0, role: 'style' },
+    ]);
+    expect(created.json.data.task.assets).toHaveLength(1);
+
+    const relations = [...assetRepository.relations.values()];
+    expect(relations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          maskAssetId,
+          relationType: 'result',
+          sourceAssetId,
+        }),
+        expect.objectContaining({
+          relationType: 'source',
+          sourceAssetId,
+        }),
+        expect.objectContaining({
+          maskAssetId,
+          relationType: 'mask',
+        }),
+        expect.objectContaining({
+          referenceAssetId,
+          referenceRole: 'style',
+          relationType: 'reference',
+        }),
+      ])
+    );
+    expect(
+      imageTaskRepository.providerUsage.values().next().value
+    ).toMatchObject({
+      requestSnapshot: {
+        maskAssetId,
+        operationType: 'inpaint',
+        referenceAssetCount: 1,
+        sourceAssetId,
+      },
+    });
+  });
+
+  it('rejects invalid operation asset combinations before creating a task', async () => {
+    const {
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's08-invalid@mengtu.local',
+      password: 'user-password',
+      username: 's08-invalid',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's08-invalid@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S08 Invalid Project' },
+      login.cookie
+    );
+    const projectId = project.json.data.project.id as string;
+    const source = await upload(
+      app,
+      {
+        file: new File([tinyPng()], 'source.png', { type: 'image/png' }),
+        projectId,
+      },
+      login.cookie
+    );
+    const sourceAssetId = source.json.data.asset.id as string;
+
+    const textWithSource = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's08-invalid-text-source',
+        model_key: 'mock-image-v1',
+        operation_type: 'text_to_image',
+        project_id: projectId,
+        prompt: '文本生图不应携带源图',
+        ratio: '1:1',
+        source_asset_id: sourceAssetId,
+      },
+      login.cookie
+    );
+    expect(textWithSource.response.status).toBe(400);
+    expect(textWithSource.json.error.code).toBe('BAD_REQUEST');
+
+    const inpaintWithImageMask = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's08-invalid-mask-kind',
+        mask_asset_id: sourceAssetId,
+        model_key: 'mock-image-v1',
+        operation_type: 'inpaint',
+        project_id: projectId,
+        prompt: 'mask 必须是 mask 资产',
+        ratio: '1:1',
+        source_asset_id: sourceAssetId,
+      },
+      login.cookie
+    );
+    expect(inpaintWithImageMask.response.status).toBe(404);
+    expect(inpaintWithImageMask.json.error.code).toBe('ASSET_NOT_FOUND');
+    expect(imageTaskRepository.tasks.size).toBe(0);
+  });
+
+  it('supports image-to-image and reference generation operation lineage', async () => {
+    const {
+      assetRepository,
+      assetService,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's08-ops@mengtu.local',
+      password: 'user-password',
+      username: 's08-ops',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's08-ops@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S08 Operation Project' },
+      login.cookie
+    );
+    const projectId = project.json.data.project.id as string;
+    const source = await upload(
+      app,
+      {
+        file: new File([tinyPng()], 'source.png', { type: 'image/png' }),
+        projectId,
+      },
+      login.cookie
+    );
+    const reference = await upload(
+      app,
+      {
+        file: new File([tinyPng()], 'reference.png', { type: 'image/png' }),
+        projectId,
+      },
+      login.cookie
+    );
+    const sourceAssetId = source.json.data.asset.id as string;
+    const referenceAssetId = reference.json.data.asset.id as string;
+
+    const imageToImage = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's08-image-to-image',
+        model_key: 'mock-image-v1',
+        operation_type: 'image_to_image',
+        project_id: projectId,
+        prompt: '图生图版本',
+        ratio: '1:1',
+        source_asset_id: sourceAssetId,
+      },
+      login.cookie
+    );
+    expect(imageToImage.response.status).toBe(201);
+    expect(imageToImage.json.data.task).toMatchObject({
+      operationType: 'image_to_image',
+      sourceAssetId,
+      status: 'succeeded',
+    });
+
+    const referenceGenerate = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's08-reference-generate',
+        model_key: 'mock-image-v1',
+        operation_type: 'reference_generate',
+        project_id: projectId,
+        prompt: '参考图生成',
+        ratio: '1:1',
+        reference_assets: [
+          { asset_id: referenceAssetId, order: 0, role: 'subject' },
+        ],
+      },
+      login.cookie
+    );
+    expect(referenceGenerate.response.status).toBe(201);
+    expect(referenceGenerate.json.data.task).toMatchObject({
+      operationType: 'reference_generate',
+      referenceAssets: [
+        { assetId: referenceAssetId, order: 0, role: 'subject' },
+      ],
+      status: 'succeeded',
+    });
+    expect([...assetRepository.relations.values()]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relationType: 'source',
+          sourceAssetId,
+        }),
+        expect.objectContaining({
+          referenceAssetId,
+          referenceRole: 'subject',
+          relationType: 'reference',
+        }),
+      ])
+    );
+  });
+});
+
 async function get(
   app: ReturnType<typeof createApp>,
   path: string,
@@ -753,11 +1129,14 @@ async function rawGet(
 
 async function upload(
   app: ReturnType<typeof createApp>,
-  input: { file: File; projectId: string },
+  input: { assetKind?: 'image' | 'mask'; file: File; projectId: string },
   cookie?: string
 ) {
   const form = new FormData();
   form.append('projectId', input.projectId);
+  if (input.assetKind) {
+    form.append('assetKind', input.assetKind);
+  }
   form.append('file', input.file);
   const headers: Record<string, string> = {};
   if (cookie) {

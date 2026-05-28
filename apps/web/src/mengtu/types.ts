@@ -50,12 +50,34 @@ export interface CanvasBootContext {
   projectId: string;
 }
 
+export type ImageTaskOperationType =
+  | 'text_to_image'
+  | 'image_to_image'
+  | 'inpaint'
+  | 'reference_generate';
+
+export type AssetReferenceRole =
+  | 'general'
+  | 'subject'
+  | 'style'
+  | 'composition'
+  | 'background';
+
+export interface ImageTaskReferenceAssetInput {
+  assetId: string;
+  order: number;
+  role: AssetReferenceRole;
+}
+
 export interface ImageModelSummary {
   capabilities: {
     maxBatchSize: 1 | 2 | 4;
-    operationType: 'text_to_image';
+    maxReferenceImages: number;
+    operationType: ImageTaskOperationType;
+    operationTypes: ImageTaskOperationType[];
     supportedRatios: string[];
     supportsBatch: boolean;
+    supportsMask: boolean;
   };
   displayName: string;
   modelKey: string;
@@ -70,11 +92,14 @@ export interface ImageModelSummary {
 export interface ImageTaskQuote {
   amount: number;
   batchSize: 1 | 2 | 4;
+  maskAssetId?: string | null;
   modelKey: string;
-  operationType: 'text_to_image';
+  operationType: ImageTaskOperationType;
   pricePolicyId: string;
   priceVersion: number;
   ratio: string;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
+  sourceAssetId?: string | null;
   unit: 'points';
 }
 
@@ -107,7 +132,8 @@ export interface ImageTaskSummary {
   id: string;
   modelFamily: string;
   modelVersion: string;
-  operationType: 'text_to_image';
+  maskAssetId: string | null;
+  operationType: ImageTaskOperationType;
   optimizedPrompt: string | null;
   ownerUserId: string;
   priceVersion: number;
@@ -115,17 +141,23 @@ export interface ImageTaskSummary {
   quotedPriceAmount: number;
   quotedPriceUnit: 'points';
   ratio: string;
+  referenceAssets: ImageTaskReferenceAssetInput[];
   requestedModelKey: string;
   requestedProvider: string;
   settledAt: string | null;
   settledPriceAmount: number | null;
+  sourceAssetId: string | null;
   status: ImageTaskStatus;
   successCount: number;
   updatedAt: string;
   userPrompt: string;
 }
 
-export type AssetVisibilityStatus = 'normal' | 'discarded' | 'hidden' | 'deleted';
+export type AssetVisibilityStatus =
+  | 'normal'
+  | 'discarded'
+  | 'hidden'
+  | 'deleted';
 export type AssetVariantType =
   | 'original'
   | 'provider_input'

@@ -19,7 +19,9 @@ import { QuotaService } from '../quota/service';
 import type {
   CreateImageTaskInput,
   ImageTask,
+  ImageTaskOperationType,
   ImageTaskQuote,
+  ImageTaskReferenceAssetInput,
   ImageTaskRepository,
   ImageTaskView,
 } from './types';
@@ -28,6 +30,17 @@ interface ImageTaskServiceOptions {
   autoRunWorker?: boolean;
   now?: () => Date;
   tenantId?: string;
+}
+
+interface QuoteImageTaskInput {
+  batchSize: 1 | 2 | 4;
+  maskAssetId?: string | null;
+  modelKey: string;
+  operationType: ImageTaskOperationType;
+  projectId?: string;
+  ratio: string;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
+  sourceAssetId?: string | null;
 }
 
 export class ImageTaskService {
@@ -54,13 +67,20 @@ export class ImageTaskService {
     return { models: listMockImageModels() };
   }
 
-  quote(input: {
-    batchSize: 1 | 2 | 4;
-    modelKey: string;
-    operationType: 'text_to_image';
-    ratio: string;
-  }): { quote: ImageTaskQuote } {
-    return { quote: this.quotaService.quote(input) };
+  async quote(
+    input: QuoteImageTaskInput,
+    auth?: AuthenticatedSession
+  ): Promise<{ quote: ImageTaskQuote }> {
+    const normalized = this.normalizeQuoteInput(input);
+    if (auth && normalized.projectId) {
+      await this.requireOwnedProject(auth, normalized.projectId);
+      await this.assetService.validateImageTaskAssetReferences(
+        auth,
+        normalized.projectId,
+        normalized
+      );
+    }
+    return { quote: this.quotaService.quote(normalized) };
   }
 
   async createTask(
@@ -69,6 +89,11 @@ export class ImageTaskService {
   ): Promise<{ task: ImageTaskView }> {
     const normalized = this.normalizeCreateInput(input);
     const project = await this.requireOwnedProject(auth, normalized.projectId);
+    await this.assetService.validateImageTaskAssetReferences(
+      auth,
+      project.id,
+      normalized
+    );
     const existing = await this.repository.findTaskByIdempotencyKey(
       this.tenantId,
       auth.user.id,
@@ -180,11 +205,14 @@ export class ImageTaskService {
     return this.createTask(auth, {
       batchSize: task.batchSize,
       idempotencyKey: `retry:${task.id}:${Date.now()}`,
+      maskAssetId: readTaskMaskAssetId(task),
       modelKey: task.requestedModelKey,
       operationType: task.operationType,
       prompt: task.userPrompt,
       projectId: task.projectId,
       ratio: task.ratio,
+      referenceAssets: readTaskReferenceAssets(task),
+      sourceAssetId: readTaskSourceAssetId(task),
     });
   }
 
@@ -234,8 +262,12 @@ export class ImageTaskService {
       requestId: providerResult.providerRequestId,
       requestSnapshot: {
         batchSize: input.batchSize,
+        maskAssetId: input.maskAssetId ?? null,
         modelKey: input.modelKey,
+        operationType: input.operationType,
         promptLength: input.prompt.length,
+        referenceAssetCount: input.referenceAssets?.length ?? 0,
+        sourceAssetId: input.sourceAssetId ?? null,
       },
       responseSnapshot: providerResult.usageSnapshot,
       status: providerResult.status,
@@ -284,8 +316,11 @@ export class ImageTaskService {
         mimeType: image.mimeType,
         modelKey: MOCK_MODEL_KEY,
         modelVersion: MOCK_MODEL_VERSION,
+        maskAssetId: input.maskAssetId ?? null,
         projectId: input.projectId,
         provider: MOCK_PROVIDER_KEY,
+        referenceAssets: input.referenceAssets ?? [],
+        sourceAssetId: input.sourceAssetId ?? null,
         taskId: task.id,
       })
     );
@@ -351,31 +386,56 @@ export class ImageTaskService {
     });
   }
 
-  private normalizeCreateInput(input: CreateImageTaskInput): CreateImageTaskInput {
+  private normalizeQuoteInput(input: QuoteImageTaskInput): QuoteImageTaskInput {
+    const operationType = normalizeOperationType(input.operationType);
+    const referenceAssets = normalizeReferenceAssets(
+      input.referenceAssets ?? []
+    );
+    const normalized: QuoteImageTaskInput = {
+      ...input,
+      maskAssetId: cleanOptionalId(input.maskAssetId),
+      modelKey: input.modelKey || MOCK_MODEL_KEY,
+      operationType,
+      ratio: input.ratio || '1:1',
+      referenceAssets,
+      sourceAssetId: cleanOptionalId(input.sourceAssetId),
+    };
+    assertOperationAssetRequirements(normalized);
+    if (![1, 2, 4].includes(normalized.batchSize)) {
+      throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
+    }
+    return normalized;
+  }
+
+  private normalizeCreateInput(
+    input: CreateImageTaskInput
+  ): CreateImageTaskInput {
     const prompt = input.prompt.trim();
     if (!prompt) {
       throw new AppError('BAD_REQUEST', 400, 'prompt is required');
     }
-    if (input.operationType !== 'text_to_image') {
-      throw new AppError(
-        'MODEL_UNSUPPORTED_OPERATION',
-        400,
-        'S07 仅支持文生图任务'
-      );
-    }
-    if (![1, 2, 4].includes(input.batchSize)) {
-      throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
-    }
-    return {
+    const normalized = {
       ...input,
       idempotencyKey: input.idempotencyKey || randomUUID(),
+      maskAssetId: cleanOptionalId(input.maskAssetId),
       modelKey: input.modelKey || MOCK_MODEL_KEY,
+      operationType: normalizeOperationType(input.operationType),
       prompt,
       ratio: input.ratio || '1:1',
+      referenceAssets: normalizeReferenceAssets(input.referenceAssets ?? []),
+      sourceAssetId: cleanOptionalId(input.sourceAssetId),
     };
+    assertOperationAssetRequirements(normalized);
+    if (![1, 2, 4].includes(normalized.batchSize)) {
+      throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
+    }
+    return normalized;
   }
 
-  private async requireOwnedProject(auth: AuthenticatedSession, projectId: string) {
+  private async requireOwnedProject(
+    auth: AuthenticatedSession,
+    projectId: string
+  ) {
     const project = await this.projectRepository.findProjectById(
       this.tenantId,
       projectId
@@ -407,11 +467,14 @@ export class ImageTaskService {
     return {
       amount: task.quotedPriceAmount,
       batchSize: task.batchSize,
+      maskAssetId: readTaskMaskAssetId(task),
       modelKey: task.requestedModelKey,
       operationType: task.operationType,
       pricePolicyId: task.pricePolicyId,
       priceVersion: task.priceVersion,
       ratio: task.ratio,
+      referenceAssets: readTaskReferenceAssets(task),
+      sourceAssetId: readTaskSourceAssetId(task),
       unit: task.quotedPriceUnit,
     };
   }
@@ -421,9 +484,10 @@ export class ImageTaskService {
       this.tenantId,
       task.id
     );
-    const canvasSync = (
-      await this.repository.listCanvasSyncRecords(this.tenantId, task.id)
-    )[0] ?? null;
+    const canvasSync =
+      (
+        await this.repository.listCanvasSyncRecords(this.tenantId, task.id)
+      )[0] ?? null;
     return {
       actualModelKey: task.actualModelKey,
       actualProvider: task.actualProvider,
@@ -441,6 +505,7 @@ export class ImageTaskService {
       id: task.id,
       modelFamily: task.modelFamily,
       modelVersion: task.modelVersion,
+      maskAssetId: readTaskMaskAssetId(task),
       operationType: task.operationType,
       optimizedPrompt: task.optimizedPrompt,
       ownerUserId: task.ownerUserId,
@@ -449,14 +514,138 @@ export class ImageTaskService {
       quotedPriceAmount: task.quotedPriceAmount,
       quotedPriceUnit: task.quotedPriceUnit,
       ratio: task.ratio,
+      referenceAssets: readTaskReferenceAssets(task),
       requestedModelKey: task.requestedModelKey,
       requestedProvider: task.requestedProvider,
       settledAt: task.settledAt,
       settledPriceAmount: task.settledPriceAmount,
+      sourceAssetId: readTaskSourceAssetId(task),
       status: task.status,
       successCount: task.successCount,
       updatedAt: task.updatedAt,
       userPrompt: task.userPrompt,
     };
   }
+}
+
+function normalizeOperationType(
+  value: ImageTaskOperationType
+): ImageTaskOperationType {
+  if (
+    value === 'text_to_image' ||
+    value === 'image_to_image' ||
+    value === 'inpaint' ||
+    value === 'reference_generate'
+  ) {
+    return value;
+  }
+  throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前操作');
+}
+
+function cleanOptionalId(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeReferenceAssets(
+  references: ImageTaskReferenceAssetInput[]
+): ImageTaskReferenceAssetInput[] {
+  const seen = new Set<string>();
+  const normalized: ImageTaskReferenceAssetInput[] = [];
+  for (const [index, reference] of references.entries()) {
+    const assetId = cleanOptionalId(reference.assetId);
+    if (!assetId || seen.has(assetId)) {
+      continue;
+    }
+    seen.add(assetId);
+    normalized.push({
+      assetId,
+      order: Number.isInteger(reference.order) ? reference.order : index,
+      role: reference.role || 'general',
+    });
+  }
+  return normalized.sort((left, right) => left.order - right.order);
+}
+
+function assertOperationAssetRequirements(input: {
+  maskAssetId?: string | null;
+  operationType: ImageTaskOperationType;
+  referenceAssets?: ImageTaskReferenceAssetInput[];
+  sourceAssetId?: string | null;
+}): void {
+  const referenceCount = input.referenceAssets?.length ?? 0;
+  if (input.operationType === 'text_to_image') {
+    if (input.sourceAssetId || input.maskAssetId || referenceCount > 0) {
+      throw new AppError(
+        'BAD_REQUEST',
+        400,
+        'text_to_image cannot include source, mask, or reference assets'
+      );
+    }
+    return;
+  }
+  if (input.operationType === 'image_to_image' && !input.sourceAssetId) {
+    throw new AppError('BAD_REQUEST', 400, 'source_asset_id is required');
+  }
+  if (input.operationType === 'inpaint') {
+    if (!input.sourceAssetId) {
+      throw new AppError('BAD_REQUEST', 400, 'source_asset_id is required');
+    }
+    if (!input.maskAssetId) {
+      throw new AppError('BAD_REQUEST', 400, 'mask_asset_id is required');
+    }
+  }
+  if (input.operationType === 'reference_generate' && referenceCount === 0) {
+    throw new AppError('BAD_REQUEST', 400, 'reference_assets is required');
+  }
+  if (referenceCount > 5) {
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前参考图数量'
+    );
+  }
+}
+
+function readTaskSourceAssetId(task: ImageTask): string | null {
+  const value = task.normalizedParams.sourceAssetId;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function readTaskMaskAssetId(task: ImageTask): string | null {
+  const value = task.normalizedParams.maskAssetId;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function readTaskReferenceAssets(
+  task: ImageTask
+): ImageTaskReferenceAssetInput[] {
+  const value = task.normalizedParams.referenceAssets;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return normalizeReferenceAssets(
+    value.filter(isReferenceAssetInputLike).map((reference) => ({
+      assetId: reference.assetId,
+      order: reference.order,
+      role: reference.role,
+    }))
+  );
+}
+
+function isReferenceAssetInputLike(
+  value: unknown
+): value is ImageTaskReferenceAssetInput {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const reference = value as Partial<ImageTaskReferenceAssetInput>;
+  return (
+    typeof reference.assetId === 'string' &&
+    Number.isInteger(reference.order) &&
+    (reference.role === 'general' ||
+      reference.role === 'subject' ||
+      reference.role === 'style' ||
+      reference.role === 'composition' ||
+      reference.role === 'background')
+  );
 }

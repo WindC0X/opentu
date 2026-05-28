@@ -16,9 +16,17 @@ export const MOCK_PRICE_PER_IMAGE = 10;
 export const MOCK_IMAGE_MODEL: ImageModelView = {
   capabilities: {
     maxBatchSize: 4,
+    maxReferenceImages: 5,
     operationType: 'text_to_image',
+    operationTypes: [
+      'text_to_image',
+      'image_to_image',
+      'inpaint',
+      'reference_generate',
+    ],
     supportedRatios: ['1:1', '16:9', '9:16'],
     supportsBatch: true,
+    supportsMask: true,
   },
   displayName: 'Mock Image v1',
   modelKey: MOCK_MODEL_KEY,
@@ -70,11 +78,14 @@ export class MockImageProvider {
     const requestedSuccessCount = input.prompt.includes('__mock_partial__')
       ? Math.max(1, input.batchSize - 1)
       : input.batchSize;
-    const images = Array.from({ length: requestedSuccessCount }, (_, index) => ({
-      body: ONE_PIXEL_PNG,
-      candidateIndex: index,
-      mimeType: 'image/png' as const,
-    }));
+    const images = Array.from(
+      { length: requestedSuccessCount },
+      (_, index) => ({
+        body: ONE_PIXEL_PNG,
+        candidateIndex: index,
+        mimeType: 'image/png' as const,
+      })
+    );
 
     return {
       failureCount: input.batchSize - requestedSuccessCount,
@@ -87,8 +98,12 @@ export class MockImageProvider {
       successCount: requestedSuccessCount,
       usageSnapshot: {
         imageCount: requestedSuccessCount,
+        hasMask: Boolean(input.maskAssetId),
+        hasSource: Boolean(input.sourceAssetId),
         modelKey: MOCK_MODEL_KEY,
+        operationType: input.operationType,
         promptLength: input.prompt.length,
+        referenceImageCount: input.referenceAssets?.length ?? 0,
       },
     };
   }
@@ -99,7 +114,9 @@ export function listMockImageModels(): ImageModelView[] {
 }
 
 export function requireMockImageModel(modelKey: string): ImageModelView {
-  const model = listMockImageModels().find((candidate) => candidate.modelKey === modelKey);
+  const model = listMockImageModels().find(
+    (candidate) => candidate.modelKey === modelKey
+  );
   if (!model) {
     throw new AppError(
       'MODEL_UNSUPPORTED_OPERATION',

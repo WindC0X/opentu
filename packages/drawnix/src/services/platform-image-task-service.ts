@@ -2,8 +2,11 @@ import {
   TaskStatus,
   TaskType,
   type GenerationParams,
+  type PlatformImageTaskOperationType,
   type PlatformImageTaskCanvasSyncStatus,
   type PlatformImageTaskPriceQuoteMirror,
+  type PlatformImageTaskReferenceAsset,
+  type PlatformImageTaskReferenceAssetRole,
   type Task,
   type TaskError,
   type TaskResult,
@@ -15,6 +18,14 @@ import {
 
 const DEFAULT_PLATFORM_IMAGE_MODEL_KEY = 'mock-image-v1';
 const DEFAULT_PLATFORM_IMAGE_RATIO = '1:1';
+const MAX_PLATFORM_REFERENCE_IMAGES = 5;
+
+interface PlatformImageInputRef {
+  assetId?: string;
+  file?: Blob | File;
+  name: string;
+  url?: string;
+}
 
 interface ApiEnvelope<T> {
   data: T | null;
@@ -59,7 +70,8 @@ export interface PlatformImageTaskView {
   id: string;
   modelFamily: string;
   modelVersion: string;
-  operationType: 'text_to_image';
+  maskAssetId: string | null;
+  operationType: PlatformImageTaskOperationType;
   optimizedPrompt: string | null;
   ownerUserId: string;
   priceVersion: number;
@@ -67,10 +79,12 @@ export interface PlatformImageTaskView {
   quotedPriceAmount: number;
   quotedPriceUnit: 'points';
   ratio: string;
+  referenceAssets: PlatformImageTaskReferenceAsset[];
   requestedModelKey: string;
   requestedProvider: string;
   settledAt: string | null;
   settledPriceAmount: number | null;
+  sourceAssetId: string | null;
   status: PlatformImageTaskStatus;
   successCount: number;
   updatedAt: string;
@@ -107,13 +121,23 @@ export function isPlatformEligibleImageParams(
   if (type !== TaskType.IMAGE) {
     return false;
   }
-  const generationMode = params.generationMode || 'text_to_image';
+  const operationType = resolvePlatformOperationType(params);
+  const imageInputs = collectPlatformImageInputs(params);
+  const hasMask = Boolean(cleanString(params.maskImage));
+
+  if (operationType === 'text_to_image') {
+    return imageInputs.length === 0 && !hasMask;
+  }
+  if (operationType === 'image_to_image') {
+    return imageInputs.length >= 1 && !hasMask;
+  }
+  if (operationType === 'inpaint') {
+    return imageInputs.length >= 1 && hasMask;
+  }
   return (
-    generationMode === 'text_to_image' &&
-    !params.maskImage &&
-    !params.referenceImages?.length &&
-    !params.uploadedImages?.length &&
-    !params.uploadedImage
+    imageInputs.length > 0 &&
+    imageInputs.length <= MAX_PLATFORM_REFERENCE_IMAGES &&
+    !hasMask
   );
 }
 
@@ -130,9 +154,11 @@ export function withPlatformImageTaskMetadata(
     ...params,
     platformManagedImageTask: true,
     platformModelKey: DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
-    platformOperationType: 'text_to_image',
+    platformOperationType: resolvePlatformOperationType(params),
     platformProjectId: projectId,
-    platformRatio: normalizePlatformImageRatio(params.platformRatio || params.size),
+    platformRatio: normalizePlatformImageRatio(
+      params.platformRatio || params.size
+    ),
   };
 }
 
@@ -161,21 +187,16 @@ export async function createPlatformImageTaskFromLocalTask(
   if (!projectId) {
     throw new Error('缺少平台项目 ID，无法创建图片任务');
   }
+  const payload = await buildPlatformImageTaskCreatePayload(task, projectId);
 
-  const result = await request<{ task: PlatformImageTaskView }>('/api/image-tasks', {
-    body: JSON.stringify({
-      batchSize: 1,
-      idempotencyKey: params.platformIdempotencyKey || `drawnix:${task.id}`,
-      modelKey: params.platformModelKey || DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
-      operationType: 'text_to_image',
-      prompt: params.prompt,
-      projectId,
-      promptOptimize: Boolean(params.platformPromptOptimize),
-      ratio: normalizePlatformImageRatio(params.platformRatio || params.size),
-    }),
-    headers: { 'content-type': 'application/json' },
-    method: 'POST',
-  });
+  const result = await request<{ task: PlatformImageTaskView }>(
+    '/api/image-tasks',
+    {
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }
+  );
   return result.task;
 }
 
@@ -217,7 +238,9 @@ export function platformImageTaskToTaskPatch(
       ? platformImageTaskToTaskResult(platformTask)
       : undefined;
   const error =
-    platformTask.status === 'failed' ? platformImageTaskToTaskError(platformTask) : undefined;
+    platformTask.status === 'failed'
+      ? platformImageTaskToTaskError(platformTask)
+      : undefined;
 
   return {
     status,
@@ -232,6 +255,303 @@ export function platformImageTaskToTaskPatch(
       result,
     },
   };
+}
+
+async function buildPlatformImageTaskCreatePayload(
+  task: Task,
+  projectId: string
+) {
+  const params = task.params;
+  const operationType =
+    params.platformOperationType ?? resolvePlatformOperationType(params);
+  const imageInputs = collectPlatformImageInputs(params);
+  let sourceAssetId = cleanString(params.platformSourceAssetId) ?? null;
+  let maskAssetId = cleanString(params.platformMaskAssetId) ?? null;
+  let referenceAssets = normalizePlatformReferenceAssets(
+    params.platformReferenceAssets
+  );
+
+  if (operationType === 'image_to_image' || operationType === 'inpaint') {
+    sourceAssetId =
+      sourceAssetId ??
+      (await resolvePlatformImageInputAssetId(
+        requireImageInput(imageInputs[0], '缺少源图，无法创建平台图片任务'),
+        projectId,
+        'image'
+      ));
+    if (referenceAssets.length === 0 && imageInputs.length > 1) {
+      referenceAssets = await resolvePlatformReferenceAssets(
+        imageInputs.slice(1, MAX_PLATFORM_REFERENCE_IMAGES + 1),
+        projectId
+      );
+    }
+  }
+
+  if (operationType === 'inpaint') {
+    maskAssetId =
+      maskAssetId ??
+      (await resolvePlatformImageInputAssetId(
+        {
+          name: 'platform-mask.png',
+          url: requireImageUrl(
+            params.maskImage,
+            '缺少 mask，无法创建局部重绘任务'
+          ),
+        },
+        projectId,
+        'mask'
+      ));
+  }
+
+  if (operationType === 'reference_generate' && referenceAssets.length === 0) {
+    referenceAssets = await resolvePlatformReferenceAssets(
+      imageInputs.slice(0, MAX_PLATFORM_REFERENCE_IMAGES),
+      projectId
+    );
+  }
+
+  return {
+    batchSize: 1,
+    idempotencyKey: params.platformIdempotencyKey || `drawnix:${task.id}`,
+    maskAssetId,
+    modelKey: params.platformModelKey || DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
+    operationType,
+    prompt: params.prompt,
+    projectId,
+    promptOptimize: Boolean(params.platformPromptOptimize),
+    ratio: normalizePlatformImageRatio(params.platformRatio || params.size),
+    referenceAssets,
+    sourceAssetId,
+  };
+}
+
+export function resolvePlatformOperationType(
+  params: GenerationParams
+): PlatformImageTaskOperationType {
+  if (params.platformOperationType) {
+    return params.platformOperationType;
+  }
+  const generationMode = params.generationMode || 'text_to_image';
+  const imageInputs = collectPlatformImageInputs(params);
+  const hasMask = Boolean(cleanString(params.maskImage));
+
+  if (hasMask) {
+    return 'inpaint';
+  }
+  if (generationMode === 'image_to_image' || generationMode === 'image_edit') {
+    return 'image_to_image';
+  }
+  if (imageInputs.length > 0) {
+    return 'reference_generate';
+  }
+  return 'text_to_image';
+}
+
+function collectPlatformImageInputs(
+  params: GenerationParams
+): PlatformImageInputRef[] {
+  const refs: PlatformImageInputRef[] = [];
+  const seen = new Set<string>();
+  const pushRef = (ref: PlatformImageInputRef) => {
+    const key = ref.assetId ?? ref.url ?? ref.name;
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    refs.push(ref);
+  };
+
+  const referenceImages = Array.isArray(params.referenceImages)
+    ? params.referenceImages
+    : [];
+  referenceImages.forEach((url, index) => {
+    if (typeof url === 'string' && url.trim()) {
+      pushRef({ name: `reference-${index + 1}.png`, url });
+    }
+  });
+
+  const uploadedImages = Array.isArray(params.uploadedImages)
+    ? params.uploadedImages
+    : [];
+  uploadedImages.forEach((image, index) => {
+    const ref = uploadedImageToInputRef(image, `uploaded-${index + 1}.png`);
+    if (ref) {
+      pushRef(ref);
+    }
+  });
+
+  const uploadedImage = uploadedImageToInputRef(
+    params.uploadedImage,
+    'uploaded.png'
+  );
+  if (uploadedImage) {
+    pushRef(uploadedImage);
+  }
+
+  return refs;
+}
+
+function uploadedImageToInputRef(
+  value: unknown,
+  fallbackName: string
+): PlatformImageInputRef | null {
+  if (typeof value === 'string' && value.trim()) {
+    return { name: fallbackName, url: value };
+  }
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const image = value as {
+    assetId?: unknown;
+    file?: unknown;
+    name?: unknown;
+    platformAssetId?: unknown;
+    url?: unknown;
+  };
+  const assetId =
+    cleanString(image.platformAssetId) ??
+    cleanString(image.assetId) ??
+    undefined;
+  const url = cleanString(image.url) ?? undefined;
+  const file = image.file instanceof Blob ? image.file : undefined;
+  if (!assetId && !url && !file) {
+    return null;
+  }
+  return {
+    assetId,
+    file,
+    name: cleanString(image.name) ?? fallbackName,
+    url,
+  };
+}
+
+function normalizePlatformReferenceAssets(
+  references: PlatformImageTaskReferenceAsset[] | undefined
+): PlatformImageTaskReferenceAsset[] {
+  if (!references?.length) {
+    return [];
+  }
+  return references
+    .filter((reference) => Boolean(cleanString(reference.assetId)))
+    .slice(0, MAX_PLATFORM_REFERENCE_IMAGES)
+    .map((reference, index) => ({
+      assetId: reference.assetId.trim(),
+      order: Number.isInteger(reference.order) ? reference.order : index,
+      role: normalizeReferenceRole(reference.role),
+    }))
+    .sort((left, right) => left.order - right.order);
+}
+
+async function resolvePlatformReferenceAssets(
+  inputs: PlatformImageInputRef[],
+  projectId: string
+): Promise<PlatformImageTaskReferenceAsset[]> {
+  const references: PlatformImageTaskReferenceAsset[] = [];
+  for (const [index, input] of inputs.entries()) {
+    references.push({
+      assetId: await resolvePlatformImageInputAssetId(
+        input,
+        projectId,
+        'image'
+      ),
+      order: index,
+      role: 'general',
+    });
+  }
+  return references;
+}
+
+async function resolvePlatformImageInputAssetId(
+  input: PlatformImageInputRef,
+  projectId: string,
+  assetKind: 'image' | 'mask'
+): Promise<string> {
+  if (input.assetId) {
+    return input.assetId;
+  }
+  const body =
+    input.file ??
+    (await fetchPlatformImageBlob(
+      requireImageUrl(input.url, '缺少图片 URL，无法上传平台资产')
+    ));
+  const asset = await uploadPlatformImageAsset(
+    body,
+    projectId,
+    input.name,
+    assetKind
+  );
+  return asset.id;
+}
+
+async function fetchPlatformImageBlob(url: string): Promise<Blob> {
+  const response = await fetch(url, { credentials: 'include' });
+  if (!response.ok) {
+    throw new Error(`平台图片上传前读取失败: ${response.status}`);
+  }
+  const blob = await response.blob();
+  if (blob.type) {
+    return blob;
+  }
+  return new Blob([await blob.arrayBuffer()], { type: 'image/png' });
+}
+
+async function uploadPlatformImageAsset(
+  file: File | Blob,
+  projectId: string,
+  fallbackName: string,
+  assetKind: 'image' | 'mask'
+): Promise<PlatformAsset> {
+  const form = new FormData();
+  form.append('projectId', projectId);
+  form.append('assetKind', assetKind);
+  form.append(
+    'file',
+    file instanceof File
+      ? file
+      : new File([file], fallbackName, { type: file.type })
+  );
+  const result = await request<{ asset: PlatformAsset }>('/api/assets/upload', {
+    body: form,
+    method: 'POST',
+  });
+  return result.asset;
+}
+
+function requireImageInput(
+  input: PlatformImageInputRef | undefined,
+  message: string
+): PlatformImageInputRef {
+  if (!input) {
+    throw new Error(message);
+  }
+  return input;
+}
+
+function requireImageUrl(value: unknown, message: string): string {
+  const url = cleanString(value);
+  if (!url) {
+    throw new Error(message);
+  }
+  return url;
+}
+
+function cleanString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeReferenceRole(
+  value: unknown
+): PlatformImageTaskReferenceAssetRole {
+  if (
+    value === 'general' ||
+    value === 'subject' ||
+    value === 'style' ||
+    value === 'composition' ||
+    value === 'background'
+  ) {
+    return value;
+  }
+  return 'general';
 }
 
 function mapPlatformTaskStatus(status: PlatformImageTaskStatus): TaskStatus {
@@ -271,10 +591,13 @@ function platformImageTaskToQuoteMirror(
   return {
     amount: task.quotedPriceAmount,
     batchSize: task.batchSize,
+    maskAssetId: task.maskAssetId,
     modelKey: task.requestedModelKey,
     operationType: task.operationType,
     priceVersion: task.priceVersion,
     ratio: task.ratio,
+    referenceAssets: task.referenceAssets,
+    sourceAssetId: task.sourceAssetId,
     unit: task.quotedPriceUnit,
   };
 }
@@ -283,7 +606,10 @@ function platformImageTaskToTaskResult(
   task: PlatformImageTaskView
 ): TaskResult | undefined {
   const assetUrls = task.assets
-    .map((asset) => getPlatformAssetVariantUrl(asset, 'original') || asset.variants[0]?.url)
+    .map(
+      (asset) =>
+        getPlatformAssetVariantUrl(asset, 'original') || asset.variants[0]?.url
+    )
     .filter((url): url is string => Boolean(url));
   if (assetUrls.length === 0) {
     return undefined;

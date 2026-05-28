@@ -88,6 +88,25 @@ export enum TaskExecutionPhase {
 
 export type TaskInvocationOperation = 'image' | 'video' | 'audio' | 'text';
 
+export type PlatformImageTaskOperationType =
+  | 'text_to_image'
+  | 'image_to_image'
+  | 'inpaint'
+  | 'reference_generate';
+
+export type PlatformImageTaskReferenceAssetRole =
+  | 'general'
+  | 'subject'
+  | 'style'
+  | 'composition'
+  | 'background';
+
+export interface PlatformImageTaskReferenceAsset {
+  assetId: string;
+  order: number;
+  role: PlatformImageTaskReferenceAssetRole;
+}
+
 export interface TaskInvocationBindingSnapshot {
   id?: string;
   protocol?: string;
@@ -240,10 +259,16 @@ export interface GenerationParams {
   platformIdempotencyKey?: string;
   /** Platform image model key, independent from browser provider model labels */
   platformModelKey?: string;
-  /** Platform text-to-image operation marker */
-  platformOperationType?: 'text_to_image';
+  /** Platform image operation marker */
+  platformOperationType?: PlatformImageTaskOperationType;
   /** Platform-supported image ratio, e.g. 1:1, 16:9, 9:16 */
   platformRatio?: string;
+  /** Platform asset id used as the image task source */
+  platformSourceAssetId?: string;
+  /** Platform mask asset id used by inpaint tasks */
+  platformMaskAssetId?: string;
+  /** Platform reference assets used by reference generation */
+  platformReferenceAssets?: PlatformImageTaskReferenceAsset[];
   /** Whether the platform should run prompt optimization for this task */
   platformPromptOptimize?: boolean;
   /** Additional parameters for specific generation types */
@@ -384,11 +409,14 @@ export type PlatformImageTaskCanvasSyncStatus =
 export interface PlatformImageTaskPriceQuoteMirror {
   amount: number;
   batchSize: 1 | 2 | 4;
+  maskAssetId?: string | null;
   modelKey: string;
-  operationType: 'text_to_image';
+  operationType: PlatformImageTaskOperationType;
   pricePolicyId?: string;
   priceVersion: number;
   ratio: string;
+  referenceAssets?: PlatformImageTaskReferenceAsset[];
+  sourceAssetId?: string | null;
   unit: 'points';
 }
 
