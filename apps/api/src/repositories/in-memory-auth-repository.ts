@@ -5,6 +5,7 @@ import {
   AuditLog,
   AuthRepository,
   CreateAuditLogInput,
+  AuditLogFilter,
   CreateInviteCodeInput,
   CreateQuotaAccountInput,
   CreateQuotaLedgerEntryInput,
@@ -301,6 +302,20 @@ export class InMemoryAuthRepository implements AuthRepository {
             user.username.toLowerCase() === normalizedLogin)
       ) ?? null
     );
+  }
+
+  async listAuditLogs(input: AuditLogFilter): Promise<AuditLog[]> {
+    return [...this.auditLogs.values()]
+      .filter(
+        (log) =>
+          log.tenantId === input.tenantId &&
+          (!input.actorUserId || log.actorUserId === input.actorUserId) &&
+          (!input.action || log.action === input.action) &&
+          (!input.targetType || log.targetType === input.targetType) &&
+          (!input.targetId || log.targetId === input.targetId)
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, input.limit ?? 100);
   }
 
   async listUsers(tenantId: string): Promise<User[]> {

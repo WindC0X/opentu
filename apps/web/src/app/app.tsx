@@ -24,6 +24,7 @@ import {
   updateViewportOffset,
 } from '@plait/core';
 import { ErrorFallbackUI, safeModeReload, goToDebug } from './ErrorBoundary';
+import { AdminPage } from '../admin/AdminPage';
 import { collectAndDownloadErrorLog } from '../utils/error-log-exporter';
 import { ProjectHomePage } from '../mengtu/ProjectHomePage';
 import type { CanvasBootContext } from '../mengtu/types';
@@ -56,7 +57,7 @@ type BootController = {
   markError: (message?: string) => void;
 };
 
-type AppRoute = 'home' | 'canvas';
+type AppRoute = 'home' | 'canvas' | 'admin';
 type MengtuCanvasFeatureFlags = CanvasBootContext['featureFlags'];
 
 const DEFAULT_CANVAS_FEATURE_FLAGS: MengtuCanvasFeatureFlags = {
@@ -154,6 +155,9 @@ function getCurrentRoute(): AppRoute {
   if (typeof window === 'undefined') {
     return 'home';
   }
+  if (window.location.pathname.startsWith('/admin')) {
+    return 'admin';
+  }
   return window.location.pathname.startsWith('/canvas') ? 'canvas' : 'home';
 }
 
@@ -165,6 +169,16 @@ function buildCanvasNavigationUrl(canvasUrl: string): string {
     target.searchParams.set('sw', sw);
   }
   return `${target.pathname}${target.search}${target.hash}`;
+}
+
+function buildInternalNavigationUrl(pathname: string): string {
+  const current = new URL(window.location.href);
+  const url = new URL(pathname, window.location.origin);
+  const sw = current.searchParams.get('sw');
+  if (sw) {
+    url.searchParams.set('sw', sw);
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function saveCanvasBootContext(bootContext: CanvasBootContext): void {
@@ -215,7 +229,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (route === 'home') {
+    if (route === 'home' || route === 'admin') {
       getBootController()?.markReady();
     }
   }, [route]);
@@ -228,8 +242,35 @@ export function App() {
     setRoute('canvas');
   }, []);
 
+  const handleOpenAdmin = useCallback(() => {
+    window.history.pushState(
+      { route: 'admin' },
+      '',
+      buildInternalNavigationUrl('/admin')
+    );
+    setRoute('admin');
+  }, []);
+
+  const handleOpenHome = useCallback(() => {
+    window.history.pushState(
+      { route: 'home' },
+      '',
+      buildInternalNavigationUrl('/')
+    );
+    setRoute('home');
+  }, []);
+
   if (route === 'home') {
-    return <ProjectHomePage onOpenCanvas={handleOpenCanvas} />;
+    return (
+      <ProjectHomePage
+        onOpenAdmin={handleOpenAdmin}
+        onOpenCanvas={handleOpenCanvas}
+      />
+    );
+  }
+
+  if (route === 'admin') {
+    return <AdminPage onOpenHome={handleOpenHome} />;
   }
 
   return (

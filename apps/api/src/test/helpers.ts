@@ -1,10 +1,12 @@
 import { AuthService } from '../auth/service';
 import { hashPassword } from '../auth/password';
 import { DEFAULT_TENANT_ID, User } from '../auth/types';
+import { AdminService } from '../admin/service';
 import { AssetService } from '../assets/service';
 import { ImageTaskService } from '../image-tasks/service';
 import { QuotaService } from '../quota/service';
 import { ProjectService } from '../projects/service';
+import { InMemoryAdminRepository } from '../repositories/in-memory-admin-repository';
 import { InMemoryAssetRepository } from '../repositories/in-memory-asset-repository';
 import { InMemoryAuthRepository } from '../repositories/in-memory-auth-repository';
 import { InMemoryImageTaskRepository } from '../repositories/in-memory-image-task-repository';
@@ -40,6 +42,10 @@ export async function createTestAppContext(
   options: { imageTaskAutoRunWorker?: boolean } = {}
 ) {
   const auth = await createTestAuthContext();
+  const adminRepository = new InMemoryAdminRepository();
+  const adminService = new AdminService(adminRepository, auth.repository, {
+    now: () => new Date('2026-05-29T00:00:00.000Z'),
+  });
   const projectRepository = new InMemoryProjectRepository();
   const projectService = new ProjectService(projectRepository, {
     now: () => new Date('2026-05-26T00:00:00.000Z'),
@@ -71,6 +77,8 @@ export async function createTestAppContext(
   );
 
   return {
+    adminRepository,
+    adminService,
     assetRepository,
     assetService,
     imageTaskRepository,

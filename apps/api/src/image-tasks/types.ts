@@ -233,6 +233,10 @@ export interface ImageTaskRepository {
     projectId: string;
     tenantId: string;
   }): Promise<ImageTask[]>;
+  listAdminTasks(input: {
+    status?: ImageTaskStatus;
+    tenantId: string;
+  }): Promise<ImageTask[]>;
   updateCanvasSyncRecord(input: {
     imageTaskId: string;
     status: Exclude<ImageTaskCanvasSyncStatus, 'not_required'>;

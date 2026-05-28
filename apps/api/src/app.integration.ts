@@ -1082,6 +1082,190 @@ describe('S08 image edit versioning API', () => {
   });
 });
 
+describe('S09 admin/provider ops API', () => {
+  it('guards admin APIs, manages provider config, masks credentials, and exposes task/asset/audit views', async () => {
+    const {
+      adminRepository,
+      adminService,
+      assetService,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      adminService,
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const owner = await createUserWithQuota(repository, {
+      email: 's09-owner@mengtu.local',
+      password: 'owner-password',
+      username: 's09-owner',
+    });
+    await seedQuota(repository, owner.id, 100);
+
+    const ownerLogin = await post(app, '/api/auth/login', {
+      login: 's09-owner@mengtu.local',
+      password: 'owner-password',
+    });
+    const adminLogin = await post(app, '/api/auth/login', {
+      login: 'admin@mengtu.local',
+      password: 'admin-password',
+    });
+
+    const forbidden = await get(
+      app,
+      '/api/admin/providers',
+      ownerLogin.cookie
+    );
+    expect(forbidden.response.status).toBe(403);
+    expect(forbidden.json.error.code).toBe('FORBIDDEN');
+
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S09 Admin Project' },
+      ownerLogin.cookie
+    );
+    const projectId = project.json.data.project.id as string;
+    const task = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batchSize: 1,
+        idempotencyKey: 's09-task-1',
+        modelKey: 'mock-image-v1',
+        operationType: 'text_to_image',
+        prompt: 's09 admin generated image',
+        projectId,
+        ratio: '1:1',
+      },
+      ownerLogin.cookie
+    );
+    expect(task.response.status).toBe(201);
+
+    const providers = await get(
+      app,
+      '/api/admin/providers',
+      adminLogin.cookie
+    );
+    expect(providers.response.status).toBe(200);
+    expect(providers.json.data.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerKey: 'mock', status: 'active' }),
+      ])
+    );
+
+    const createdProvider = await post(
+      app,
+      '/api/admin/providers',
+      {
+        displayName: 'Test Provider',
+        providerKey: 'test-provider',
+        reviewNotes: 'S09 integration provider',
+        status: 'degraded',
+      },
+      adminLogin.cookie
+    );
+    expect(createdProvider.response.status).toBe(201);
+    expect(createdProvider.json.data.provider.providerKey).toBe(
+      'test-provider'
+    );
+
+    const secret = 'sk-live-secret-123456';
+    const rotated = await post(
+      app,
+      '/api/admin/providers/test-provider/credentials',
+      {
+        credentialKind: 'api_key',
+        secret,
+      },
+      adminLogin.cookie
+    );
+    expect(rotated.response.status).toBe(201);
+    expect(rotated.json.data.credential.maskedValue).toMatch(/\*+3456$/);
+    expect(JSON.stringify(rotated.json)).not.toContain(secret);
+    expect(adminRepository.credentials.size).toBe(1);
+
+    const updatedModel = await patch(
+      app,
+      '/api/admin/models/mock-image-v1',
+      {
+        healthStatus: 'degraded',
+        supportLevel: 'experimental',
+        visibility: 'beta',
+      },
+      adminLogin.cookie
+    );
+    expect(updatedModel.response.status).toBe(200);
+    expect(updatedModel.json.data.model.visibility).toBe('beta');
+    expect(updatedModel.json.data.model.capabilities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ supportLevel: 'experimental' }),
+      ])
+    );
+
+    const pricePolicy = await post(
+      app,
+      '/api/admin/price-policies',
+      {
+        amount: 12,
+        modelKey: 'mock-image-v1',
+        operationType: 'text_to_image',
+        policyKey: 'mock_text_to_image',
+        unit: 'per_image',
+      },
+      adminLogin.cookie
+    );
+    expect(pricePolicy.response.status).toBe(201);
+    expect(pricePolicy.json.data.pricePolicy.version).toBe(2);
+
+    const adminTasks = await get(
+      app,
+      '/api/admin/image-tasks',
+      adminLogin.cookie
+    );
+    expect(adminTasks.response.status).toBe(200);
+    expect(adminTasks.json.data.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: task.json.data.task.id }),
+      ])
+    );
+
+    const adminAssets = await get(
+      app,
+      '/api/admin/assets?includeDeleted=true',
+      adminLogin.cookie
+    );
+    expect(adminAssets.response.status).toBe(200);
+    expect(adminAssets.json.data.assets.length).toBeGreaterThan(0);
+
+    const original = await rawGet(
+      app,
+      `/api/admin/assets/${adminAssets.json.data.assets[0].id}/original`,
+      adminLogin.cookie
+    );
+    expect(original.status).toBe(200);
+
+    const auditLogs = await get(app, '/api/admin/audit-logs', adminLogin.cookie);
+    expect(auditLogs.response.status).toBe(200);
+    expect(auditLogs.json.data.auditLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'admin_provider_credential_rotate',
+        }),
+        expect.objectContaining({ action: 'asset.original.read' }),
+      ])
+    );
+    expect(JSON.stringify(auditLogs.json.data.auditLogs)).not.toContain(secret);
+  });
+});
+
 async function get(
   app: ReturnType<typeof createApp>,
   path: string,

@@ -200,7 +200,7 @@ export async function deleteAsset(assetId: string): Promise<AssetSummary> {
   return result.asset;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: 'include',
     ...init,

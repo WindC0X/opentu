@@ -115,6 +115,22 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
     return rows.map(mapTask);
   }
 
+  async listAdminTasks(input: {
+    status?: ImageTask['status'];
+    tenantId: string;
+  }): Promise<ImageTask[]> {
+    const conditions = [
+      eq(schema.mtImageTasks.tenantId, input.tenantId),
+      input.status ? eq(schema.mtImageTasks.status, input.status) : undefined,
+    ].filter(Boolean);
+    const rows = await this.db
+      .select()
+      .from(schema.mtImageTasks)
+      .where(and(...conditions))
+      .orderBy(desc(schema.mtImageTasks.createdAt));
+    return rows.map(mapTask);
+  }
+
   async updateTask(
     taskId: string,
     patch: Parameters<ImageTaskRepository['updateTask']>[1]

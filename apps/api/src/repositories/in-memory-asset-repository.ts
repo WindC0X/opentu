@@ -132,6 +132,27 @@ export class InMemoryAssetRepository implements AssetRepository {
       }));
   }
 
+  async listAdminAssets(input: {
+    includeDeleted?: boolean;
+    ownerUserId?: string;
+    projectId?: string;
+    tenantId: string;
+  }): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>> {
+    return [...this.assets.values()]
+      .filter(
+        (asset) =>
+          asset.tenantId === input.tenantId &&
+          (!input.ownerUserId || asset.ownerUserId === input.ownerUserId) &&
+          (!input.projectId || asset.projectId === input.projectId) &&
+          (input.includeDeleted || asset.visibilityStatus !== 'deleted')
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((asset) => ({
+        asset,
+        variants: this.listVariantsSync(input.tenantId, asset.id),
+      }));
+  }
+
   async listAssetsByTask(
     tenantId: string,
     taskId: string

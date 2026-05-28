@@ -168,6 +168,39 @@ export class DrizzleAssetRepository implements AssetRepository {
     return records;
   }
 
+  async listAdminAssets(input: {
+    includeDeleted?: boolean;
+    ownerUserId?: string;
+    projectId?: string;
+    tenantId: string;
+  }): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>> {
+    const conditions = [
+      eq(schema.mtAssets.tenantId, input.tenantId),
+      input.ownerUserId
+        ? eq(schema.mtAssets.ownerUserId, input.ownerUserId)
+        : undefined,
+      input.projectId ? eq(schema.mtAssets.projectId, input.projectId) : undefined,
+      input.includeDeleted
+        ? undefined
+        : ne(schema.mtAssets.visibilityStatus, 'deleted'),
+      input.includeDeleted ? undefined : isNull(schema.mtAssets.deletedAt),
+    ].filter(Boolean);
+    const assetRows = await this.db
+      .select()
+      .from(schema.mtAssets)
+      .where(and(...conditions))
+      .orderBy(desc(schema.mtAssets.createdAt));
+
+    const records = [];
+    for (const row of assetRows) {
+      records.push({
+        asset: mapAsset(row),
+        variants: await this.listVariants(input.tenantId, row.id),
+      });
+    }
+    return records;
+  }
+
   async listAssetsByTask(
     tenantId: string,
     taskId: string

@@ -178,6 +178,377 @@ async function installS07ImageTaskApiMocks(page: Page) {
   };
 }
 
+async function installS09AdminApiMocks(page: Page, role: 'admin' | 'user') {
+  const now = '2026-05-29T00:00:00.000Z';
+  const providers: Array<Record<string, unknown>> = [
+    {
+      credential: null,
+      dataRegion: null,
+      dataRetentionPolicy: null,
+      dataTrainingUsage: null,
+      displayName: 'Mock Provider',
+      id: 'provider_mock',
+      isDefault: true,
+      lastReviewedAt: null,
+      privacyUrl: null,
+      providerKey: 'mock',
+      reviewNotes: null,
+      status: 'active',
+      termsUrl: null,
+      updatedAt: now,
+    },
+  ];
+  const models: Array<Record<string, unknown>> = [
+    {
+      capabilities: [
+        {
+          maxBatchSize: 4,
+          maxReferenceImages: 5,
+          operationType: 'text_to_image',
+          supportLevel: 'native',
+          supported: true,
+          supportedRatios: ['1:1'],
+          supportedSizes: [],
+          supportsBatch: true,
+          supportsMask: false,
+          supportsSeed: false,
+        },
+      ],
+      displayName: 'Mock Image v1',
+      healthStatus: 'healthy',
+      id: 'model_mock',
+      modelFamily: 'mock-image',
+      modelKey: 'mock-image-v1',
+      modelVersion: '2026-05-27',
+      providerKey: 'mock',
+      visibility: 'public',
+    },
+  ];
+  const pricePolicies: Array<Record<string, unknown>> = [
+    {
+      amount: 10,
+      createdAt: now,
+      id: 'price_mock',
+      modelKey: 'mock-image-v1',
+      operationType: 'text_to_image',
+      policyKey: 'mock_text_to_image',
+      status: 'active',
+      unit: 'per_image',
+      version: 1,
+    },
+  ];
+  const auditLogs = [
+    {
+      action: 'admin_provider_update',
+      actorUserId: 'admin_smoke',
+      createdAt: now,
+      id: 'audit_smoke',
+      metadata: { providerKey: 'mock' },
+      targetId: 'mock',
+      targetType: 'provider',
+    },
+  ];
+
+  await page.route('**/api/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+
+    if (request.method() === 'GET' && path === '/api/home/summary') {
+      await route.fulfill({
+        body: JSON.stringify(
+          s07Envelope({
+            projects: { items: [], total: 0 },
+            quota: { accountId: 'quota_admin_smoke', balanceAmount: 100, heldAmount: 0 },
+            recentAssets: [],
+            recentTasks: [],
+            user: {
+              id: role === 'admin' ? 'admin_smoke' : 'user_smoke',
+              role,
+              username: role === 'admin' ? 'admin-smoke' : 'user-smoke',
+            },
+          })
+        ),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && path === '/api/projects') {
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ projects: [] })),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && path === '/api/assets') {
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ assets: [] })),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (role !== 'admin' && path.startsWith('/api/admin/')) {
+      await route.fulfill({
+        body: JSON.stringify({
+          data: null,
+          error: { code: 'FORBIDDEN', message: 'Forbidden' },
+          request_id: 'req_smoke_s09',
+        }),
+        contentType: 'application/json',
+        status: 403,
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && path === '/api/admin/users') {
+      await route.fulfill({
+        body: JSON.stringify(
+          s07Envelope({
+            users: [
+              {
+                email: 'admin@mengtu.local',
+                id: 'admin_smoke',
+                lastLoginAt: now,
+                privacyVersion: 'privacy-v1',
+                role: 'admin',
+                status: 'active',
+                termsAcceptedAt: now,
+                termsVersion: 'terms-v1',
+                username: 'admin-smoke',
+              },
+            ],
+          })
+        ),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && path === '/api/admin/image-tasks') {
+      await route.fulfill({
+        body: JSON.stringify(
+          s07Envelope({
+            tasks: [
+              {
+                actualModelKey: 'mock-image-v1',
+                actualProvider: 'mock',
+                assets: [],
+                batchSize: 1,
+                canvasSyncStatus: 'succeeded',
+                createdAt: now,
+                failureCode: null,
+                failureCount: 0,
+                failureMessage: null,
+                finalPrompt: 'smoke',
+                id: 'task_smoke_admin',
+                maskAssetId: null,
+                modelFamily: 'mock-image',
+                modelVersion: '2026-05-27',
+                operationType: 'text_to_image',
+                optimizedPrompt: null,
+                ownerUserId: 'user_smoke',
+                priceVersion: 1,
+                projectId: 'project_smoke',
+                quotedPriceAmount: 10,
+                quotedPriceUnit: 'points',
+                ratio: '1:1',
+                referenceAssets: [],
+                requestedModelKey: 'mock-image-v1',
+                requestedProvider: 'mock',
+                settledAt: now,
+                settledPriceAmount: 10,
+                sourceAssetId: null,
+                status: 'succeeded',
+                successCount: 1,
+                updatedAt: now,
+                userPrompt: 'smoke',
+              },
+            ],
+          })
+        ),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && path === '/api/admin/assets') {
+      await route.fulfill({
+        body: JSON.stringify(
+          s07Envelope({
+            assets: [
+              {
+                aiGenerated: true,
+                aigcMetadataStatus: 'removed',
+                assetKind: 'image',
+                createdAt: now,
+                deletedAt: null,
+                favorite: false,
+                height: 1,
+                id: 'asset_smoke_admin',
+                mimeType: 'image/png',
+                origin: 'generated',
+                projectId: 'project_smoke',
+                selected: false,
+                sha256: 'hash_smoke_admin',
+                sizeBytes: 68,
+                updatedAt: now,
+                variants: [],
+                visibilityStatus: 'normal',
+                width: 1,
+              },
+            ],
+          })
+        ),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (path === '/api/admin/providers') {
+      if (request.method() === 'GET') {
+        await route.fulfill({
+          body: JSON.stringify(s07Envelope({ providers })),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+      if (request.method() === 'POST') {
+        const body = JSON.parse(request.postData() || '{}') as {
+          displayName: string;
+          providerKey: string;
+          status: string;
+        };
+        const provider = {
+          credential: null,
+          dataRegion: null,
+          dataRetentionPolicy: null,
+          dataTrainingUsage: null,
+          displayName: body.displayName,
+          id: `provider_${body.providerKey}`,
+          isDefault: false,
+          lastReviewedAt: null,
+          privacyUrl: null,
+          providerKey: body.providerKey,
+          reviewNotes: null,
+          status: body.status,
+          termsUrl: null,
+          updatedAt: now,
+        };
+        providers.push(provider);
+        await route.fulfill({
+          body: JSON.stringify(s07Envelope({ provider })),
+          contentType: 'application/json',
+          status: 201,
+        });
+        return;
+      }
+    }
+
+    const credentialMatch = path.match(
+      /^\/api\/admin\/providers\/([^/]+)\/credentials$/
+    );
+    if (request.method() === 'POST' && credentialMatch) {
+      const provider = providers.find(
+        (item) => item.providerKey === credentialMatch[1]
+      );
+      const credential = {
+        credentialKind: 'api_key',
+        id: `credential_${credentialMatch[1]}`,
+        lastRotatedAt: now,
+        maskedValue: '********3456',
+        rotatedByAdminId: 'admin_smoke',
+      };
+      if (provider) {
+        provider.credential = credential;
+      }
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ credential })),
+        contentType: 'application/json',
+        status: 201,
+      });
+      return;
+    }
+
+    if (request.method() === 'GET' && path === '/api/admin/models') {
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ models })),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (request.method() === 'PATCH' && path.startsWith('/api/admin/models/')) {
+      models[0] = {
+        ...models[0]!,
+        healthStatus: 'degraded',
+        visibility: 'beta',
+      };
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ model: models[0] })),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    if (path === '/api/admin/price-policies') {
+      if (request.method() === 'GET') {
+        await route.fulfill({
+          body: JSON.stringify(s07Envelope({ pricePolicies })),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+      if (request.method() === 'POST') {
+        const body = JSON.parse(request.postData() || '{}') as {
+          amount: number;
+          modelKey: string;
+          operationType: string;
+          policyKey: string;
+          unit: string;
+        };
+        const pricePolicy = {
+          ...body,
+          createdAt: now,
+          id: `price_${pricePolicies.length + 1}`,
+          status: 'active',
+          version: pricePolicies.length + 1,
+        };
+        pricePolicies.unshift(pricePolicy);
+        await route.fulfill({
+          body: JSON.stringify(s07Envelope({ pricePolicy })),
+          contentType: 'application/json',
+          status: 201,
+        });
+        return;
+      }
+    }
+
+    if (request.method() === 'GET' && path === '/api/admin/audit-logs') {
+      await route.fulfill({
+        body: JSON.stringify(s07Envelope({ auditLogs })),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
+    await route.fallback();
+  });
+}
+
 test.describe('@smoke 核心功能验证', () => {
   /**
    * 测试1：主画布所有组件和交互
@@ -385,5 +756,57 @@ test.describe('@smoke 核心功能验证', () => {
     expect(result.assetVariantUrl).toContain('/api/assets/asset_smoke_s07');
     expect(s07Mocks.createdCount()).toBe(1);
     expect(s07Mocks.insertedCount()).toBe(1);
+  });
+
+  test('/admin：权限拒绝和供应商配置 happy path', async ({ page }) => {
+    await installS09AdminApiMocks(page, 'user');
+    await page.goto('/?sw=0');
+    await expect(page.getByRole('heading', { name: '梦图' })).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
+    await page.evaluate(() => {
+      window.history.pushState({ route: 'admin' }, '', '/admin?sw=0');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await expect(page.getByRole('heading', { name: '无后台权限' })).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
+
+    await page.unroute('**/api/**');
+    await installS09AdminApiMocks(page, 'admin');
+    await page.goto('/?sw=0');
+    await page.getByRole('button', { name: '后台' }).click();
+    await expect(page.getByRole('heading', { name: '运营控制台' })).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
+
+    await page.getByRole('button', { name: '供应商' }).click();
+    await expect(
+      page.getByRole('cell', { name: 'mock', exact: true })
+    ).toBeVisible();
+    await page.getByLabel('Provider Key').fill('smoke-provider');
+    await page.getByLabel('显示名').fill('Smoke Provider');
+    await page.getByRole('button', { name: '新增供应商' }).click();
+    await expect(
+      page.getByRole('cell', { name: 'smoke-provider', exact: true })
+    ).toBeVisible();
+
+    await page.getByLabel('Secret').fill('sk-smoke-secret-123456');
+    await page.getByRole('button', { name: '轮换凭据' }).click();
+    await expect(
+      page.getByRole('cell', { name: '********3456', exact: true })
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: '模型' }).click();
+    await page.getByRole('button', { name: '更新模型' }).click();
+    await expect(
+      page.getByRole('cell', { name: 'degraded', exact: true })
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: '价格' }).click();
+    await page.getByRole('button', { name: '新价格版本' }).click();
+    await expect(
+      page.getByRole('cell', { name: '2', exact: true }).first()
+    ).toBeVisible();
   });
 });

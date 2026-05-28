@@ -191,6 +191,12 @@ export interface AssetRepository {
     projectId?: string;
     tenantId: string;
   }): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>>;
+  listAdminAssets(input: {
+    includeDeleted?: boolean;
+    ownerUserId?: string;
+    projectId?: string;
+    tenantId: string;
+  }): Promise<Array<{ asset: Asset; variants: AssetVariant[] }>>;
   listAssetsByTask(
     tenantId: string,
     taskId: string

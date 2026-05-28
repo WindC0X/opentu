@@ -23,6 +23,7 @@ import type {
   ImageTaskQuote,
   ImageTaskReferenceAssetInput,
   ImageTaskRepository,
+  ImageTaskStatus,
   ImageTaskView,
 } from './types';
 
@@ -162,6 +163,52 @@ export class ImageTaskService {
     return {
       tasks: await Promise.all(tasks.map((task) => this.toTaskView(task))),
     };
+  }
+
+  async listAdminTasks(
+    auth: AuthenticatedSession,
+    input: { status?: ImageTaskStatus } = {}
+  ): Promise<{ tasks: ImageTaskView[] }> {
+    this.requireAdmin(auth);
+    const tasks = await this.repository.listAdminTasks({
+      status: input.status,
+      tenantId: this.tenantId,
+    });
+    return {
+      tasks: await Promise.all(tasks.map((task) => this.toTaskView(task))),
+    };
+  }
+
+  async adminCancelTask(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<{ task: ImageTaskView }> {
+    this.requireAdmin(auth);
+    const task = await this.requireVisibleTask(auth, taskId);
+    if (task.ownerUserId !== auth.user.id) {
+      throw new AppError(
+        'FORBIDDEN',
+        403,
+        '跨用户取消任务需要单独确认点数释放语义'
+      );
+    }
+    return this.cancelTask(auth, taskId);
+  }
+
+  async adminRetryTask(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<{ task: ImageTaskView }> {
+    this.requireAdmin(auth);
+    const task = await this.requireVisibleTask(auth, taskId);
+    if (task.ownerUserId !== auth.user.id) {
+      throw new AppError(
+        'FORBIDDEN',
+        403,
+        '跨用户重试任务需要单独确认点数冻结语义'
+      );
+    }
+    return this.retryTask(auth, taskId);
   }
 
   async cancelTask(
@@ -461,6 +508,12 @@ export class ImageTaskService {
       throw new AppError('IMAGE_TASK_NOT_FOUND', 404, '任务不存在');
     }
     return task;
+  }
+
+  private requireAdmin(auth: AuthenticatedSession): void {
+    if (auth.user.role !== 'admin') {
+      throw new AppError('FORBIDDEN', 403, 'Forbidden');
+    }
   }
 
   private quoteFromTask(task: ImageTask): ImageTaskQuote {

@@ -571,6 +571,36 @@ export const mtProviderConfigs = pgTable(
   })
 );
 
+export const mtProviderCredentials = pgTable(
+  'mt_provider_credentials',
+  {
+    createdAt: createdAt(),
+    credentialKind: varchar('credential_kind', { length: 80 })
+      .notNull()
+      .default('api_key'),
+    id: uuid('id').primaryKey().defaultRandom(),
+    lastRotatedAt: timestamp('last_rotated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    maskedValue: varchar('masked_value', { length: 160 }).notNull(),
+    providerConfigId: uuid('provider_config_id')
+      .notNull()
+      .references(() => mtProviderConfigs.id),
+    rotatedByAdminId: uuid('rotated_by_admin_id')
+      .notNull()
+      .references(() => mtUsers.id),
+    secretHash: varchar('secret_hash', { length: 128 }).notNull(),
+    secretLastFour: varchar('secret_last_four', { length: 4 }).notNull(),
+    tenantId: tenantId(),
+    updatedAt: updatedAt(),
+  },
+  (table) => ({
+    credentialProviderIdx: uniqueIndex(
+      'mt_provider_credentials_provider_kind_uidx'
+    ).on(table.tenantId, table.providerConfigId, table.credentialKind),
+  })
+);
+
 export const mtModelConfigs = pgTable(
   'mt_model_configs',
   {

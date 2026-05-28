@@ -2,6 +2,16 @@ import { randomUUID } from 'crypto';
 
 import { Hono, type Context, type Next } from 'hono';
 
+import { AdminService } from './admin/service';
+import type {
+  AdminImageTaskOperationType,
+  ModelHealthStatus,
+  ModelSupportLevel,
+  ModelVisibility,
+  PricePolicyStatus,
+  PricePolicyUnit,
+  ProviderStatus,
+} from './admin/types';
 import { AssetService } from './assets/service';
 import type { AssetVariantType } from './assets/types';
 import { AuthService } from './auth/service';
@@ -18,10 +28,12 @@ import type {
   CreateImageTaskInput,
   ImageTaskOperationType,
   ImageTaskReferenceAssetInput,
+  ImageTaskStatus,
 } from './image-tasks/types';
 import { ProjectService } from './projects/service';
 
 export interface AppDependencies {
+  adminService?: AdminService;
   assetService: AssetService;
   authService: AuthService;
   imageTaskService: ImageTaskService;
@@ -471,6 +483,218 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
     }
   );
 
+  app.get(
+    '/api/admin/image-tasks',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(
+        c,
+        await dependencies.imageTaskService.listAdminTasks(c.get('auth'), {
+          status: optionalImageTaskStatusQuery(c),
+        })
+      )
+  );
+
+  app.post(
+    '/api/admin/image-tasks/:taskId/cancel',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(
+        c,
+        await dependencies.imageTaskService.adminCancelTask(
+          c.get('auth'),
+          requiredParam(c, 'taskId')
+        )
+      )
+  );
+
+  app.post(
+    '/api/admin/image-tasks/:taskId/retry',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(
+        c,
+        await dependencies.imageTaskService.adminRetryTask(
+          c.get('auth'),
+          requiredParam(c, 'taskId')
+        ),
+        201
+      )
+  );
+
+  app.get(
+    '/api/admin/assets',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(
+        c,
+        await dependencies.assetService.listAdminAssets(c.get('auth'), {
+          includeDeleted: optionalBooleanQuery(c, 'includeDeleted', 'include_deleted'),
+          ownerUserId: c.req.query('ownerUserId') ?? c.req.query('owner_user_id'),
+          projectId: c.req.query('projectId') ?? c.req.query('project_id'),
+        })
+      )
+  );
+
+  app.get(
+    '/api/admin/assets/:assetId/original',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) => {
+      const result = await dependencies.assetService.readVariant(
+        c.get('auth'),
+        requiredParam(c, 'assetId'),
+        'original'
+      );
+      return new Response(result.body, {
+        headers: {
+          'cache-control': 'private, max-age=60',
+          'content-length': String(result.variant.sizeBytes),
+          'content-type': result.variant.mimeType,
+          'x-mengtu-asset-id': result.asset.id,
+          'x-mengtu-variant-type': result.variant.variantType,
+        },
+      });
+    }
+  );
+
+  app.get(
+    '/api/admin/providers',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(c, await requireAdminService(dependencies).listProviders(c.get('auth')))
+  );
+
+  app.post(
+    '/api/admin/providers',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) => {
+      const body = await readJson(c);
+      return ok(
+        c,
+        await requireAdminService(dependencies).createProvider(
+          c.get('auth'),
+          providerCreateBody(body)
+        ),
+        201
+      );
+    }
+  );
+
+  app.patch(
+    '/api/admin/providers/:providerKey',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) => {
+      const body = await readJson(c);
+      return ok(
+        c,
+        await requireAdminService(dependencies).updateProvider(
+          c.get('auth'),
+          requiredParam(c, 'providerKey'),
+          providerPatchBody(body)
+        )
+      );
+    }
+  );
+
+  app.post(
+    '/api/admin/providers/:providerKey/credentials',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) => {
+      const body = await readJson(c);
+      return ok(
+        c,
+        await requireAdminService(dependencies).rotateProviderCredential(
+          c.get('auth'),
+          requiredParam(c, 'providerKey'),
+          {
+            credentialKind: optionalString(body, 'credentialKind'),
+            secret: requiredString(body, 'secret'),
+          }
+        ),
+        201
+      );
+    }
+  );
+
+  app.get(
+    '/api/admin/models',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(c, await requireAdminService(dependencies).listModels(c.get('auth')))
+  );
+
+  app.patch(
+    '/api/admin/models/:modelKey',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) => {
+      const body = await readJson(c);
+      return ok(
+        c,
+        await requireAdminService(dependencies).updateModel(
+          c.get('auth'),
+          requiredParam(c, 'modelKey'),
+          modelPatchBody(body)
+        )
+      );
+    }
+  );
+
+  app.get(
+    '/api/admin/price-policies',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(
+        c,
+        await requireAdminService(dependencies).listPricePolicies(c.get('auth'))
+      )
+  );
+
+  app.post(
+    '/api/admin/price-policies',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) => {
+      const body = await readJson(c);
+      return ok(
+        c,
+        await requireAdminService(dependencies).createPricePolicy(
+          c.get('auth'),
+          pricePolicyCreateBody(body)
+        ),
+        201
+      );
+    }
+  );
+
+  app.get(
+    '/api/admin/audit-logs',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(
+        c,
+        await dependencies.authService.listAuditLogs(c.get('auth'), {
+          action: c.req.query('action'),
+          actorUserId: c.req.query('actorUserId') ?? c.req.query('actor_user_id'),
+          limit: optionalIntegerQuery(c, 'limit'),
+          targetId: c.req.query('targetId') ?? c.req.query('target_id'),
+          targetType: c.req.query('targetType') ?? c.req.query('target_type'),
+        })
+      )
+  );
+
   return app;
 }
 
@@ -491,6 +715,13 @@ function requireAdmin() {
     }
     await next();
   };
+}
+
+function requireAdminService(dependencies: AppDependencies): AdminService {
+  if (!dependencies.adminService) {
+    throw new AppError('NOT_IMPLEMENTED', 501, 'Admin service is not configured');
+  }
+  return dependencies.adminService;
 }
 
 async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown>> {
@@ -568,6 +799,39 @@ function optionalInteger(
   return value as number;
 }
 
+function optionalIntegerQuery(
+  c: Context<AppEnv>,
+  field: string
+): number | undefined {
+  const raw = c.req.query(field);
+  if (raw === undefined || raw === '') {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value)) {
+    throw new AppError('BAD_REQUEST', 400, `${field} must be an integer`);
+  }
+  return value;
+}
+
+function optionalBooleanQuery(
+  c: Context<AppEnv>,
+  camelField: string,
+  snakeField: string
+): boolean | undefined {
+  const raw = c.req.query(camelField) ?? c.req.query(snakeField);
+  if (raw === undefined || raw === '') {
+    return undefined;
+  }
+  if (raw === 'true') {
+    return true;
+  }
+  if (raw === 'false') {
+    return false;
+  }
+  throw new AppError('BAD_REQUEST', 400, `${camelField} must be true or false`);
+}
+
 function queryBatchSize(c: Context<AppEnv>): 1 | 2 | 4 {
   const raw = c.req.query('batch_size') ?? c.req.query('batchSize') ?? '1';
   const value = Number(raw);
@@ -575,6 +839,26 @@ function queryBatchSize(c: Context<AppEnv>): 1 | 2 | 4 {
     return value;
   }
   throw new AppError('BAD_REQUEST', 400, 'batch_size must be 1, 2, or 4');
+}
+
+function optionalImageTaskStatusQuery(
+  c: Context<AppEnv>
+): ImageTaskStatus | undefined {
+  const value = c.req.query('status');
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+  if (
+    value === 'queued' ||
+    value === 'running' ||
+    value === 'persisting' ||
+    value === 'succeeded' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  ) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'status is invalid');
 }
 
 function queryOperationType(c: Context<AppEnv>): ImageTaskOperationType {
@@ -797,6 +1081,175 @@ function optionalUserStatus(
     throw new AppError('BAD_REQUEST', 400, 'status must be active or disabled');
   }
   return value;
+}
+
+function providerCreateBody(body: Record<string, unknown>) {
+  return {
+    dataRegion: optionalNullableString(body, 'dataRegion'),
+    dataRetentionPolicy: optionalNullableString(body, 'dataRetentionPolicy'),
+    dataTrainingUsage: optionalNullableString(body, 'dataTrainingUsage'),
+    displayName: requiredString(body, 'displayName'),
+    isDefault: optionalBoolean(body, 'isDefault'),
+    lastReviewedAt: optionalDate(body, 'lastReviewedAt'),
+    privacyUrl: optionalNullableString(body, 'privacyUrl'),
+    providerKey: requiredString(body, 'providerKey'),
+    reviewNotes: optionalNullableString(body, 'reviewNotes'),
+    status: optionalProviderStatus(body),
+    termsUrl: optionalNullableString(body, 'termsUrl'),
+  };
+}
+
+function providerPatchBody(body: Record<string, unknown>) {
+  return {
+    dataRegion: optionalNullableString(body, 'dataRegion'),
+    dataRetentionPolicy: optionalNullableString(body, 'dataRetentionPolicy'),
+    dataTrainingUsage: optionalNullableString(body, 'dataTrainingUsage'),
+    displayName: optionalString(body, 'displayName'),
+    isDefault: optionalBoolean(body, 'isDefault'),
+    lastReviewedAt: optionalDate(body, 'lastReviewedAt'),
+    privacyUrl: optionalNullableString(body, 'privacyUrl'),
+    reviewNotes: optionalNullableString(body, 'reviewNotes'),
+    status: optionalProviderStatus(body),
+    termsUrl: optionalNullableString(body, 'termsUrl'),
+  };
+}
+
+function modelPatchBody(body: Record<string, unknown>) {
+  return {
+    displayName: optionalString(body, 'displayName'),
+    healthStatus: optionalModelHealthStatus(body),
+    supportLevel: optionalModelSupportLevel(body),
+    visibility: optionalModelVisibility(body),
+  };
+}
+
+function pricePolicyCreateBody(body: Record<string, unknown>) {
+  return {
+    amount: requiredInteger(body, 'amount'),
+    modelKey: optionalNullableString(body, 'modelKey'),
+    operationType: requiredAdminOperationType(body),
+    policyKey: requiredString(body, 'policyKey'),
+    status: optionalPricePolicyStatus(body),
+    unit: requiredPricePolicyUnit(body),
+  };
+}
+
+function optionalNullableString(
+  body: Record<string, unknown>,
+  field: string
+): string | null | undefined {
+  const value = body[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new AppError('BAD_REQUEST', 400, `${field} must be a string`);
+  }
+  return value;
+}
+
+function optionalProviderStatus(
+  body: Record<string, unknown>
+): ProviderStatus | undefined {
+  const value = body.status;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === 'active' || value === 'degraded' || value === 'disabled') {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'status is invalid');
+}
+
+function optionalModelVisibility(
+  body: Record<string, unknown>
+): ModelVisibility | undefined {
+  const value = body.visibility;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (
+    value === 'public' ||
+    value === 'beta' ||
+    value === 'admin_only' ||
+    value === 'disabled'
+  ) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'visibility is invalid');
+}
+
+function optionalModelHealthStatus(
+  body: Record<string, unknown>
+): ModelHealthStatus | undefined {
+  const value = body.healthStatus;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === 'healthy' || value === 'degraded' || value === 'disabled') {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'healthStatus is invalid');
+}
+
+function optionalModelSupportLevel(
+  body: Record<string, unknown>
+): ModelSupportLevel | undefined {
+  const value = body.supportLevel;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (
+    value === 'native' ||
+    value === 'wrapped' ||
+    value === 'experimental' ||
+    value === 'unsupported'
+  ) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'supportLevel is invalid');
+}
+
+function requiredAdminOperationType(
+  body: Record<string, unknown>
+): AdminImageTaskOperationType {
+  const value = body.operationType;
+  if (
+    value === 'text_to_image' ||
+    value === 'image_to_image' ||
+    value === 'inpaint' ||
+    value === 'reference_generate' ||
+    value === 'prompt_optimize'
+  ) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'operationType is invalid');
+}
+
+function requiredPricePolicyUnit(
+  body: Record<string, unknown>
+): PricePolicyUnit {
+  const value = body.unit;
+  if (value === 'per_task' || value === 'per_image' || value === 'fixed') {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'unit is invalid');
+}
+
+function optionalPricePolicyStatus(
+  body: Record<string, unknown>
+): PricePolicyStatus | undefined {
+  const value = body.status;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === 'draft' || value === 'active' || value === 'retired') {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, 'status is invalid');
 }
 
 function optionalBoolean(

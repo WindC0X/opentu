@@ -12,6 +12,7 @@ import {
   LogIn,
   Plus,
   RefreshCw,
+  ShieldCheck,
 } from 'lucide-react';
 
 import {
@@ -28,10 +29,11 @@ import styles from './ProjectHomePage.module.scss';
 type HomeStatus = 'loading' | 'ready' | 'unauthenticated' | 'error';
 
 interface ProjectHomePageProps {
+  onOpenAdmin?: () => void;
   onOpenCanvas: (bootContext: CanvasBootContext) => void;
 }
 
-export function ProjectHomePage({ onOpenCanvas }: ProjectHomePageProps) {
+export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePageProps) {
   const [status, setStatus] = useState<HomeStatus>('loading');
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -153,10 +155,18 @@ export function ProjectHomePage({ onOpenCanvas }: ProjectHomePageProps) {
             {summary?.user.username ?? 'user'} · {summary?.user.role ?? 'user'}
           </span>
         </div>
-        <button className={styles.ghostButton} onClick={() => void load()}>
-          <RefreshCw size={16} />
-          刷新
-        </button>
+        <div className={styles.topbarActions}>
+          {summary?.user.role === 'admin' && onOpenAdmin && (
+            <button className={styles.ghostButton} onClick={onOpenAdmin}>
+              <ShieldCheck size={16} />
+              后台
+            </button>
+          )}
+          <button className={styles.ghostButton} onClick={() => void load()}>
+            <RefreshCw size={16} />
+            刷新
+          </button>
+        </div>
       </header>
 
       <div className={styles.content}>

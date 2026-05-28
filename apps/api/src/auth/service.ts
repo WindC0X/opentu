@@ -7,6 +7,7 @@ import { generateSessionToken, hashSessionToken } from './tokens';
 import {
   AuthenticatedSession,
   AuthRepository,
+  AuditLog,
   DEFAULT_TENANT_ID,
   QuotaAccount,
   QuotaLedgerEntryType,
@@ -452,6 +453,29 @@ export class AuthService {
     return { users: users.map(toUserView) };
   }
 
+  async listAuditLogs(
+    admin: AuthenticatedSession,
+    input: {
+      action?: string;
+      actorUserId?: string;
+      limit?: number;
+      targetId?: string;
+      targetType?: string;
+    } = {}
+  ): Promise<{ auditLogs: AuditLog[] }> {
+    this.requireAdmin(admin);
+    return {
+      auditLogs: await this.repository.listAuditLogs({
+        action: cleanOptionalString(input.action),
+        actorUserId: cleanOptionalString(input.actorUserId),
+        limit: normalizeLimit(input.limit),
+        targetId: cleanOptionalString(input.targetId),
+        targetType: cleanOptionalString(input.targetType),
+        tenantId: this.tenantId,
+      }),
+    };
+  }
+
   private async createSession(user: User): Promise<SessionTokenResult> {
     const token = generateSessionToken();
     const expiresAt = new Date(this.now().getTime() + this.sessionTtlMs);
@@ -567,6 +591,20 @@ function assertRequiredString(value: string, field: string): void {
   if (!value || !value.trim()) {
     throw new AppError('BAD_REQUEST', 400, `${field} is required`);
   }
+}
+
+function cleanOptionalString(value: string | undefined): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeLimit(value: number | undefined): number {
+  if (value === undefined) {
+    return 100;
+  }
+  if (!Number.isInteger(value) || value <= 0 || value > 500) {
+    throw new AppError('BAD_REQUEST', 400, 'limit must be 1..500');
+  }
+  return value;
 }
 
 function assertPositiveInteger(value: number, field: string): void {

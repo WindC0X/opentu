@@ -218,6 +218,29 @@ export class AssetService {
     };
   }
 
+  async listAdminAssets(
+    auth: AuthenticatedSession,
+    input: {
+      includeDeleted?: boolean;
+      ownerUserId?: string;
+      projectId?: string;
+    } = {}
+  ): Promise<{ assets: AssetView[] }> {
+    this.requireAdmin(auth);
+    const records = await this.assetRepository.listAdminAssets({
+      includeDeleted: input.includeDeleted,
+      ownerUserId: cleanOptionalString(input.ownerUserId),
+      projectId: cleanOptionalString(input.projectId),
+      tenantId: this.tenantId,
+    });
+    return {
+      assets: records.map((record) =>
+        toAssetView(record.asset, record.variants)
+      ),
+    };
+  }
+
+
   async createGeneratedAssets(
     auth: AuthenticatedSession,
     inputs: GeneratedAssetInput[]
@@ -592,6 +615,12 @@ export class AssetService {
     }
     return asset;
   }
+
+  private requireAdmin(auth: AuthenticatedSession): void {
+    if (auth.user.role !== 'admin') {
+      throw new AppError('FORBIDDEN', 403, 'Forbidden');
+    }
+  }
 }
 
 export function toAssetView(asset: Asset, variants: AssetVariant[]): AssetView {
@@ -640,4 +669,8 @@ function hasAllowedExtension(fileName: string, mimeType: string): boolean {
     return extension === 'webp';
   }
   return false;
+}
+
+function cleanOptionalString(value: string | undefined): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

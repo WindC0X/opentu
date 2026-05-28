@@ -110,6 +110,19 @@ export class InMemoryImageTaskRepository implements ImageTaskRepository {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async listAdminTasks(input: {
+    status?: ImageTask['status'];
+    tenantId: string;
+  }): Promise<ImageTask[]> {
+    return [...this.tasks.values()]
+      .filter(
+        (task) =>
+          task.tenantId === input.tenantId &&
+          (!input.status || task.status === input.status)
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
   async updateTask(
     taskId: string,
     patch: Parameters<ImageTaskRepository['updateTask']>[1]

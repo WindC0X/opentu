@@ -1,8 +1,9 @@
-import { and, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, or } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 
 import {
   AuditLog,
+  AuditLogFilter,
   AuthRepository,
   CreateAuditLogInput,
   CreateInviteCodeInput,
@@ -297,6 +298,27 @@ export class DrizzleAuthRepository implements AuthRepository {
       )
       .limit(1);
     return row ? mapUser(row) : null;
+  }
+
+  async listAuditLogs(input: AuditLogFilter): Promise<AuditLog[]> {
+    const conditions = [
+      eq(schema.mtAuditLogs.tenantId, input.tenantId),
+      input.actorUserId
+        ? eq(schema.mtAuditLogs.actorUserId, input.actorUserId)
+        : undefined,
+      input.action ? eq(schema.mtAuditLogs.action, input.action) : undefined,
+      input.targetType
+        ? eq(schema.mtAuditLogs.targetType, input.targetType)
+        : undefined,
+      input.targetId ? eq(schema.mtAuditLogs.targetId, input.targetId) : undefined,
+    ].filter(Boolean);
+    const rows = await this.db
+      .select()
+      .from(schema.mtAuditLogs)
+      .where(and(...conditions))
+      .orderBy(desc(schema.mtAuditLogs.createdAt))
+      .limit(input.limit ?? 100);
+    return rows.map(mapAuditLog);
   }
 
   async listUsers(tenantId: string): Promise<User[]> {

@@ -122,6 +122,15 @@ export interface AuditLog {
   createdAt: Date;
 }
 
+export interface AuditLogFilter {
+  action?: string;
+  actorUserId?: string;
+  limit?: number;
+  targetId?: string;
+  targetType?: string;
+  tenantId: string;
+}
+
 export interface UserView {
   id: string;
   email: string;
@@ -266,6 +275,7 @@ export interface AuthRepository {
   ): Promise<RedemptionCode | null>;
   findUserById(tenantId: string, userId: string): Promise<User | null>;
   findUserByLogin(tenantId: string, login: string): Promise<User | null>;
+  listAuditLogs(input: AuditLogFilter): Promise<AuditLog[]>;
   listUsers(tenantId: string): Promise<User[]>;
   revokeSession(sessionId: string, revokedAt: Date): Promise<void>;
   updateInviteCode(
