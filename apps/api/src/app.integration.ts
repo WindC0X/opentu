@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app';
+import type {
+  ModelCapabilityRecord,
+  ModelConfigRecord,
+} from './admin/types';
+import { AppError } from './errors';
+import { StaticProviderCredentialResolver } from './providers/credentials';
+import type {
+  ImageProviderAdapter,
+  ImageProviderExecutionInput,
+  ImageProviderResult,
+} from './providers/types';
 import { createTestAppContext, createUserWithQuota } from './test/helpers';
 
 describe('S03 auth/access API', () => {
@@ -1266,6 +1277,298 @@ describe('S09 admin/provider ops API', () => {
   });
 });
 
+describe('S11 real provider execution API', () => {
+  it('dispatches configured provider execution, persists outputs, settles quota, and sanitizes provider usage', async () => {
+    const secret = 's11-secret-token';
+    const grsaiAdapter = new FakeProviderAdapter('grsai', async (input) => {
+      expect(input.credentialSecret).toBe(secret);
+      expect(input.model.providerModelId).toBe('gpt-image-2-vip');
+      return {
+        failureCount: 0,
+        images: [
+          {
+            body: tinyPng(),
+            candidateIndex: 0,
+            mimeType: 'image/png',
+          },
+        ],
+        latencyMs: 25,
+        providerCostAmount: 1300,
+        providerCostCurrency: 'GRSAI_CREDITS',
+        providerRequestId: 'grsai-req-1',
+        rawErrorCode: null,
+        rawErrorMessage: null,
+        responseSnapshot: {
+          providerStatus: 'succeeded',
+          suspiciousEcho: `Bearer ${secret}`,
+        },
+        status: 'succeeded',
+        successCount: 1,
+      };
+    });
+    const {
+      adminRepository,
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext({
+      credentialResolver: new StaticProviderCredentialResolver({
+        GRSAI_API_KEY: secret,
+      }),
+      providerAdapters: [grsaiAdapter],
+    });
+    seedGrsaiModel(adminRepository);
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's11-success@mengtu.local',
+      password: 'user-password',
+      username: 's11-success',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's11-success@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S11 Provider Project' },
+      login.cookie
+    );
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's11-provider-success',
+        model_key: 'grsai-gpt-image-2-vip',
+        operation_type: 'text_to_image',
+        project_id: project.json.data.project.id,
+        prompt: '真实 provider fake execution',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.task).toMatchObject({
+      actualModelKey: 'grsai-gpt-image-2-vip',
+      actualProvider: 'grsai',
+      assets: [
+        expect.objectContaining({
+          aiGenerated: true,
+          origin: 'generated',
+        }),
+      ],
+      quotedPriceAmount: 10,
+      settledPriceAmount: 10,
+      status: 'succeeded',
+      successCount: 1,
+    });
+    expect(grsaiAdapter.calls).toHaveLength(1);
+    expect(imageTaskRepository.providerUsage.size).toBe(1);
+    const usage = imageTaskRepository.providerUsage.values().next()
+      .value;
+    expect(usage).toMatchObject({
+      providerConfigId: S11_GRS_PROVIDER_ID,
+      providerCostAmount: 1300,
+      providerCostCurrency: 'GRSAI_CREDITS',
+      providerModelId: 'gpt-image-2-vip',
+      requestId: 'grsai-req-1',
+      requestSnapshot: {
+        modelKey: 'grsai-gpt-image-2-vip',
+        providerKey: 'grsai',
+      },
+      status: 'succeeded',
+    });
+    expect(JSON.stringify(usage)).not.toContain(secret);
+    expect(JSON.stringify(usage)).not.toContain('Bearer s11-secret-token');
+    const account = await repository.findQuotaAccountByUserId(
+      '00000000-0000-0000-0000-000000000001',
+      user.id
+    );
+    expect(account).toMatchObject({ balanceAmount: 90, heldAmount: 0 });
+  });
+
+  it('fails safely when provider credentials are missing and releases held quota', async () => {
+    const grsaiAdapter = new FakeProviderAdapter('grsai', async (input) => {
+      if (!input.credentialSecret) {
+        throw new AppError(
+          'PROVIDER_CREDENTIAL_MISSING',
+          500,
+          'Provider credential is not configured'
+        );
+      }
+      throw new Error('unexpected credential');
+    });
+    const {
+      adminRepository,
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext({
+      credentialResolver: new StaticProviderCredentialResolver({}),
+      providerAdapters: [grsaiAdapter],
+    });
+    seedGrsaiModel(adminRepository);
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's11-missing-credential@mengtu.local',
+      password: 'user-password',
+      username: 's11-missing-credential',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's11-missing-credential@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S11 Missing Credential Project' },
+      login.cookie
+    );
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's11-provider-missing-credential',
+        model_key: 'grsai-gpt-image-2-vip',
+        operation_type: 'text_to_image',
+        project_id: project.json.data.project.id,
+        prompt: '缺失 credential 应失败释放点数',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.task).toMatchObject({
+      failureCode: 'PROVIDER_CREDENTIAL_MISSING',
+      status: 'failed',
+    });
+    const usage = imageTaskRepository.providerUsage.values().next()
+      .value;
+    expect(usage).toMatchObject({
+      rawErrorCode: 'PROVIDER_CREDENTIAL_MISSING',
+      status: 'failed',
+    });
+    expect(JSON.stringify(usage)).not.toContain('secret');
+    expect([...repository.quotaLedger.values()]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ amount: 10, entryType: 'hold' }),
+        expect.objectContaining({ amount: 10, entryType: 'release' }),
+      ])
+    );
+    const account = await repository.findQuotaAccountByUserId(
+      '00000000-0000-0000-0000-000000000001',
+      user.id
+    );
+    expect(account).toMatchObject({ balanceAmount: 100, heldAmount: 0 });
+  });
+
+  it('sanitizes provider exception messages before task and usage persistence', async () => {
+    const secret = 's11-exception-token';
+    const grsaiAdapter = new FakeProviderAdapter('grsai', async () => {
+      throw new AppError(
+        'PROVIDER_HTTP_ERROR',
+        502,
+        `upstream rejected credential ${secret}`
+      );
+    });
+    const {
+      adminRepository,
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext({
+      credentialResolver: new StaticProviderCredentialResolver({
+        GRSAI_API_KEY: secret,
+      }),
+      providerAdapters: [grsaiAdapter],
+    });
+    seedGrsaiModel(adminRepository);
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+    const user = await createUserWithQuota(repository, {
+      email: 's11-exception@mengtu.local',
+      password: 'user-password',
+      username: 's11-exception',
+    });
+    await seedQuota(repository, user.id, 100);
+    const login = await post(app, '/api/auth/login', {
+      login: 's11-exception@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S11 Exception Project' },
+      login.cookie
+    );
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's11-provider-exception',
+        model_key: 'grsai-gpt-image-2-vip',
+        operation_type: 'text_to_image',
+        project_id: project.json.data.project.id,
+        prompt: 'provider exception sanitization',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.task).toMatchObject({
+      failureCode: 'PROVIDER_HTTP_ERROR',
+      failureMessage: 'upstream rejected credential [redacted]',
+      status: 'failed',
+    });
+    const usage = imageTaskRepository.providerUsage.values().next()
+      .value;
+    expect(usage.rawErrorMessage).toBe(
+      'upstream rejected credential [redacted]'
+    );
+    expect(JSON.stringify(created.json)).not.toContain(secret);
+    expect(JSON.stringify(usage)).not.toContain(secret);
+  });
+});
+
 async function get(
   app: ReturnType<typeof createApp>,
   path: string,
@@ -1370,6 +1673,109 @@ function tinyPng(): Buffer {
   return Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
     'base64'
+  );
+}
+
+const S11_GRS_PROVIDER_ID = '00000000-0000-0000-0000-00000000f111';
+const S11_GRS_PRICE_POLICY_ID = '00000000-0000-0000-0000-00000000f112';
+const S11_GRS_MODEL_ID = '00000000-0000-0000-0000-00000000f113';
+const S11_TENANT_ID = '00000000-0000-0000-0000-000000000001';
+
+class FakeProviderAdapter implements ImageProviderAdapter {
+  readonly calls: ImageProviderExecutionInput[] = [];
+
+  constructor(
+    readonly providerKey: string,
+    private readonly handler: (
+      input: ImageProviderExecutionInput
+    ) => Promise<ImageProviderResult>
+  ) {}
+
+  async execute(
+    input: ImageProviderExecutionInput
+  ): Promise<ImageProviderResult> {
+    this.calls.push(input);
+    return this.handler(input);
+  }
+}
+
+function seedGrsaiModel(
+  adminRepository: Awaited<ReturnType<typeof createTestAppContext>>['adminRepository']
+): void {
+  const now = new Date('2026-05-29T00:00:00.000Z');
+  const credential = {
+    credentialKind: 'api_key',
+    id: `${S11_GRS_PROVIDER_ID}:api_key`,
+    lastRotatedAt: now,
+    maskedValue: '********oken',
+    rotatedByAdminId: 'admin-user',
+  };
+  adminRepository.credentials.set(credential.id, credential);
+  adminRepository.providers.set(S11_GRS_PROVIDER_ID, {
+    createdAt: now,
+    credential,
+    dataRegion: null,
+    dataRetentionPolicy: null,
+    dataTrainingUsage: null,
+    displayName: 'GrsAI',
+    id: S11_GRS_PROVIDER_ID,
+    isDefault: false,
+    lastReviewedAt: now,
+    privacyUrl: null,
+    providerKey: 'grsai',
+    reviewNotes: null,
+    status: 'active',
+    tenantId: S11_TENANT_ID,
+    termsUrl: null,
+    updatedAt: now,
+  });
+  adminRepository.pricePolicies.set(S11_GRS_PRICE_POLICY_ID, {
+    amount: 10,
+    createdAt: now,
+    id: S11_GRS_PRICE_POLICY_ID,
+    modelKey: 'grsai-gpt-image-2-vip',
+    operationType: 'text_to_image',
+    policyKey: 'grsai_gpt_image_2_vip_text_to_image',
+    status: 'active',
+    tenantId: S11_TENANT_ID,
+    unit: 'per_image',
+    updatedAt: now,
+    version: 1,
+  });
+  const capability: ModelCapabilityRecord = {
+    maxBatchSize: 1,
+    maxReferenceImages: 0,
+    operationType: 'text_to_image',
+    supportLevel: 'native',
+    supported: true,
+    supportedRatios: ['1:1'],
+    supportedSizes: ['1024x1024'],
+    supportsBatch: false,
+    supportsMask: false,
+    supportsSeed: false,
+  };
+  const model: ModelConfigRecord = {
+    capabilities: [capability],
+    createdAt: now,
+    displayName: 'GrsAI GPT Image 2 VIP',
+    fallbackGroupId: null,
+    healthStatus: 'healthy',
+    id: S11_GRS_MODEL_ID,
+    modelFamily: 'gpt-image',
+    modelKey: 'grsai-gpt-image-2-vip',
+    modelVersion: 'gpt-image-2-vip',
+    pricePolicyId: S11_GRS_PRICE_POLICY_ID,
+    providerConfigId: S11_GRS_PROVIDER_ID,
+    providerKey: 'grsai',
+    providerModelId: 'gpt-image-2-vip',
+    tenantId: S11_TENANT_ID,
+    updatedAt: now,
+    visibility: 'public',
+  };
+  adminRepository.models.set(S11_GRS_MODEL_ID, model);
+  adminRepository.capabilities.set(
+    `${model.modelKey}:${capability.operationType}`,
+    capability
   );
 }
 

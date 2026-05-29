@@ -4,6 +4,11 @@ import type {
   ImageModelView,
   ImageTask,
 } from '../image-tasks/types';
+import type {
+  ImageProviderAdapter,
+  ImageProviderExecutionInput,
+  ImageProviderResult,
+} from './types';
 
 export const MOCK_PROVIDER_KEY = 'mock';
 export const MOCK_PROVIDER_CONFIG_ID = '00000000-0000-0000-0000-00000000f001';
@@ -56,7 +61,26 @@ const ONE_PIXEL_PNG = Buffer.from(
   'base64'
 );
 
-export class MockImageProvider {
+export class MockImageProvider implements ImageProviderAdapter {
+  readonly providerKey = MOCK_PROVIDER_KEY;
+
+  async execute(input: ImageProviderExecutionInput): Promise<ImageProviderResult> {
+    const result = await this.generate(input.task, input.input);
+    return {
+      failureCount: result.failureCount,
+      images: result.images,
+      latencyMs: 1,
+      providerCostAmount: 0,
+      providerCostCurrency: 'USD',
+      providerRequestId: result.providerRequestId,
+      rawErrorCode: result.status === 'failed' ? 'MOCK_PROVIDER_FAILED' : null,
+      rawErrorMessage: result.status === 'failed' ? 'Mock provider failed' : null,
+      responseSnapshot: result.usageSnapshot,
+      status: result.status,
+      successCount: result.successCount,
+    };
+  }
+
   async generate(
     task: ImageTask,
     input: CreateImageTaskInput

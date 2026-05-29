@@ -308,6 +308,32 @@ export class AssetService {
     };
   }
 
+  async readProviderInputVariant(
+    assetId: string
+  ): Promise<{ body: Buffer; mimeType: string }> {
+    const asset = await this.assetRepository.findAssetById(
+      this.tenantId,
+      assetId
+    );
+    if (!asset || asset.visibilityStatus === 'deleted') {
+      throw new AppError('ASSET_NOT_FOUND', 404, '资产不存在或不可访问');
+    }
+    const variant = await this.assetRepository.findVariant(
+      this.tenantId,
+      asset.id,
+      'provider_input'
+    );
+    if (!variant) {
+      throw new AppError('ASSET_NOT_FOUND', 404, '资产不存在或不可访问');
+    }
+
+    const object = await this.storage.getObject(variant.storageKey);
+    return {
+      body: object.body,
+      mimeType: variant.mimeType,
+    };
+  }
+
   async updateAsset(
     auth: AuthenticatedSession,
     assetId: string,

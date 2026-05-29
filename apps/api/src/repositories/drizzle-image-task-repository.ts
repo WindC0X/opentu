@@ -11,10 +11,6 @@ import type {
   OutboxEvent,
   ProviderUsage,
 } from '../image-tasks/types';
-import {
-  MOCK_MODEL_VERSION,
-  MOCK_PROVIDER_KEY,
-} from '../providers/mock-provider';
 
 type Db = PostgresJsDatabase<typeof schema>;
 
@@ -30,8 +26,8 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
         finalPrompt: input.input.prompt,
         id: input.id,
         idempotencyKey: input.input.idempotencyKey,
-        modelFamily: 'mock-image',
-        modelVersion: MOCK_MODEL_VERSION,
+        modelFamily: input.model.modelFamily,
+        modelVersion: input.model.modelVersion,
         normalizedParams: {
           maskAssetId: input.input.maskAssetId ?? null,
           ratio: input.input.ratio,
@@ -52,7 +48,7 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
         ratio: input.input.ratio,
         rawProviderParams: {},
         requestedModelKey: input.input.modelKey,
-        requestedProvider: MOCK_PROVIDER_KEY,
+        requestedProvider: input.model.providerKey,
         tenantId: input.auth.user.tenantId,
         userPrompt: input.input.prompt,
       })

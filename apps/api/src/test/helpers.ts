@@ -4,6 +4,13 @@ import { DEFAULT_TENANT_ID, User } from '../auth/types';
 import { AdminService } from '../admin/service';
 import { AssetService } from '../assets/service';
 import { ImageTaskService } from '../image-tasks/service';
+import { AdminImageModelCatalog } from '../providers/model-catalog';
+import { ImageProviderRegistry } from '../providers/registry';
+import type {
+  ImageModelCatalog,
+  ImageProviderAdapter,
+  ProviderCredentialResolver,
+} from '../providers/types';
 import { QuotaService } from '../quota/service';
 import { ProjectService } from '../projects/service';
 import { InMemoryAdminRepository } from '../repositories/in-memory-admin-repository';
@@ -39,7 +46,13 @@ export async function createTestAuthContext() {
 }
 
 export async function createTestAppContext(
-  options: { imageTaskAutoRunWorker?: boolean } = {}
+  options: {
+    credentialResolver?: ProviderCredentialResolver;
+    imageTaskAutoRunWorker?: boolean;
+    modelCatalog?: ImageModelCatalog;
+    providerAdapters?: ImageProviderAdapter[];
+    providerRegistry?: ImageProviderRegistry;
+  } = {}
 ) {
   const auth = await createTestAuthContext();
   const adminRepository = new InMemoryAdminRepository();
@@ -72,7 +85,15 @@ export async function createTestAppContext(
     quotaService,
     {
       autoRunWorker: options.imageTaskAutoRunWorker,
+      credentialResolver: options.credentialResolver,
+      modelCatalog:
+        options.modelCatalog ?? new AdminImageModelCatalog(adminRepository),
       now: () => new Date('2026-05-27T01:00:00.000Z'),
+      providerRegistry:
+        options.providerRegistry ??
+        (options.providerAdapters
+          ? new ImageProviderRegistry(options.providerAdapters)
+          : undefined),
     }
   );
 

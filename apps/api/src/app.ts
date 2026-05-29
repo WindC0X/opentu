@@ -89,7 +89,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   });
 
   app.get('/api/models', requireAuth(dependencies), async (c) => {
-    return ok(c, dependencies.imageTaskService.listModels());
+    return ok(c, await dependencies.imageTaskService.listModels());
   });
 
   app.get('/api/prices/quote', requireAuth(dependencies), async (c) => {

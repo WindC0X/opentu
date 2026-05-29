@@ -1,5 +1,6 @@
 import type { AuthenticatedSession } from '../auth/types';
 import type { AssetReferenceRole, AssetView } from '../assets/types';
+import type { ResolvedImageModel } from '../providers/types';
 
 export type ImageTaskOperationType =
   | 'text_to_image'
@@ -195,6 +196,7 @@ export interface CreateImageTaskRecordInput {
   holdLedgerId: string;
   id: string;
   input: CreateImageTaskInput;
+  model: ResolvedImageModel;
   quote: ImageTaskQuote;
 }
 

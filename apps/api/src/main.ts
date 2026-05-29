@@ -7,6 +7,7 @@ import { createApp } from './app';
 import { loadConfig } from './config';
 import { createDb } from './db/client';
 import { ImageTaskService } from './image-tasks/service';
+import { AdminImageModelCatalog } from './providers/model-catalog';
 import { QuotaService } from './quota/service';
 import { DrizzleAdminRepository } from './repositories/drizzle-admin-repository';
 import { DrizzleAssetRepository } from './repositories/drizzle-asset-repository';
@@ -65,7 +66,10 @@ const app = createApp({
     assetRepository,
     assetService,
     quotaService,
-    { autoRunWorker: config.platformWorkerEnabled }
+    {
+      autoRunWorker: config.platformWorkerEnabled,
+      modelCatalog: new AdminImageModelCatalog(adminRepository),
+    }
   ),
   projectService,
   secureCookies: config.secureCookies,

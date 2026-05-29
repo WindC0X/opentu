@@ -1,20 +1,31 @@
 import { randomUUID } from 'crypto';
 
-import { AssetService, type GeneratedAssetInput } from '../assets/service';
+import {
+  AssetService,
+  type GeneratedAssetInput,
+} from '../assets/service';
 import { toAssetView } from '../assets/service';
 import type { AssetRepository } from '../assets/types';
 import type { AuthenticatedSession } from '../auth/types';
 import { DEFAULT_TENANT_ID } from '../auth/types';
 import { AppError } from '../errors';
 import type { ProjectRepository } from '../projects/types';
-import { MockImageProvider } from '../providers/mock-provider';
 import {
   MOCK_MODEL_KEY,
-  MOCK_MODEL_VERSION,
-  MOCK_PROVIDER_CONFIG_ID,
-  MOCK_PROVIDER_KEY,
-  listMockImageModels,
 } from '../providers/mock-provider';
+import { EnvProviderCredentialResolver } from '../providers/credentials';
+import { MockImageModelCatalog } from '../providers/model-catalog';
+import {
+  ImageProviderRegistry,
+  createDefaultProviderRegistry,
+} from '../providers/registry';
+import type {
+  ImageModelCatalog,
+  ImageProviderResult,
+  ProviderCredentialResolver,
+  ProviderInputImage,
+  ResolvedImageModel,
+} from '../providers/types';
 import { QuotaService } from '../quota/service';
 import type {
   CreateImageTaskInput,
@@ -29,7 +40,10 @@ import type {
 
 interface ImageTaskServiceOptions {
   autoRunWorker?: boolean;
+  credentialResolver?: ProviderCredentialResolver;
+  modelCatalog?: ImageModelCatalog;
   now?: () => Date;
+  providerRegistry?: ImageProviderRegistry;
   tenantId?: string;
 }
 
@@ -46,8 +60,10 @@ interface QuoteImageTaskInput {
 
 export class ImageTaskService {
   private readonly autoRunWorker: boolean;
+  private readonly credentialResolver: ProviderCredentialResolver;
+  private readonly modelCatalog: ImageModelCatalog;
   private readonly now: () => Date;
-  private readonly provider: MockImageProvider;
+  private readonly providerRegistry: ImageProviderRegistry;
   private readonly tenantId: string;
 
   constructor(
@@ -59,13 +75,16 @@ export class ImageTaskService {
     options: ImageTaskServiceOptions = {}
   ) {
     this.autoRunWorker = options.autoRunWorker ?? true;
+    this.credentialResolver =
+      options.credentialResolver ?? new EnvProviderCredentialResolver();
+    this.modelCatalog = options.modelCatalog ?? new MockImageModelCatalog();
     this.now = options.now ?? (() => new Date());
-    this.provider = new MockImageProvider();
+    this.providerRegistry = options.providerRegistry ?? createDefaultProviderRegistry();
     this.tenantId = options.tenantId ?? DEFAULT_TENANT_ID;
   }
 
-  listModels() {
-    return { models: listMockImageModels() };
+  async listModels() {
+    return { models: await this.modelCatalog.listModels() };
   }
 
   async quote(
@@ -81,7 +100,8 @@ export class ImageTaskService {
         normalized
       );
     }
-    return { quote: this.quotaService.quote(normalized) };
+    const { quote } = await this.modelCatalog.quote(normalized);
+    return { quote };
   }
 
   async createTask(
@@ -104,7 +124,7 @@ export class ImageTaskService {
       return { task: await this.toTaskView(existing) };
     }
 
-    const quote = this.quotaService.quote(normalized);
+    const { model, quote } = await this.modelCatalog.quote(normalized);
     const plannedTaskId = randomUUID();
     const hold = await this.quotaService.hold(auth, quote, {
       idempotencyKey: normalized.idempotencyKey,
@@ -118,6 +138,7 @@ export class ImageTaskService {
         ...normalized,
         idempotencyKey: normalized.idempotencyKey,
       },
+      model,
       quote,
     });
 
@@ -135,7 +156,7 @@ export class ImageTaskService {
     });
 
     if (this.autoRunWorker) {
-      await this.runMockWorker(auth, task, normalized, quote);
+      await this.runProviderWorker(auth, task, normalized, quote, model);
     }
 
     const latest = await this.repository.findTaskById(this.tenantId, task.id);
@@ -282,44 +303,45 @@ export class ImageTaskService {
     return { task: await this.toTaskView(updated) };
   }
 
-  private async runMockWorker(
+  private async runProviderWorker(
     auth: AuthenticatedSession,
     task: ImageTask,
     input: CreateImageTaskInput,
-    quote: ImageTaskQuote
+    quote: ImageTaskQuote,
+    model: ResolvedImageModel
   ): Promise<void> {
     await this.repository.updateTask(task.id, {
-      actualModelKey: MOCK_MODEL_KEY,
-      actualProvider: MOCK_PROVIDER_KEY,
+      actualModelKey: model.modelKey,
+      actualProvider: model.providerKey,
       status: 'running',
     });
 
-    const providerResult = await this.provider.generate(task, input);
-    await this.repository.createProviderUsage({
+    const providerResult = await this.executeProvider(task, input, model);
+    const usage = await this.repository.createProviderUsage({
       imageTaskId: task.id,
-      latencyMs: 1,
-      providerConfigId: MOCK_PROVIDER_CONFIG_ID,
-      providerCostAmount: 0,
-      providerCostCurrency: 'USD',
-      providerModelId: MOCK_MODEL_KEY,
-      rawErrorCode:
-        providerResult.status === 'failed' ? 'MOCK_PROVIDER_FAILED' : null,
-      rawErrorMessage:
-        providerResult.status === 'failed' ? 'Mock provider failed' : null,
+      latencyMs: providerResult.latencyMs,
+      providerConfigId: model.providerConfigId,
+      providerCostAmount: providerResult.providerCostAmount,
+      providerCostCurrency: providerResult.providerCostCurrency,
+      providerModelId: model.providerModelId,
+      rawErrorCode: providerResult.rawErrorCode,
+      rawErrorMessage: providerResult.rawErrorMessage,
       requestId: providerResult.providerRequestId,
       requestSnapshot: {
         batchSize: input.batchSize,
         maskAssetId: input.maskAssetId ?? null,
         modelKey: input.modelKey,
         operationType: input.operationType,
+        providerKey: model.providerKey,
         promptLength: input.prompt.length,
         referenceAssetCount: input.referenceAssets?.length ?? 0,
         sourceAssetId: input.sourceAssetId ?? null,
       },
-      responseSnapshot: providerResult.usageSnapshot,
+      responseSnapshot: providerResult.responseSnapshot,
       status: providerResult.status,
       tenantId: this.tenantId,
     });
+    await this.repository.updateTask(task.id, { providerUsageId: usage.id });
 
     if (providerResult.successCount === 0) {
       await this.quotaService.release(auth, quote, {
@@ -329,9 +351,10 @@ export class ImageTaskService {
       });
       await this.repository.updateTask(task.id, {
         canvasSyncStatus: 'not_required',
-        failureCode: 'PROVIDER_UNAVAILABLE',
+        failureCode: providerResult.rawErrorCode ?? 'PROVIDER_UNAVAILABLE',
         failureCount: input.batchSize,
-        failureMessage: 'Mock provider failed',
+        failureMessage:
+          providerResult.rawErrorMessage ?? 'Provider execution failed',
         status: 'failed',
       });
       return;
@@ -361,11 +384,11 @@ export class ImageTaskService {
         candidateIndex: image.candidateIndex,
         jobId: task.id,
         mimeType: image.mimeType,
-        modelKey: MOCK_MODEL_KEY,
-        modelVersion: MOCK_MODEL_VERSION,
+        modelKey: model.modelKey,
+        modelVersion: model.modelVersion,
         maskAssetId: input.maskAssetId ?? null,
         projectId: input.projectId,
-        provider: MOCK_PROVIDER_KEY,
+        provider: model.providerKey,
         referenceAssets: input.referenceAssets ?? [],
         sourceAssetId: input.sourceAssetId ?? null,
         taskId: task.id,
@@ -431,6 +454,86 @@ export class ImageTaskService {
       status: 'succeeded',
       successCount: providerResult.successCount,
     });
+  }
+
+  private async executeProvider(
+    task: ImageTask,
+    input: CreateImageTaskInput,
+    model: ResolvedImageModel
+  ): Promise<ImageProviderResult> {
+    const adapter = this.providerRegistry.require(model.providerKey);
+    let credentialSecret: string | null = null;
+    try {
+      credentialSecret = await this.credentialResolver.resolve({
+        credential: model.credential,
+        model,
+      });
+      const sourceImage = await this.providerInputImage(
+        input.sourceAssetId ?? null,
+        'source'
+      );
+      const maskImage = await this.providerInputImage(
+        input.maskAssetId ?? null,
+        'mask'
+      );
+      const referenceImages = await Promise.all(
+        (input.referenceAssets ?? []).map((reference) =>
+          this.providerInputImage(reference.assetId, reference.role, reference.order)
+        )
+      );
+      const result = await adapter.execute({
+        credentialSecret,
+        input,
+        maskImage,
+        model,
+        referenceImages: referenceImages.filter(
+          (image): image is ProviderInputImage => Boolean(image)
+        ),
+        sourceImage,
+        task,
+      });
+      return sanitizeProviderResult(result, credentialSecret);
+    } catch (error) {
+      const appError = error instanceof AppError ? error : null;
+      const rawErrorMessage = sanitizeProviderText(
+        appError?.message ?? 'Provider execution failed',
+        credentialSecret
+      );
+      return {
+        failureCount: input.batchSize,
+        images: [],
+        latencyMs: null,
+        providerCostAmount: null,
+        providerCostCurrency: null,
+        providerRequestId: null,
+        rawErrorCode: appError?.code ?? 'PROVIDER_UNAVAILABLE',
+        rawErrorMessage,
+        responseSnapshot: {
+          errorCode: appError?.code ?? 'PROVIDER_UNAVAILABLE',
+          message: rawErrorMessage,
+        },
+        status: 'failed',
+        successCount: 0,
+      };
+    }
+  }
+
+  private async providerInputImage(
+    assetId: string | null,
+    role: ProviderInputImage['role'],
+    order = 0
+  ): Promise<ProviderInputImage | null> {
+    if (!assetId) {
+      return null;
+    }
+    const result = await this.assetService.readProviderInputVariant(assetId);
+    return {
+      assetId,
+      body: result.body,
+      mimeType: result.mimeType,
+      order,
+      role,
+    };
   }
 
   private normalizeQuoteInput(input: QuoteImageTaskInput): QuoteImageTaskInput {
@@ -701,4 +804,62 @@ function isReferenceAssetInputLike(
       reference.role === 'composition' ||
       reference.role === 'background')
   );
+}
+
+function sanitizeProviderResult(
+  result: ImageProviderResult,
+  credentialSecret: string | null
+): ImageProviderResult {
+  return {
+    ...result,
+    rawErrorMessage: result.rawErrorMessage
+      ? sanitizeProviderText(result.rawErrorMessage, credentialSecret)
+      : null,
+    responseSnapshot: sanitizeProviderSnapshot(
+      result.responseSnapshot,
+      credentialSecret
+    ),
+  };
+}
+
+function sanitizeProviderSnapshot(
+  value: Record<string, unknown>,
+  credentialSecret: string | null
+): Record<string, unknown> {
+  const sanitized = sanitizeProviderValue(value, credentialSecret);
+  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+    ? (sanitized as Record<string, unknown>)
+    : {};
+}
+
+function sanitizeProviderValue(
+  value: unknown,
+  credentialSecret: string | null
+): unknown {
+  if (typeof value === 'string') {
+    return sanitizeProviderText(value, credentialSecret);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeProviderValue(item, credentialSecret));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        sanitizeProviderValue(item, credentialSecret),
+      ])
+    );
+  }
+  return value;
+}
+
+function sanitizeProviderText(
+  value: string,
+  credentialSecret: string | null = null
+): string {
+  let sanitized = value.replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]');
+  if (credentialSecret) {
+    sanitized = sanitized.split(credentialSecret).join('[redacted]');
+  }
+  return sanitized.slice(0, 500);
 }
