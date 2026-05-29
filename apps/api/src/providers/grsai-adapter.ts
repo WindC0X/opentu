@@ -8,6 +8,7 @@ import type {
 
 export interface GrsaiAdapterOptions {
   baseUrl?: string;
+  deferTerminalStatusUntilTimeout?: boolean;
   fetchImpl?: typeof fetch;
   pollIntervalMs?: number;
   timeoutMs?: number;
@@ -38,7 +39,7 @@ interface GrsaiResult {
   id?: string;
   message?: string;
   output?: unknown;
-  status?: GrsaiStatus;
+  status?: string;
   url?: string;
   urls?: string[];
 }
@@ -49,12 +50,15 @@ export class GrsaiImageProviderAdapter implements ImageProviderAdapter {
   readonly providerKey = 'grsai';
   readonly requiresCredential = true;
   private readonly baseUrl: string;
+  private readonly deferTerminalStatusUntilTimeout: boolean;
   private readonly fetchImpl: typeof fetch;
   private readonly pollIntervalMs: number;
   private readonly timeoutMs: number;
 
   constructor(options: GrsaiAdapterOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    this.deferTerminalStatusUntilTimeout =
+      options.deferTerminalStatusUntilTimeout ?? false;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.pollIntervalMs = options.pollIntervalMs ?? 1000;
     this.timeoutMs = options.timeoutMs ?? 120000;
@@ -182,6 +186,7 @@ export class GrsaiImageProviderAdapter implements ImageProviderAdapter {
     requestId: string,
     startedAt: number
   ): Promise<GrsaiResult> {
+    let lastDeferredResult: GrsaiResult | null = null;
     while (Date.now() - startedAt <= this.timeoutMs) {
       const response = await this.fetchImpl(
         `${this.baseUrl}/v1/api/result?id=${encodeURIComponent(requestId)}`,
@@ -194,12 +199,29 @@ export class GrsaiImageProviderAdapter implements ImageProviderAdapter {
       if (!response.ok) {
         throw providerHttpError(response.status, json);
       }
+      if (
+        json.status === 'succeeded' &&
+        this.deferTerminalStatusUntilTimeout &&
+        extractResultUrls(json).length === 0
+      ) {
+        lastDeferredResult = json;
+        await sleep(this.pollIntervalMs);
+        continue;
+      }
       if (json.status !== 'running') {
+        if (
+          this.deferTerminalStatusUntilTimeout &&
+          json.status !== 'succeeded'
+        ) {
+          lastDeferredResult = json;
+          await sleep(this.pollIntervalMs);
+          continue;
+        }
         return json;
       }
       await sleep(this.pollIntervalMs);
     }
-    return { id: requestId, status: 'running' };
+    return lastDeferredResult ?? { id: requestId, status: 'running' };
   }
 }
 

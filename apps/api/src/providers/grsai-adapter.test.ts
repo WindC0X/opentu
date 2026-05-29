@@ -99,6 +99,101 @@ describe('GrsaiImageProviderAdapter', () => {
       'secret-token'
     );
   });
+
+  it('can defer a transient provider terminal status until success', async () => {
+    let resultPolls = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/v1/api/generate')) {
+        return jsonResponse({ id: 'grsai-task-3', status: 'running' });
+      }
+      if (url.includes('/v1/api/result')) {
+        resultPolls += 1;
+        if (resultPolls === 1) {
+          return jsonResponse({
+            error: { message: 'temporary provider state' },
+            status: 'violation',
+          });
+        }
+        return jsonResponse({
+          status: 'succeeded',
+          urls: ['https://cdn.example.test/generated.png'],
+        });
+      }
+      if (url === 'https://cdn.example.test/generated.png') {
+        return new Response(tinyPng(), {
+          headers: { 'content-type': 'image/png' },
+          status: 200,
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+    const adapter = new GrsaiImageProviderAdapter({
+      baseUrl: 'https://fake-grsai.example',
+      deferTerminalStatusUntilTimeout: true,
+      fetchImpl,
+      pollIntervalMs: 0,
+      timeoutMs: 1000,
+    });
+
+    const result = await adapter.execute(
+      createExecutionInput({ credentialSecret: 'secret-token' })
+    );
+
+    expect(result).toMatchObject({
+      failureCount: 0,
+      providerRequestId: 'grsai-task-3',
+      status: 'succeeded',
+      successCount: 1,
+    });
+    expect(resultPolls).toBe(2);
+  });
+
+  it('can defer succeeded results until an image URL is available', async () => {
+    let resultPolls = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/v1/api/generate')) {
+        return jsonResponse({ id: 'grsai-task-4', status: 'running' });
+      }
+      if (url.includes('/v1/api/result')) {
+        resultPolls += 1;
+        if (resultPolls === 1) {
+          return jsonResponse({ status: 'succeeded' });
+        }
+        return jsonResponse({
+          status: 'succeeded',
+          urls: ['https://cdn.example.test/generated.png'],
+        });
+      }
+      if (url === 'https://cdn.example.test/generated.png') {
+        return new Response(tinyPng(), {
+          headers: { 'content-type': 'image/png' },
+          status: 200,
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+    const adapter = new GrsaiImageProviderAdapter({
+      baseUrl: 'https://fake-grsai.example',
+      deferTerminalStatusUntilTimeout: true,
+      fetchImpl,
+      pollIntervalMs: 0,
+      timeoutMs: 1000,
+    });
+
+    const result = await adapter.execute(
+      createExecutionInput({ credentialSecret: 'secret-token' })
+    );
+
+    expect(result).toMatchObject({
+      failureCount: 0,
+      providerRequestId: 'grsai-task-4',
+      status: 'succeeded',
+      successCount: 1,
+    });
+    expect(resultPolls).toBe(2);
+  });
 });
 
 function createExecutionInput(input: {

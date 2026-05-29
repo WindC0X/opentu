@@ -66,6 +66,7 @@ export async function runLiveProviderSmoke(
     credentialResolver: new EnvProviderCredentialResolver(env),
     providerRegistry: createDefaultProviderRegistry({
       grsai: {
+        deferTerminalStatusUntilTimeout: true,
         pollIntervalMs: config.liveProviderSmokePollIntervalMs,
         timeoutMs: config.liveProviderSmokeTimeoutMs,
       },

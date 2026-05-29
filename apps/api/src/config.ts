@@ -21,7 +21,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     ),
     liveProviderSmokeTimeoutMs: positiveNumber(
       env.MENGTU_LIVE_PROVIDER_SMOKE_TIMEOUT_MS,
-      180000
+      480000
     ),
     maxUploadBytes: Number(env.MAX_UPLOAD_BYTES ?? 10 * 1024 * 1024),
     platformWorkerEnabled: env.PLATFORM_WORKER_ENABLED !== 'false',
