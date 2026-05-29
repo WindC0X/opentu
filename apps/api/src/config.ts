@@ -17,11 +17,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     liveProviderSmokeEnabled: env.MENGTU_LIVE_PROVIDER_SMOKE === '1',
     liveProviderSmokePollIntervalMs: positiveNumber(
       env.MENGTU_LIVE_PROVIDER_SMOKE_POLL_INTERVAL_MS,
-      1000
+      5000
     ),
     liveProviderSmokeTimeoutMs: positiveNumber(
       env.MENGTU_LIVE_PROVIDER_SMOKE_TIMEOUT_MS,
-      120000
+      180000
     ),
     maxUploadBytes: Number(env.MAX_UPLOAD_BYTES ?? 10 * 1024 * 1024),
     platformWorkerEnabled: env.PLATFORM_WORKER_ENABLED !== 'false',
