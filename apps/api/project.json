@@ -25,6 +25,13 @@
         "command": "vitest run --config vitest.integration.config.ts",
         "cwd": "apps/api"
       }
+    },
+    "live-smoke": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vitest run --config src/test/vitest.live-smoke.config.ts",
+        "cwd": "apps/api"
+      }
     }
   }
 }

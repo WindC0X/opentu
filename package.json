@@ -37,6 +37,7 @@
     "test": "nx run-many -t=test",
     "e2e": "nx e2e web-e2e",
     "e2e:smoke": "nx e2e web-e2e -- --project=smoke",
+    "api:live-smoke": "nx run api:live-smoke",
     "e2e:visual": "nx e2e web-e2e -- --project=visual",
     "e2e:visual:update": "nx e2e web-e2e -- --project=visual --update-snapshots",
     "e2e:visual:report": "npx playwright show-report apps/web-e2e/playwright-report",
