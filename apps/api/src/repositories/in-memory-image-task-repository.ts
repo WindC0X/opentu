@@ -155,6 +155,14 @@ export class InMemoryImageTaskRepository implements ImageTaskRepository {
     return usage;
   }
 
+  async findProviderUsageById(
+    tenantId: string,
+    usageId: string
+  ): Promise<ProviderUsage | null> {
+    const usage = this.providerUsage.get(usageId);
+    return usage?.tenantId === tenantId ? usage : null;
+  }
+
   async createCanvasSyncRecord(input: {
     assetIds: string[];
     imageTaskId: string;

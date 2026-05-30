@@ -194,6 +194,52 @@ describe('GrsaiImageProviderAdapter', () => {
     });
     expect(resultPolls).toBe(2);
   });
+
+  it('recovers a late async result without starting a new generation', async () => {
+    const calls: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith('/v1/api/generate')) {
+        throw new Error('late recovery must not create a new provider request');
+      }
+      if (url.includes('/v1/api/result')) {
+        return jsonResponse({
+          status: 'succeeded',
+          urls: ['https://cdn.example.test/late.png'],
+        });
+      }
+      if (url === 'https://cdn.example.test/late.png') {
+        return new Response(tinyPng(), {
+          headers: { 'content-type': 'image/png' },
+          status: 200,
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+    const adapter = new GrsaiImageProviderAdapter({
+      baseUrl: 'https://fake-grsai.example',
+      fetchImpl,
+      pollIntervalMs: 0,
+      timeoutMs: 1000,
+    });
+
+    const result = await adapter.recoverLateResult({
+      ...createExecutionInput({ credentialSecret: 'secret-token' }),
+      providerRequestId: 'existing-grsai-task',
+    });
+
+    expect(result).toMatchObject({
+      failureCount: 0,
+      providerRequestId: 'existing-grsai-task',
+      status: 'succeeded',
+      successCount: 1,
+    });
+    expect(calls).toEqual([
+      'https://fake-grsai.example/v1/api/result?id=existing-grsai-task',
+      'https://cdn.example.test/late.png',
+    ]);
+  });
 });
 
 function createExecutionInput(input: {

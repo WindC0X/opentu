@@ -2,6 +2,7 @@ import { AppError } from '../errors';
 import type {
   ImageProviderAdapter,
   ImageProviderExecutionInput,
+  ImageProviderLateResultInput,
   ImageProviderResult,
   ProviderInputImage,
 } from './types';
@@ -88,7 +89,41 @@ export class GrsaiImageProviderAdapter implements ImageProviderAdapter {
       });
     }
 
-    const result = await this.pollResult(input.credentialSecret, requestId, startedAt);
+    return this.resultFromRequest(
+      input.credentialSecret,
+      requestId,
+      startedAt,
+      input
+    );
+  }
+
+  async recoverLateResult(
+    input: ImageProviderLateResultInput
+  ): Promise<ImageProviderResult> {
+    if (!input.credentialSecret) {
+      throw new AppError(
+        'PROVIDER_CREDENTIAL_MISSING',
+        500,
+        'Provider credential is not configured'
+      );
+    }
+
+    const startedAt = Date.now();
+    return this.resultFromRequest(
+      input.credentialSecret,
+      input.providerRequestId,
+      startedAt,
+      input
+    );
+  }
+
+  private async resultFromRequest(
+    secret: string,
+    requestId: string,
+    startedAt: number,
+    input: ImageProviderExecutionInput
+  ): Promise<ImageProviderResult> {
+    const result = await this.pollResult(secret, requestId, startedAt);
     if (result.status !== 'succeeded') {
       return failedResult({
         code:

@@ -191,6 +191,19 @@ export interface ImageTaskView {
   userPrompt: string;
 }
 
+export type ImageTaskLateReconciliationStatus =
+  | 'recovered'
+  | 'already_succeeded'
+  | 'not_recoverable'
+  | 'blocked_released';
+
+export interface ImageTaskLateReconciliationResult {
+  providerRequestId: string | null;
+  reason: string | null;
+  status: ImageTaskLateReconciliationStatus;
+  task: ImageTaskView;
+}
+
 export interface CreateImageTaskRecordInput {
   auth: AuthenticatedSession;
   holdLedgerId: string;
@@ -220,6 +233,10 @@ export interface ImageTaskRepository {
     input: Omit<ProviderUsage, 'createdAt' | 'id'>
   ): Promise<ProviderUsage>;
   createTask(input: CreateImageTaskRecordInput): Promise<ImageTask>;
+  findProviderUsageById(
+    tenantId: string,
+    usageId: string
+  ): Promise<ProviderUsage | null>;
   findTaskById(tenantId: string, taskId: string): Promise<ImageTask | null>;
   findTaskByIdempotencyKey(
     tenantId: string,

@@ -72,6 +72,10 @@ export interface ImageProviderExecutionInput {
   task: ImageTask;
 }
 
+export interface ImageProviderLateResultInput extends ImageProviderExecutionInput {
+  providerRequestId: string;
+}
+
 export interface ImageProviderResult {
   failureCount: number;
   images: Array<{
@@ -94,4 +98,7 @@ export interface ImageProviderAdapter {
   providerKey: string;
   requiresCredential?: boolean;
   execute(input: ImageProviderExecutionInput): Promise<ImageProviderResult>;
+  recoverLateResult?(
+    input: ImageProviderLateResultInput
+  ): Promise<ImageProviderResult>;
 }

@@ -30,6 +30,7 @@ import { QuotaService } from '../quota/service';
 import type {
   CreateImageTaskInput,
   ImageTask,
+  ImageTaskLateReconciliationResult,
   ImageTaskOperationType,
   ImageTaskQuote,
   ImageTaskReferenceAssetInput,
@@ -284,6 +285,112 @@ export class ImageTaskService {
     });
   }
 
+  async reconcileLateProviderResult(
+    auth: AuthenticatedSession,
+    taskId: string
+  ): Promise<ImageTaskLateReconciliationResult> {
+    const task = await this.requireVisibleTask(auth, taskId);
+    if (task.status === 'succeeded') {
+      return this.lateReconciliationResult(
+        'already_succeeded',
+        task,
+        null,
+        null
+      );
+    }
+
+    const usage = task.providerUsageId
+      ? await this.repository.findProviderUsageById(
+          this.tenantId,
+          task.providerUsageId
+        )
+      : null;
+    const providerRequestId = usage?.requestId ?? null;
+    if (!providerRequestId) {
+      return this.lateReconciliationResult(
+        'not_recoverable',
+        task,
+        null,
+        'missing_provider_request_id'
+      );
+    }
+
+    if (task.status === 'failed' || task.status === 'cancelled') {
+      return this.lateReconciliationResult(
+        'blocked_released',
+        task,
+        providerRequestId,
+        'task_already_finalized_without_held_quota'
+      );
+    }
+
+    const input = this.inputFromTask(task);
+    const { model, quote } = await this.modelCatalog.quote(input);
+    const adapter = this.providerRegistry.require(model.providerKey);
+    if (!adapter.recoverLateResult) {
+      return this.lateReconciliationResult(
+        'not_recoverable',
+        task,
+        providerRequestId,
+        'provider_late_recovery_unsupported'
+      );
+    }
+
+    const providerResult = await this.recoverProviderLateResult(
+      task,
+      input,
+      model,
+      providerRequestId
+    );
+    if (providerResult.successCount === 0) {
+      return this.lateReconciliationResult(
+        'not_recoverable',
+        task,
+        providerRequestId,
+        providerResult.rawErrorCode ?? providerResult.status
+      );
+    }
+
+    const successAmount =
+      (quote.amount / input.batchSize) * providerResult.successCount;
+    const canConsumeHeldQuota = await this.quotaService.canConsumeHeldAmount(
+      auth,
+      successAmount
+    );
+    if (!canConsumeHeldQuota) {
+      return this.lateReconciliationResult(
+        'blocked_released',
+        task,
+        providerRequestId,
+        'insufficient_held_quota'
+      );
+    }
+
+    const recoveredUsage = await this.createProviderUsage(
+      task,
+      input,
+      model,
+      providerResult
+    );
+    await this.repository.updateTask(task.id, {
+      providerUsageId: recoveredUsage.id,
+    });
+    const updated = await this.persistSuccessfulProviderResult(
+      auth,
+      task,
+      input,
+      quote,
+      model,
+      providerResult
+    );
+    return this.lateReconciliationResult(
+      'recovered',
+      updated,
+      providerRequestId,
+      null
+    );
+  }
+
   async insertToCanvas(
     auth: AuthenticatedSession,
     taskId: string
@@ -317,7 +424,43 @@ export class ImageTaskService {
     });
 
     const providerResult = await this.executeProvider(task, input, model);
-    const usage = await this.repository.createProviderUsage({
+    const usage = await this.createProviderUsage(task, input, model, providerResult);
+    await this.repository.updateTask(task.id, { providerUsageId: usage.id });
+
+    if (providerResult.successCount === 0) {
+      await this.quotaService.release(auth, quote, {
+        amount: quote.amount,
+        idempotencyKey: `provider_fail:${task.id}`,
+        taskId: task.id,
+      });
+      await this.repository.updateTask(task.id, {
+        canvasSyncStatus: 'not_required',
+        failureCode: providerResult.rawErrorCode ?? 'PROVIDER_UNAVAILABLE',
+        failureCount: input.batchSize,
+        failureMessage:
+          providerResult.rawErrorMessage ?? 'Provider execution failed',
+        status: 'failed',
+      });
+      return;
+    }
+
+    await this.persistSuccessfulProviderResult(
+      auth,
+      task,
+      input,
+      quote,
+      model,
+      providerResult
+    );
+  }
+
+  private async createProviderUsage(
+    task: ImageTask,
+    input: CreateImageTaskInput,
+    model: ResolvedImageModel,
+    providerResult: ImageProviderResult
+  ) {
+    return this.repository.createProviderUsage({
       imageTaskId: task.id,
       latencyMs: providerResult.latencyMs,
       providerConfigId: model.providerConfigId,
@@ -341,25 +484,16 @@ export class ImageTaskService {
       status: providerResult.status,
       tenantId: this.tenantId,
     });
-    await this.repository.updateTask(task.id, { providerUsageId: usage.id });
+  }
 
-    if (providerResult.successCount === 0) {
-      await this.quotaService.release(auth, quote, {
-        amount: quote.amount,
-        idempotencyKey: `provider_fail:${task.id}`,
-        taskId: task.id,
-      });
-      await this.repository.updateTask(task.id, {
-        canvasSyncStatus: 'not_required',
-        failureCode: providerResult.rawErrorCode ?? 'PROVIDER_UNAVAILABLE',
-        failureCount: input.batchSize,
-        failureMessage:
-          providerResult.rawErrorMessage ?? 'Provider execution failed',
-        status: 'failed',
-      });
-      return;
-    }
-
+  private async persistSuccessfulProviderResult(
+    auth: AuthenticatedSession,
+    task: ImageTask,
+    input: CreateImageTaskInput,
+    quote: ImageTaskQuote,
+    model: ResolvedImageModel,
+    providerResult: ImageProviderResult
+  ): Promise<ImageTask> {
     await this.repository.updateTask(task.id, { status: 'persisting' });
 
     if (input.prompt.includes('__mock_persist_fail__')) {
@@ -368,14 +502,13 @@ export class ImageTaskService {
         idempotencyKey: `persist_fail:${task.id}`,
         taskId: task.id,
       });
-      await this.repository.updateTask(task.id, {
+      return this.repository.updateTask(task.id, {
         canvasSyncStatus: 'not_required',
         failureCode: 'ASSET_PERSIST_FAILED',
         failureCount: input.batchSize,
         failureMessage: 'Mock asset persistence failure',
         status: 'failed',
       });
-      return;
     }
 
     const generatedInputs: GeneratedAssetInput[] = providerResult.images.map(
@@ -446,7 +579,7 @@ export class ImageTaskService {
       },
       tenantId: this.tenantId,
     });
-    await this.repository.updateTask(task.id, {
+    return this.repository.updateTask(task.id, {
       canvasSyncStatus,
       failureCount: providerResult.failureCount,
       settledAt: this.now(),
@@ -454,6 +587,71 @@ export class ImageTaskService {
       status: 'succeeded',
       successCount: providerResult.successCount,
     });
+  }
+
+  private async recoverProviderLateResult(
+    task: ImageTask,
+    input: CreateImageTaskInput,
+    model: ResolvedImageModel,
+    providerRequestId: string
+  ): Promise<ImageProviderResult> {
+    const adapter = this.providerRegistry.require(model.providerKey);
+    if (!adapter.recoverLateResult) {
+      return failedProviderResult({
+        code: 'PROVIDER_LATE_RECOVERY_UNSUPPORTED',
+        failureCount: input.batchSize,
+        message: 'Provider does not support late result recovery',
+        requestId: providerRequestId,
+        status: 'failed',
+      });
+    }
+
+    let credentialSecret: string | null = null;
+    try {
+      credentialSecret = await this.credentialResolver.resolve({
+        credential: model.credential,
+        model,
+      });
+      const sourceImage = await this.providerInputImage(
+        input.sourceAssetId ?? null,
+        'source'
+      );
+      const maskImage = await this.providerInputImage(
+        input.maskAssetId ?? null,
+        'mask'
+      );
+      const referenceImages = await Promise.all(
+        (input.referenceAssets ?? []).map((reference) =>
+          this.providerInputImage(reference.assetId, reference.role, reference.order)
+        )
+      );
+      const result = await adapter.recoverLateResult({
+        credentialSecret,
+        input,
+        maskImage,
+        model,
+        providerRequestId,
+        referenceImages: referenceImages.filter(
+          (image): image is ProviderInputImage => Boolean(image)
+        ),
+        sourceImage,
+        task,
+      });
+      return sanitizeProviderResult(result, credentialSecret);
+    } catch (error) {
+      const appError = error instanceof AppError ? error : null;
+      const rawErrorMessage = sanitizeProviderText(
+        appError?.message ?? 'Provider late result recovery failed',
+        credentialSecret
+      );
+      return failedProviderResult({
+        code: appError?.code ?? 'PROVIDER_LATE_RECOVERY_FAILED',
+        failureCount: input.batchSize,
+        message: rawErrorMessage,
+        requestId: providerRequestId,
+        status: 'failed',
+      });
+    }
   }
 
   private async executeProvider(
@@ -635,6 +833,35 @@ export class ImageTaskService {
     };
   }
 
+  private inputFromTask(task: ImageTask): CreateImageTaskInput {
+    return {
+      batchSize: task.batchSize,
+      idempotencyKey: task.idempotencyKey,
+      maskAssetId: readTaskMaskAssetId(task),
+      modelKey: task.requestedModelKey,
+      operationType: task.operationType,
+      prompt: task.userPrompt,
+      projectId: task.projectId,
+      ratio: task.ratio,
+      referenceAssets: readTaskReferenceAssets(task),
+      sourceAssetId: readTaskSourceAssetId(task),
+    };
+  }
+
+  private async lateReconciliationResult(
+    status: ImageTaskLateReconciliationResult['status'],
+    task: ImageTask,
+    providerRequestId: string | null,
+    reason: string | null
+  ): Promise<ImageTaskLateReconciliationResult> {
+    return {
+      providerRequestId,
+      reason,
+      status,
+      task: await this.toTaskView(task),
+    };
+  }
+
   private async toTaskView(task: ImageTask): Promise<ImageTaskView> {
     const assetRecords = await this.assetRepository.listAssetsByTask(
       this.tenantId,
@@ -804,6 +1031,32 @@ function isReferenceAssetInputLike(
       reference.role === 'composition' ||
       reference.role === 'background')
   );
+}
+
+function failedProviderResult(input: {
+  code: string;
+  failureCount: number;
+  message: string;
+  requestId: string | null;
+  status: 'failed' | 'timeout';
+}): ImageProviderResult {
+  const message = sanitizeProviderText(input.message);
+  return {
+    failureCount: input.failureCount,
+    images: [],
+    latencyMs: null,
+    providerCostAmount: null,
+    providerCostCurrency: null,
+    providerRequestId: input.requestId,
+    rawErrorCode: input.code,
+    rawErrorMessage: message,
+    responseSnapshot: {
+      errorCode: input.code,
+      message,
+    },
+    status: input.status,
+    successCount: 0,
+  };
 }
 
 function sanitizeProviderResult(

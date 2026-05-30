@@ -176,6 +176,23 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
     return mapProviderUsage(requireRow(row, 'Provider usage insert failed'));
   }
 
+  async findProviderUsageById(
+    tenantId: string,
+    usageId: string
+  ): Promise<ProviderUsage | null> {
+    const [row] = await this.db
+      .select()
+      .from(schema.mtProviderUsage)
+      .where(
+        and(
+          eq(schema.mtProviderUsage.tenantId, tenantId),
+          eq(schema.mtProviderUsage.id, usageId)
+        )
+      )
+      .limit(1);
+    return row ? mapProviderUsage(row) : null;
+  }
+
   async createCanvasSyncRecord(input: {
     assetIds: string[];
     imageTaskId: string;

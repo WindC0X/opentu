@@ -92,6 +92,17 @@ export class QuotaService {
     });
   }
 
+  async canConsumeHeldAmount(
+    auth: AuthenticatedSession,
+    amount: number
+  ): Promise<boolean> {
+    if (amount <= 0) {
+      return true;
+    }
+    const account = await this.requireQuotaAccount(auth);
+    return account.heldAmount >= amount;
+  }
+
   private async applyEntry(
     account: QuotaAccount,
     input: {
