@@ -5,6 +5,7 @@
   },
   "include": [
     "drizzle.config.ts",
+    "scripts/**/*.ts",
     "src/**/*.ts",
     "vitest.config.ts",
     "vitest.integration.config.ts"

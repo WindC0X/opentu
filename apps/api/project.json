@@ -26,6 +26,13 @@
         "cwd": "apps/api"
       }
     },
+    "db-backup": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx ts-node --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' scripts/db-backup.ts",
+        "cwd": "apps/api"
+      }
+    },
     "live-smoke": {
       "executor": "nx:run-commands",
       "options": {

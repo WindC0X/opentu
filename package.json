@@ -38,6 +38,7 @@
     "e2e": "nx e2e web-e2e",
     "e2e:smoke": "nx e2e web-e2e -- --project=smoke",
     "api:live-revalidation": "nx run api:live-revalidation",
+    "api:db-backup": "nx run api:db-backup",
     "api:live-smoke": "nx run api:live-smoke",
     "e2e:visual": "nx e2e web-e2e -- --project=visual",
     "e2e:visual:update": "nx e2e web-e2e -- --project=visual --update-snapshots",

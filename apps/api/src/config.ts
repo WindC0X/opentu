@@ -1,6 +1,9 @@
 export interface ApiConfig {
   assetStorageLocalPath: string;
   assetStoragePrefix: string;
+  dbBackupOutputDir: string;
+  dbBackupPgDumpBin: string;
+  dbBackupRetentionDays: number;
   liveProviderRevalidationEnabled: boolean;
   liveProviderRevalidationMode: string | null;
   liveProviderRevalidationPollIntervalMs: number;
@@ -19,6 +22,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   return {
     assetStorageLocalPath: env.ASSET_STORAGE_LOCAL_PATH ?? '.data/assets',
     assetStoragePrefix: env.ASSET_STORAGE_PREFIX ?? 'mengtu',
+    dbBackupOutputDir: env.DB_BACKUP_OUTPUT_DIR ?? '../../.data/backups/db',
+    dbBackupPgDumpBin: env.DB_BACKUP_PGDUMP_BIN ?? 'pg_dump',
+    dbBackupRetentionDays: positiveInteger(env.DB_BACKUP_RETENTION_DAYS, 7),
     liveProviderRevalidationEnabled:
       env.MENGTU_LIVE_PROVIDER_REVALIDATION === '1',
     liveProviderRevalidationMode:
@@ -54,4 +60,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 function positiveNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  return Math.floor(positiveNumber(value, fallback));
 }
