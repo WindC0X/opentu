@@ -13,6 +13,21 @@ export interface ImageMetadata {
 const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
+const PNG_METADATA_CHUNKS = new Set(['eXIf', 'tEXt', 'zTXt', 'iTXt', 'iCCP']);
+const WEBP_METADATA_CHUNKS = new Set(['EXIF', 'XMP ', 'ICCP']);
+const WEBP_VP8X_METADATA_FLAGS = 0x20 | 0x08 | 0x04;
+
+interface WebpChunk {
+  chunkEnd: number;
+  dataLength: number;
+  dataStart: number;
+  offset: number;
+  type: string;
+}
+
+interface WebpChunkReadOptions {
+  requireExactRiffSize?: boolean;
+}
 
 export function inspectImage(buffer: Buffer): ImageMetadata {
   const mimeType = detectMimeType(buffer);
@@ -30,10 +45,16 @@ export function sha256(buffer: Buffer): string {
 }
 
 export function sanitizeImageForProvider(buffer: Buffer, mimeType: string): Buffer {
-  if (mimeType !== 'image/jpeg') {
-    return buffer;
+  switch (mimeType) {
+    case 'image/jpeg':
+      return stripJpegExif(buffer);
+    case 'image/png':
+      return stripPngMetadata(buffer);
+    case 'image/webp':
+      return stripWebpMetadata(buffer);
+    default:
+      return buffer;
   }
-  return stripJpegExif(buffer);
 }
 
 export function detectMimeType(
@@ -105,25 +126,26 @@ function readJpegDimensions(buffer: Buffer): { height: number; width: number } {
 }
 
 function readWebpDimensions(buffer: Buffer): { height: number; width: number } {
-  const chunkType = buffer.toString('ascii', 12, 16);
-  if (chunkType === 'VP8X' && buffer.length >= 30) {
-    return {
-      height: 1 + buffer.readUIntLE(27, 3),
-      width: 1 + buffer.readUIntLE(24, 3),
-    };
-  }
-  if (chunkType === 'VP8 ' && buffer.length >= 30) {
-    return {
-      height: buffer.readUInt16LE(28) & 0x3fff,
-      width: buffer.readUInt16LE(26) & 0x3fff,
-    };
-  }
-  if (chunkType === 'VP8L' && buffer.length >= 25) {
-    const bits = buffer.readUInt32LE(21);
-    return {
-      height: ((bits >> 14) & 0x3fff) + 1,
-      width: (bits & 0x3fff) + 1,
-    };
+  for (const chunk of readWebpChunks(buffer, '无法解析图片尺寸')) {
+    if (chunk.type === 'VP8X' && chunk.dataLength >= 10) {
+      return {
+        height: 1 + buffer.readUIntLE(chunk.dataStart + 7, 3),
+        width: 1 + buffer.readUIntLE(chunk.dataStart + 4, 3),
+      };
+    }
+    if (chunk.type === 'VP8 ' && chunk.dataLength >= 10) {
+      return {
+        height: buffer.readUInt16LE(chunk.dataStart + 8) & 0x3fff,
+        width: buffer.readUInt16LE(chunk.dataStart + 6) & 0x3fff,
+      };
+    }
+    if (chunk.type === 'VP8L' && chunk.dataLength >= 5) {
+      const bits = buffer.readUInt32LE(chunk.dataStart + 1);
+      return {
+        height: ((bits >> 14) & 0x3fff) + 1,
+        width: (bits & 0x3fff) + 1,
+      };
+    }
   }
   throw new AppError('UPLOAD_INVALID_FORMAT', 400, '无法解析图片尺寸');
 }
@@ -165,4 +187,121 @@ function stripJpegExif(buffer: Buffer): Buffer {
   }
 
   return Buffer.concat(chunks);
+}
+
+function stripPngMetadata(buffer: Buffer): Buffer {
+  if (!buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    throw new AppError('UPLOAD_INVALID_FORMAT', 400, '无法解析图片 metadata');
+  }
+
+  const chunks: Buffer[] = [buffer.subarray(0, 8)];
+  let offset = 8;
+  let sawIend = false;
+  while (offset < buffer.length) {
+    if (offset + 12 > buffer.length) {
+      throw new AppError('UPLOAD_INVALID_FORMAT', 400, '无法解析图片 metadata');
+    }
+
+    const dataLength = buffer.readUInt32BE(offset);
+    const chunkEnd = offset + 12 + dataLength;
+    if (chunkEnd > buffer.length) {
+      throw new AppError('UPLOAD_INVALID_FORMAT', 400, '无法解析图片 metadata');
+    }
+
+    const chunkType = buffer.toString('ascii', offset + 4, offset + 8);
+    if (!PNG_METADATA_CHUNKS.has(chunkType)) {
+      chunks.push(buffer.subarray(offset, chunkEnd));
+    }
+    offset = chunkEnd;
+
+    if (chunkType === 'IEND') {
+      sawIend = true;
+      break;
+    }
+  }
+
+  if (!sawIend || offset !== buffer.length) {
+    throw new AppError('UPLOAD_INVALID_FORMAT', 400, '无法解析图片 metadata');
+  }
+
+  return Buffer.concat(chunks);
+}
+
+function stripWebpMetadata(buffer: Buffer): Buffer {
+  const webpChunks = readWebpChunks(buffer, '无法解析图片 metadata', {
+    requireExactRiffSize: true,
+  });
+  const chunks: Buffer[] = [buffer.subarray(8, 12)];
+  for (const chunk of webpChunks) {
+    if (!WEBP_METADATA_CHUNKS.has(chunk.type)) {
+      chunks.push(sanitizeWebpChunk(buffer, chunk));
+    }
+  }
+
+  const body = Buffer.concat(chunks);
+  const header = Buffer.alloc(8);
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(body.byteLength, 4);
+  return Buffer.concat([header, body]);
+}
+
+function readWebpChunks(
+  buffer: Buffer,
+  errorMessage: string,
+  options: WebpChunkReadOptions = {}
+): WebpChunk[] {
+  if (
+    buffer.length < 12 ||
+    buffer.toString('ascii', 0, 4) !== 'RIFF' ||
+    buffer.toString('ascii', 8, 12) !== 'WEBP'
+  ) {
+    throw new AppError('UPLOAD_INVALID_FORMAT', 400, errorMessage);
+  }
+
+  const declaredSize = buffer.readUInt32LE(4);
+  if (
+    declaredSize < 4 ||
+    declaredSize > buffer.length - 8 ||
+    (options.requireExactRiffSize && declaredSize !== buffer.length - 8)
+  ) {
+    throw new AppError('UPLOAD_INVALID_FORMAT', 400, errorMessage);
+  }
+
+  const chunks: WebpChunk[] = [];
+  let offset = 12;
+  const containerEnd = 8 + declaredSize;
+  while (offset < containerEnd) {
+    if (offset + 8 > containerEnd) {
+      throw new AppError('UPLOAD_INVALID_FORMAT', 400, errorMessage);
+    }
+
+    const chunkType = buffer.toString('ascii', offset, offset + 4);
+    const dataLength = buffer.readUInt32LE(offset + 4);
+    const paddedLength = dataLength + (dataLength % 2);
+    const chunkEnd = offset + 8 + paddedLength;
+    if (chunkEnd > containerEnd) {
+      throw new AppError('UPLOAD_INVALID_FORMAT', 400, errorMessage);
+    }
+
+    chunks.push({
+      chunkEnd,
+      dataLength,
+      dataStart: offset + 8,
+      offset,
+      type: chunkType,
+    });
+    offset = chunkEnd;
+  }
+
+  return chunks;
+}
+
+function sanitizeWebpChunk(buffer: Buffer, chunk: WebpChunk): Buffer {
+  if (chunk.type !== 'VP8X') {
+    return buffer.subarray(chunk.offset, chunk.chunkEnd);
+  }
+
+  const sanitized = Buffer.from(buffer.subarray(chunk.offset, chunk.chunkEnd));
+  sanitized[8] = sanitized[8] & ~WEBP_VP8X_METADATA_FLAGS;
+  return sanitized;
 }
