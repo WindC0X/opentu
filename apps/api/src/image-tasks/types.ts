@@ -6,7 +6,8 @@ export type ImageTaskOperationType =
   | 'text_to_image'
   | 'image_to_image'
   | 'inpaint'
-  | 'reference_generate';
+  | 'reference_generate'
+  | 'prompt_optimize';
 export type ImageTaskStatus =
   | 'queued'
   | 'running'
@@ -272,7 +273,11 @@ export interface ImageTaskRepository {
         | 'failureCode'
         | 'failureCount'
         | 'failureMessage'
+        | 'finalPrompt'
+        | 'normalizedParams'
+        | 'optimizedPrompt'
         | 'providerUsageId'
+        | 'rawProviderParams'
         | 'settledAt'
         | 'settledPriceAmount'
         | 'status'

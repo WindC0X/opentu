@@ -96,6 +96,13 @@ export interface PlatformImageTaskPatch {
   updates: Partial<Task>;
 }
 
+export interface PlatformPromptOptimizationResult {
+  optimizedPrompt: string;
+  priceQuote: PlatformImageTaskPriceQuoteMirror;
+  task: PlatformImageTaskView;
+  taskId: string;
+}
+
 export function normalizePlatformImageRatio(size?: string): string {
   if (!size) {
     return DEFAULT_PLATFORM_IMAGE_RATIO;
@@ -198,6 +205,85 @@ export async function createPlatformImageTaskFromLocalTask(
     }
   );
   return result.task;
+}
+
+export async function quotePlatformPromptOptimization(
+  input: {
+    modelKey?: string;
+    projectId?: string;
+    prompt?: string;
+  } = {}
+): Promise<PlatformImageTaskQuote> {
+  const projectId = input.projectId ?? getPlatformImageTaskProjectId();
+  if (!projectId) {
+    throw new Error('缺少平台项目 ID，无法预估提示词优化点数');
+  }
+  const result = await request<{ quote: PlatformImageTaskQuote }>(
+    '/api/image-tasks/quote',
+    {
+      body: JSON.stringify({
+        batchSize: 1,
+        maskAssetId: null,
+        modelKey: input.modelKey || DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
+        operationType: 'prompt_optimize',
+        projectId,
+        ratio: DEFAULT_PLATFORM_IMAGE_RATIO,
+        referenceAssets: [],
+        sourceAssetId: null,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }
+  );
+  return result.quote;
+}
+
+export async function optimizePlatformPrompt(input: {
+  idempotencyKey?: string;
+  modelKey?: string;
+  projectId?: string;
+  prompt: string;
+}): Promise<PlatformPromptOptimizationResult> {
+  const prompt = cleanString(input.prompt);
+  if (!prompt) {
+    throw new Error('请输入要优化的提示词');
+  }
+  const projectId = input.projectId ?? getPlatformImageTaskProjectId();
+  if (!projectId) {
+    throw new Error('缺少平台项目 ID，无法优化提示词');
+  }
+
+  const result = await request<{ task: PlatformImageTaskView }>(
+    '/api/image-tasks',
+    {
+      body: JSON.stringify({
+        batchSize: 1,
+        idempotencyKey:
+          input.idempotencyKey ?? createPromptOptimizationIdempotencyKey(),
+        maskAssetId: null,
+        modelKey: input.modelKey || DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
+        operationType: 'prompt_optimize',
+        prompt,
+        projectId,
+        promptOptimize: false,
+        ratio: DEFAULT_PLATFORM_IMAGE_RATIO,
+        referenceAssets: [],
+        sourceAssetId: null,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }
+  );
+  const task = result.task;
+  if (task.status !== 'succeeded' || !task.optimizedPrompt) {
+    throw new Error(task.failureMessage || '提示词优化失败');
+  }
+  return {
+    optimizedPrompt: task.optimizedPrompt,
+    priceQuote: platformImageTaskToQuoteMirror(task),
+    task,
+    taskId: task.id,
+  };
 }
 
 export async function getPlatformImageTask(
@@ -552,6 +638,14 @@ function normalizeReferenceRole(
     return value;
   }
   return 'general';
+}
+
+function createPromptOptimizationIdempotencyKey(): string {
+  const randomId =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `drawnix:prompt-optimize:${randomId}`;
 }
 
 function mapPlatformTaskStatus(status: PlatformImageTaskStatus): TaskStatus {

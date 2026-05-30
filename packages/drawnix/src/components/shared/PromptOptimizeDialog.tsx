@@ -54,6 +54,17 @@ interface RequirementsHistoryItem {
   timestamp: number;
 }
 
+export interface PlatformPromptOptimizationAdapter {
+  optimize: (input: { prompt: string }) => Promise<{
+    optimizedPrompt: string;
+    taskId?: string;
+  }>;
+  quote: (input: { prompt: string }) => Promise<{
+    amount: number;
+    unit: 'points';
+  }>;
+}
+
 const REQUIREMENTS_HISTORY_LIMIT = 30;
 const PROMPT_HISTORY_DISPLAY_LIMIT = 60;
 
@@ -140,6 +151,7 @@ export interface PromptOptimizeDialogProps {
   historyType?: PromptType;
   allowStructuredMode?: boolean;
   defaultMode?: PromptOptimizeMode;
+  platformOptimization?: PlatformPromptOptimizationAdapter;
 }
 
 export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
@@ -155,6 +167,7 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
     historyType,
     allowStructuredMode = false,
     defaultMode,
+    platformOptimization,
   } = props;
   const scenarioId = props.scenarioId;
   const reactWindowId = useId();
@@ -173,6 +186,14 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
   const [optimizedDraft, setOptimizedDraft] = useState('');
   const [mode, setMode] = useState<PromptOptimizeMode>(effectiveDefaultMode);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [platformQuote, setPlatformQuote] = useState<{
+    amount: number;
+    unit: 'points';
+  } | null>(null);
+  const [platformQuoteError, setPlatformQuoteError] = useState('');
+  const [platformConfirmed, setPlatformConfirmed] = useState(false);
+  const [platformError, setPlatformError] = useState('');
+  const [isPlatformQuoteLoading, setIsPlatformQuoteLoading] = useState(false);
   const [activeHistoryPanel, setActiveHistoryPanel] =
     useState<OptimizeHistoryPanel | null>(null);
   const [requirementsHistory, setRequirementsHistory] = useState<
@@ -206,8 +227,11 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
       fallbackModelRef
     );
     const matchedModel =
-      findMatchingSelectableModel(textModels, stored.modelId, stored.modelRef) ||
-      getPinnedSelectableModel('text', stored.modelId, stored.modelRef);
+      findMatchingSelectableModel(
+        textModels,
+        stored.modelId,
+        stored.modelRef
+      ) || getPinnedSelectableModel('text', stored.modelId, stored.modelRef);
     const modelId = matchedModel?.id || stored.modelId || fallbackModelId;
     const modelRef =
       getModelRefFromConfig(matchedModel) ||
@@ -256,9 +280,40 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
     setIsOptimizing(false);
     setRequirements('');
     setOptimizedDraft('');
+    setPlatformConfirmed(false);
+    setPlatformError('');
+    setPlatformQuoteError('');
     setMode(effectiveDefaultMode);
     onOpenChange(false);
   }, [effectiveDefaultMode, onOpenChange]);
+
+  const loadPlatformQuote = useCallback(
+    async (promptForQuote: string) => {
+      if (!platformOptimization) {
+        return;
+      }
+      setIsPlatformQuoteLoading(true);
+      setPlatformQuoteError('');
+      try {
+        const quote = await platformOptimization.quote({
+          prompt: promptForQuote,
+        });
+        setPlatformQuote(quote);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : language === 'zh'
+            ? '提示词优化点数预估失败'
+            : 'Failed to quote prompt optimization';
+        setPlatformQuote(null);
+        setPlatformQuoteError(message);
+      } finally {
+        setIsPlatformQuoteLoading(false);
+      }
+    },
+    [language, platformOptimization]
+  );
 
   const handleOptimizePrompt = useCallback(async () => {
     const rawPrompt = currentPrompt.trim();
@@ -273,6 +328,22 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
     if (optimizingLockRef.current || isOptimizing) {
       return;
     }
+    if (platformOptimization && !platformConfirmed) {
+      MessagePlugin.warning(
+        language === 'zh'
+          ? '请先确认消耗点数'
+          : 'Please confirm point spending first'
+      );
+      return;
+    }
+    if (platformOptimization && !platformQuote) {
+      MessagePlugin.warning(
+        language === 'zh'
+          ? '正在获取提示词优化点数，请稍后'
+          : 'Prompt optimization quote is still loading'
+      );
+      return;
+    }
     optimizingLockRef.current = true;
 
     addPromptHistory(rawPrompt, false, effectiveHistoryType || effectiveType);
@@ -285,39 +356,50 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
     optimizationAbortRef.current?.abort();
     optimizationAbortRef.current = controller;
     setIsOptimizing(true);
+    setPlatformError('');
     analytics.trackPromptAction({
       action: 'optimize',
       surface: 'prompt_optimize_dialog',
       promptType: toPromptAnalyticsType(effectiveHistoryType || effectiveType),
       mode,
       status: 'start',
-      model: optimizerModel || undefined,
+      model: platformOptimization
+        ? 'platform-mock-prompt-optimizer'
+        : optimizerModel || undefined,
       prompt: rawPrompt,
       requirements,
     });
 
     try {
-      const optimizedPrompt = normalizeOptimizedPromptResult(
-        (
-          await executorFactory.getFallbackExecutor().generateText(
-            {
-              prompt: await buildOptimizationPrompt({
-                scenarioId,
-                originalPrompt: rawPrompt,
-                optimizationRequirements: requirements,
-                language,
-                type: effectiveType,
-                mode,
-              }),
-              model: optimizerModel || undefined,
-              modelRef: optimizerModelRef,
-            },
-            {
-              signal: controller.signal,
-            }
+      const optimizedPrompt = platformOptimization
+        ? normalizeOptimizedPromptResult(
+            (
+              await platformOptimization.optimize({
+                prompt: rawPrompt,
+              })
+            ).optimizedPrompt
           )
-        ).content
-      );
+        : normalizeOptimizedPromptResult(
+            (
+              await executorFactory.getFallbackExecutor().generateText(
+                {
+                  prompt: await buildOptimizationPrompt({
+                    scenarioId,
+                    originalPrompt: rawPrompt,
+                    optimizationRequirements: requirements,
+                    language,
+                    type: effectiveType,
+                    mode,
+                  }),
+                  model: optimizerModel || undefined,
+                  modelRef: optimizerModelRef,
+                },
+                {
+                  signal: controller.signal,
+                }
+              )
+            ).content
+          );
 
       if (!optimizedPrompt) {
         throw new Error('Empty optimized prompt');
@@ -327,10 +409,14 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
       analytics.trackPromptAction({
         action: 'optimize',
         surface: 'prompt_optimize_dialog',
-        promptType: toPromptAnalyticsType(effectiveHistoryType || effectiveType),
+        promptType: toPromptAnalyticsType(
+          effectiveHistoryType || effectiveType
+        ),
         mode,
         status: 'success',
-        model: optimizerModel || undefined,
+        model: platformOptimization
+          ? 'platform-mock-prompt-optimizer'
+          : optimizerModel || undefined,
         prompt: rawPrompt,
         requirements,
         durationMs: Date.now() - startTime,
@@ -360,7 +446,9 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
         analytics.trackPromptAction({
           action: 'optimize',
           surface: 'prompt_optimize_dialog',
-          promptType: toPromptAnalyticsType(effectiveHistoryType || effectiveType),
+          promptType: toPromptAnalyticsType(
+            effectiveHistoryType || effectiveType
+          ),
           mode,
           status: 'cancelled',
           model: optimizerModel || undefined,
@@ -371,23 +459,35 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
         return;
       }
       console.error('[PromptOptimizeDialog] Failed to optimize prompt:', error);
+      const visibleError =
+        error instanceof Error && error.message
+          ? error.message
+          : language === 'zh'
+          ? '提示词优化失败，请稍后重试'
+          : 'Failed to optimize prompt, please try again later';
+      setPlatformError(platformOptimization ? visibleError : '');
       analytics.trackPromptAction({
         action: 'optimize',
         surface: 'prompt_optimize_dialog',
-        promptType: toPromptAnalyticsType(effectiveHistoryType || effectiveType),
+        promptType: toPromptAnalyticsType(
+          effectiveHistoryType || effectiveType
+        ),
         mode,
         status: 'failed',
-        model: optimizerModel || undefined,
+        model: platformOptimization
+          ? 'platform-mock-prompt-optimizer'
+          : optimizerModel || undefined,
         prompt: rawPrompt,
         requirements,
         durationMs: Date.now() - startTime,
         metadata: {
-          error:
-            error instanceof Error ? error.name || 'Error' : typeof error,
+          error: error instanceof Error ? error.name || 'Error' : typeof error,
         },
       });
       MessagePlugin.error(
-        language === 'zh'
+        platformOptimization
+          ? visibleError
+          : language === 'zh'
           ? mode === 'structured'
             ? '结构化提示词生成失败，请稍后重试'
             : '提示词优化失败，请稍后重试'
@@ -414,6 +514,9 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
     effectiveType,
     isOptimizing,
     scenarioId,
+    platformConfirmed,
+    platformOptimization,
+    platformQuote,
   ]);
 
   const handleUseDraftAsCurrent = useCallback(() => {
@@ -436,9 +539,7 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
     const promptToApply = (optimizedDraft || currentPrompt).trim();
     if (!promptToApply) {
       MessagePlugin.warning(
-        language === 'zh'
-          ? '没有可回填的提示词'
-          : 'There is no prompt to apply'
+        language === 'zh' ? '没有可回填的提示词' : 'There is no prompt to apply'
       );
       return;
     }
@@ -466,14 +567,33 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
     if (!open) {
       return;
     }
-    syncOptimizerModelFromStorage();
+    if (!platformOptimization) {
+      syncOptimizerModelFromStorage();
+    }
     setCurrentPrompt(originalPrompt);
     setOptimizedDraft('');
     setRequirements('');
     setRequirementsHistory(readRequirementsHistory());
     setActiveHistoryPanel(null);
+    setPlatformConfirmed(false);
+    setPlatformError('');
+    setPlatformQuote(null);
+    setPlatformQuoteError('');
     setMode(effectiveDefaultMode);
-  }, [effectiveDefaultMode, open, originalPrompt, syncOptimizerModelFromStorage]);
+  }, [
+    effectiveDefaultMode,
+    open,
+    originalPrompt,
+    platformOptimization,
+    syncOptimizerModelFromStorage,
+  ]);
+
+  useEffect(() => {
+    if (!open || !platformOptimization) {
+      return;
+    }
+    void loadPlatformQuote(originalPrompt.trim());
+  }, [loadPlatformQuote, open, originalPrompt, platformOptimization]);
 
   useEffect(() => {
     return () => {
@@ -520,6 +640,21 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
       ? 'For example: emphasize timeline structure, split regions and counts, preserve titles and legends, output JSON only...'
       : 'For example: make it more cinematic, add camera language, reduce redundancy, emphasize subject and lighting...';
   const canOptimize = currentPrompt.trim().length > 0;
+  const isPlatformOptimization = Boolean(platformOptimization);
+  const canRunOptimize =
+    canOptimize &&
+    (!isPlatformOptimization ||
+      (platformConfirmed &&
+        Boolean(platformQuote) &&
+        !platformQuoteError &&
+        !isPlatformQuoteLoading));
+  const platformCostText = platformQuote
+    ? language === 'zh'
+      ? `本次优化消耗 ${platformQuote.amount} 点`
+      : `This optimization costs ${platformQuote.amount} points`
+    : language === 'zh'
+    ? '正在获取提示词优化点数'
+    : 'Loading prompt optimization cost';
   const canApply =
     (optimizedDraft.length > 0 ? optimizedDraft : currentPrompt).trim().length >
     0;
@@ -544,10 +679,7 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
   );
   const windowId = useMemo(
     () =>
-      `prompt-optimize-dialog-${reactWindowId.replace(
-        /[^a-zA-Z0-9_-]/g,
-        ''
-      )}`,
+      `prompt-optimize-dialog-${reactWindowId.replace(/[^a-zA-Z0-9_-]/g, '')}`,
     [reactWindowId]
   );
   const title =
@@ -586,7 +718,9 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
         action: 'toggle_history',
         surface: 'prompt_optimize_dialog',
         promptType: toPromptAnalyticsType(
-          panel === 'current' ? effectiveHistoryType || effectiveType : undefined
+          panel === 'current'
+            ? effectiveHistoryType || effectiveType
+            : undefined
         ),
         mode,
         metadata: { panel },
@@ -613,7 +747,9 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
       analytics.trackPromptAction({
         action: 'mode_select',
         surface: 'prompt_optimize_dialog',
-        promptType: toPromptAnalyticsType(effectiveHistoryType || effectiveType),
+        promptType: toPromptAnalyticsType(
+          effectiveHistoryType || effectiveType
+        ),
         mode: nextMode,
       });
       setMode(nextMode);
@@ -643,7 +779,9 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
             language={language}
             analyticsSurface={`prompt_optimize_${panel}_history`}
             analyticsPromptType={toPromptAnalyticsType(
-              panel === 'current' ? effectiveHistoryType || effectiveType : undefined
+              panel === 'current'
+                ? effectiveHistoryType || effectiveType
+                : undefined
             )}
             showCount
           />
@@ -735,42 +873,44 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
               />
             </div>
 
-            <div className="prompt-optimize-dialog__section prompt-optimize-dialog__section--requirements">
-              <div className="prompt-optimize-dialog__label-row">
-                <label
-                  className="prompt-optimize-dialog__label"
-                  htmlFor={requirementsId}
-                >
-                  {language === 'zh' ? '补充要求' : 'Additional Requirements'}
-                </label>
-                <button
-                  type="button"
-                  className="prompt-optimize-dialog__history-btn"
-                  onClick={() => handleToggleHistoryPanel('requirements')}
-                  aria-label={
-                    language === 'zh'
-                      ? '补充要求历史'
-                      : 'Additional requirements history'
-                  }
-                >
-                  <History size={16} />
-                </button>
-                {renderHistoryPanel(
-                  'requirements',
-                  requirementsHistoryItems,
-                  handleSelectRequirementsHistory
-                )}
+            {!isPlatformOptimization && (
+              <div className="prompt-optimize-dialog__section prompt-optimize-dialog__section--requirements">
+                <div className="prompt-optimize-dialog__label-row">
+                  <label
+                    className="prompt-optimize-dialog__label"
+                    htmlFor={requirementsId}
+                  >
+                    {language === 'zh' ? '补充要求' : 'Additional Requirements'}
+                  </label>
+                  <button
+                    type="button"
+                    className="prompt-optimize-dialog__history-btn"
+                    onClick={() => handleToggleHistoryPanel('requirements')}
+                    aria-label={
+                      language === 'zh'
+                        ? '补充要求历史'
+                        : 'Additional requirements history'
+                    }
+                  >
+                    <History size={16} />
+                  </button>
+                  {renderHistoryPanel(
+                    'requirements',
+                    requirementsHistoryItems,
+                    handleSelectRequirementsHistory
+                  )}
+                </div>
+                <textarea
+                  id={requirementsId}
+                  className="prompt-optimize-dialog__textarea"
+                  value={requirements}
+                  onChange={(event) => setRequirements(event.target.value)}
+                  placeholder={requirementsPlaceholder}
+                  rows={4}
+                  disabled={isOptimizing}
+                />
               </div>
-              <textarea
-                id={requirementsId}
-                className="prompt-optimize-dialog__textarea"
-                value={requirements}
-                onChange={(event) => setRequirements(event.target.value)}
-                placeholder={requirementsPlaceholder}
-                rows={4}
-                disabled={isOptimizing}
-              />
-            </div>
+            )}
           </div>
 
           {hasOptimizedDraft && (
@@ -804,7 +944,39 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
         >
           <div className="prompt-optimize-dialog__footer-actions prompt-optimize-dialog__footer-actions--form">
             <div className="prompt-optimize-dialog__footer-controls">
-              {allowStructuredMode && (
+              {isPlatformOptimization && (
+                <div
+                  className="prompt-optimize-dialog__platform-cost"
+                  role={
+                    platformQuoteError || platformError ? 'alert' : 'status'
+                  }
+                >
+                  <div className="prompt-optimize-dialog__platform-cost-text">
+                    {platformQuoteError || platformError || platformCostText}
+                  </div>
+                  <label className="prompt-optimize-dialog__platform-confirm">
+                    <input
+                      type="checkbox"
+                      checked={platformConfirmed}
+                      disabled={
+                        isOptimizing ||
+                        isPlatformQuoteLoading ||
+                        Boolean(platformQuoteError) ||
+                        !platformQuote
+                      }
+                      onChange={(event) =>
+                        setPlatformConfirmed(event.target.checked)
+                      }
+                    />
+                    <span>
+                      {language === 'zh'
+                        ? '确认消耗点数并优化'
+                        : 'Confirm point spending'}
+                    </span>
+                  </label>
+                </div>
+              )}
+              {!isPlatformOptimization && allowStructuredMode && (
                 <div
                   className="prompt-optimize-dialog__mode-switch"
                   aria-label={language === 'zh' ? '输出模式' : 'Output Mode'}
@@ -838,67 +1010,85 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
                   </button>
                 </div>
               )}
-              <div className="prompt-optimize-dialog__model">
-                <ModelDropdown
-                  selectedModel={optimizerModel}
-                  selectedSelectionKey={getSelectionKey(
-                    optimizerModel,
-                    optimizerModelRef
-                  )}
-                  onSelect={(modelId, modelRef) => {
-                    const nextModelRef = modelRef || null;
-                    analytics.trackPromptAction({
-                      action: 'model_select',
-                      surface: 'prompt_optimize_dialog',
-                      promptType: toPromptAnalyticsType(effectiveHistoryType || effectiveType),
-                      mode,
-                      model: modelId,
-                    });
-                    setOptimizerModel(modelId);
-                    setOptimizerModelRef(nextModelRef);
-                    writeStoredModelSelection(
-                      LS_KEYS.PROMPT_OPTIMIZE_TEXT_MODEL,
-                      modelId,
-                      nextModelRef
-                    );
-                  }}
-                  onSelectModel={(model) => {
-                    const nextModelRef = getModelRefFromConfig(model);
-                    analytics.trackPromptAction({
-                      action: 'model_select',
-                      surface: 'prompt_optimize_dialog',
-                      promptType: toPromptAnalyticsType(effectiveHistoryType || effectiveType),
-                      mode,
-                      model: model.id,
-                    });
-                    setOptimizerModel(model.id);
-                    setOptimizerModelRef(nextModelRef);
-                    writeStoredModelSelection(
-                      LS_KEYS.PROMPT_OPTIMIZE_TEXT_MODEL,
-                      model.id,
-                      nextModelRef
-                    );
-                  }}
-                  language={language}
-                  models={visibleTextModels}
-                  placement="up"
-                  header={
-                    language === 'zh'
-                      ? '选择文本模型 (↑↓ Tab)'
-                      : 'Select text model (↑↓ Tab)'
-                  }
-                  disabled={isOptimizing}
-                />
-              </div>
+              {!isPlatformOptimization && (
+                <div className="prompt-optimize-dialog__model">
+                  <ModelDropdown
+                    selectedModel={optimizerModel}
+                    selectedSelectionKey={getSelectionKey(
+                      optimizerModel,
+                      optimizerModelRef
+                    )}
+                    onSelect={(modelId, modelRef) => {
+                      const nextModelRef = modelRef || null;
+                      analytics.trackPromptAction({
+                        action: 'model_select',
+                        surface: 'prompt_optimize_dialog',
+                        promptType: toPromptAnalyticsType(
+                          effectiveHistoryType || effectiveType
+                        ),
+                        mode,
+                        model: modelId,
+                      });
+                      setOptimizerModel(modelId);
+                      setOptimizerModelRef(nextModelRef);
+                      writeStoredModelSelection(
+                        LS_KEYS.PROMPT_OPTIMIZE_TEXT_MODEL,
+                        modelId,
+                        nextModelRef
+                      );
+                    }}
+                    onSelectModel={(model) => {
+                      const nextModelRef = getModelRefFromConfig(model);
+                      analytics.trackPromptAction({
+                        action: 'model_select',
+                        surface: 'prompt_optimize_dialog',
+                        promptType: toPromptAnalyticsType(
+                          effectiveHistoryType || effectiveType
+                        ),
+                        mode,
+                        model: model.id,
+                      });
+                      setOptimizerModel(model.id);
+                      setOptimizerModelRef(nextModelRef);
+                      writeStoredModelSelection(
+                        LS_KEYS.PROMPT_OPTIMIZE_TEXT_MODEL,
+                        model.id,
+                        nextModelRef
+                      );
+                    }}
+                    language={language}
+                    models={visibleTextModels}
+                    placement="up"
+                    header={
+                      language === 'zh'
+                        ? '选择文本模型 (↑↓ Tab)'
+                        : 'Select text model (↑↓ Tab)'
+                    }
+                    disabled={isOptimizing}
+                  />
+                </div>
+              )}
             </div>
             <div className="prompt-optimize-dialog__footer-buttons">
               <button
                 type="button"
                 className="prompt-optimize-dialog__footer-btn prompt-optimize-dialog__footer-btn--primary"
                 onClick={() => void handleOptimizePrompt()}
-                disabled={isOptimizing || !canOptimize}
+                disabled={isOptimizing || !canRunOptimize}
               >
-                {language === 'zh'
+                {isPlatformOptimization
+                  ? language === 'zh'
+                    ? isOptimizing
+                      ? '优化中...'
+                      : platformQuote
+                      ? `确认并优化（${platformQuote.amount}点）`
+                      : '确认并优化'
+                    : isOptimizing
+                    ? 'Optimizing...'
+                    : platformQuote
+                    ? `Confirm & Optimize (${platformQuote.amount} pts)`
+                    : 'Confirm & Optimize'
+                  : language === 'zh'
                   ? isOptimizing
                     ? mode === 'structured'
                       ? '生成中...'
@@ -932,9 +1122,7 @@ export const PromptOptimizeDialog: React.FC<PromptOptimizeDialogProps> = (
                 onClick={handleUseDraftAsCurrent}
                 disabled={isOptimizing}
               >
-                {language === 'zh'
-                  ? '用结果继续优化'
-                  : 'Use Draft to Refine'}
+                {language === 'zh' ? '用结果继续优化' : 'Use Draft to Refine'}
               </button>
             </div>
           )}

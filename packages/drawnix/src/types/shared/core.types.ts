@@ -92,7 +92,8 @@ export type PlatformImageTaskOperationType =
   | 'text_to_image'
   | 'image_to_image'
   | 'inpaint'
-  | 'reference_generate';
+  | 'reference_generate'
+  | 'prompt_optimize';
 
 export type PlatformImageTaskReferenceAssetRole =
   | 'general'

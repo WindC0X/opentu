@@ -27,7 +27,10 @@ export class InMemoryImageTaskRepository implements ImageTaskRepository {
       actualModelKey: null,
       actualProvider: null,
       batchSize: input.input.batchSize,
-      canvasSyncStatus: 'pending',
+      canvasSyncStatus:
+        input.input.operationType === 'prompt_optimize'
+          ? 'not_required'
+          : 'pending',
       createdAt: now,
       failureCode: null,
       failureCount: 0,
@@ -44,9 +47,11 @@ export class InMemoryImageTaskRepository implements ImageTaskRepository {
         sourceAssetId: input.input.sourceAssetId ?? null,
       },
       operationType: input.input.operationType,
-      optimizedPrompt: input.input.promptOptimize
-        ? `${input.input.prompt} optimized`
-        : null,
+      optimizedPrompt:
+        input.input.operationType !== 'prompt_optimize' &&
+        input.input.promptOptimize
+          ? `${input.input.prompt} optimized`
+          : null,
       ownerUserId: input.auth.user.id,
       parentTaskId: null,
       pricePolicyId: input.quote.pricePolicyId,

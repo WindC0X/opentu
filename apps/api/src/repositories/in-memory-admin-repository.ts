@@ -115,6 +115,18 @@ export class InMemoryAdminRepository implements AdminRepository {
         supportsMask: true,
         supportsSeed: false,
       },
+      {
+        maxBatchSize: 1,
+        maxReferenceImages: 0,
+        operationType: 'prompt_optimize',
+        supportLevel: 'native',
+        supported: true,
+        supportedRatios: ['1:1'],
+        supportedSizes: [],
+        supportsBatch: false,
+        supportsMask: false,
+        supportsSeed: false,
+      },
     ];
     const model: ModelConfigRecord = {
       capabilities,
@@ -138,7 +150,10 @@ export class InMemoryAdminRepository implements AdminRepository {
     this.pricePolicies.set(pricePolicy.id, pricePolicy);
     this.models.set(model.id, model);
     for (const capability of capabilities) {
-      this.capabilities.set(`${model.modelKey}:${capability.operationType}`, capability);
+      this.capabilities.set(
+        `${model.modelKey}:${capability.operationType}`,
+        capability
+      );
     }
   }
 
@@ -246,7 +261,10 @@ export class InMemoryAdminRepository implements AdminRepository {
       })
     );
     for (const capability of capabilities) {
-      this.capabilities.set(`${model.modelKey}:${capability.operationType}`, capability);
+      this.capabilities.set(
+        `${model.modelKey}:${capability.operationType}`,
+        capability
+      );
     }
     const updated: ModelConfigRecord = {
       ...model,
@@ -274,7 +292,8 @@ export class InMemoryAdminRepository implements AdminRepository {
   ): Promise<number> {
     const versions = [...this.pricePolicies.values()]
       .filter(
-        (policy) => policy.tenantId === tenantId && policy.policyKey === policyKey
+        (policy) =>
+          policy.tenantId === tenantId && policy.policyKey === policyKey
       )
       .map((policy) => policy.version);
     return Math.max(0, ...versions) + 1;

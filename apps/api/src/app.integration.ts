@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app';
-import type {
-  ModelCapabilityRecord,
-  ModelConfigRecord,
-} from './admin/types';
+import type { ModelCapabilityRecord, ModelConfigRecord } from './admin/types';
 import { AppError } from './errors';
 import { StaticProviderCredentialResolver } from './providers/credentials';
 import type {
@@ -1093,6 +1090,214 @@ describe('S08 image edit versioning API', () => {
   });
 });
 
+describe('S13 prompt optimization quota loop API', () => {
+  it('quotes and creates deterministic mock prompt optimization tasks with quota consume', async () => {
+    const {
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's13-success@mengtu.local',
+      password: 'user-password',
+      username: 's13-success',
+    });
+    await seedQuota(repository, user.id, 20);
+    const login = await post(app, '/api/auth/login', {
+      login: 's13-success@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S13 Prompt Optimize Project' },
+      login.cookie
+    );
+    const projectId = project.json.data.project.id as string;
+
+    const quote = await post(
+      app,
+      '/api/image-tasks/quote',
+      {
+        batch_size: 1,
+        model_key: 'mock-image-v1',
+        operation_type: 'prompt_optimize',
+        project_id: projectId,
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(quote.response.status).toBe(200);
+    expect(quote.json.data.quote).toMatchObject({
+      amount: 2,
+      batchSize: 1,
+      modelKey: 'mock-image-v1',
+      operationType: 'prompt_optimize',
+      unit: 'points',
+    });
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's13-prompt-success',
+        model_key: 'mock-image-v1',
+        operation_type: 'prompt_optimize',
+        project_id: projectId,
+        prompt: '一只蓝色鲸鱼在夜空中发光',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.task).toMatchObject({
+      actualModelKey: 'mock-prompt-optimizer-v1',
+      actualProvider: 'mock',
+      assets: [],
+      canvasSyncStatus: 'not_required',
+      operationType: 'prompt_optimize',
+      quotedPriceAmount: 2,
+      settledPriceAmount: 2,
+      status: 'succeeded',
+      successCount: 1,
+      userPrompt: '一只蓝色鲸鱼在夜空中发光',
+    });
+    expect(created.json.data.task.optimizedPrompt).toContain(
+      '一只蓝色鲸鱼在夜空中发光'
+    );
+    expect(created.json.data.task.finalPrompt).toBe(
+      created.json.data.task.optimizedPrompt
+    );
+
+    const persistedTask = imageTaskRepository.tasks.get(
+      created.json.data.task.id
+    );
+    expect(persistedTask?.normalizedParams).toMatchObject({
+      promptOptimizerModel: 'mock-prompt-optimizer-v1',
+      promptOptimizerVersion: '2026-05-30',
+    });
+    const usage = [...imageTaskRepository.providerUsage.values()][0];
+    expect(usage).toMatchObject({
+      providerModelId: 'mock-prompt-optimizer-v1',
+      status: 'succeeded',
+    });
+    expect(JSON.stringify(usage)).not.toContain('一只蓝色鲸鱼在夜空中发光');
+
+    const account = await repository.findQuotaAccountByUserId(
+      '00000000-0000-0000-0000-000000000001',
+      user.id
+    );
+    expect(account).toMatchObject({ balanceAmount: 18, heldAmount: 0 });
+    expect([...repository.quotaLedger.values()]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ amount: 2, entryType: 'hold' }),
+        expect.objectContaining({ amount: 2, entryType: 'consume' }),
+      ])
+    );
+  });
+
+  it('releases held quota and returns a visible safe error for deterministic mock failures', async () => {
+    const {
+      assetService,
+      imageTaskRepository,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    const user = await createUserWithQuota(repository, {
+      email: 's13-failure@mengtu.local',
+      password: 'user-password',
+      username: 's13-failure',
+    });
+    await seedQuota(repository, user.id, 20);
+    const login = await post(app, '/api/auth/login', {
+      login: 's13-failure@mengtu.local',
+      password: 'user-password',
+    });
+    const project = await post(
+      app,
+      '/api/projects',
+      { title: 'S13 Prompt Failure Project' },
+      login.cookie
+    );
+
+    const created = await post(
+      app,
+      '/api/image-tasks',
+      {
+        batch_size: 1,
+        idempotency_key: 's13-prompt-failure',
+        model_key: 'mock-image-v1',
+        operation_type: 'prompt_optimize',
+        project_id: project.json.data.project.id,
+        prompt: '__mock_prompt_optimize_fail__ 一只蓝色鲸鱼',
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+
+    expect(created.response.status).toBe(201);
+    expect(created.json.data.task).toMatchObject({
+      assets: [],
+      canvasSyncStatus: 'not_required',
+      failureCode: 'MOCK_PROMPT_OPTIMIZER_FAILED',
+      failureMessage: 'Prompt optimization failed',
+      operationType: 'prompt_optimize',
+      optimizedPrompt: null,
+      settledPriceAmount: null,
+      status: 'failed',
+      successCount: 0,
+    });
+    const usage = [...imageTaskRepository.providerUsage.values()][0];
+    expect(usage).toMatchObject({
+      rawErrorCode: 'MOCK_PROMPT_OPTIMIZER_FAILED',
+      status: 'failed',
+    });
+    expect(JSON.stringify(usage)).not.toContain(
+      '__mock_prompt_optimize_fail__'
+    );
+
+    const account = await repository.findQuotaAccountByUserId(
+      '00000000-0000-0000-0000-000000000001',
+      user.id
+    );
+    expect(account).toMatchObject({ balanceAmount: 20, heldAmount: 0 });
+    expect([...repository.quotaLedger.values()]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ amount: 2, entryType: 'hold' }),
+        expect.objectContaining({ amount: 2, entryType: 'release' }),
+      ])
+    );
+    expect([...repository.quotaLedger.values()]).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ entryType: 'consume' }),
+      ])
+    );
+  });
+});
+
 describe('S09 admin/provider ops API', () => {
   it('guards admin APIs, manages provider config, masks credentials, and exposes task/asset/audit views', async () => {
     const {
@@ -1129,11 +1334,7 @@ describe('S09 admin/provider ops API', () => {
       password: 'admin-password',
     });
 
-    const forbidden = await get(
-      app,
-      '/api/admin/providers',
-      ownerLogin.cookie
-    );
+    const forbidden = await get(app, '/api/admin/providers', ownerLogin.cookie);
     expect(forbidden.response.status).toBe(403);
     expect(forbidden.json.error.code).toBe('FORBIDDEN');
 
@@ -1160,11 +1361,7 @@ describe('S09 admin/provider ops API', () => {
     );
     expect(task.response.status).toBe(201);
 
-    const providers = await get(
-      app,
-      '/api/admin/providers',
-      adminLogin.cookie
-    );
+    const providers = await get(app, '/api/admin/providers', adminLogin.cookie);
     expect(providers.response.status).toBe(200);
     expect(providers.json.data.providers).toEqual(
       expect.arrayContaining([
@@ -1263,7 +1460,11 @@ describe('S09 admin/provider ops API', () => {
     );
     expect(original.status).toBe(200);
 
-    const auditLogs = await get(app, '/api/admin/audit-logs', adminLogin.cookie);
+    const auditLogs = await get(
+      app,
+      '/api/admin/audit-logs',
+      adminLogin.cookie
+    );
     expect(auditLogs.response.status).toBe(200);
     expect(auditLogs.json.data.auditLogs).toEqual(
       expect.arrayContaining([
@@ -1378,8 +1579,7 @@ describe('S11 real provider execution API', () => {
     });
     expect(grsaiAdapter.calls).toHaveLength(1);
     expect(imageTaskRepository.providerUsage.size).toBe(1);
-    const usage = imageTaskRepository.providerUsage.values().next()
-      .value;
+    const usage = imageTaskRepository.providerUsage.values().next().value;
     expect(usage).toMatchObject({
       providerConfigId: S11_GRS_PROVIDER_ID,
       providerCostAmount: 1300,
@@ -1470,8 +1670,7 @@ describe('S11 real provider execution API', () => {
       failureCode: 'PROVIDER_CREDENTIAL_MISSING',
       status: 'failed',
     });
-    const usage = imageTaskRepository.providerUsage.values().next()
-      .value;
+    const usage = imageTaskRepository.providerUsage.values().next().value;
     expect(usage).toMatchObject({
       rawErrorCode: 'PROVIDER_CREDENTIAL_MISSING',
       status: 'failed',
@@ -1559,8 +1758,7 @@ describe('S11 real provider execution API', () => {
       failureMessage: 'upstream rejected credential [redacted]',
       status: 'failed',
     });
-    const usage = imageTaskRepository.providerUsage.values().next()
-      .value;
+    const usage = imageTaskRepository.providerUsage.values().next().value;
     expect(usage.rawErrorMessage).toBe(
       'upstream rejected credential [redacted]'
     );
@@ -1700,7 +1898,9 @@ class FakeProviderAdapter implements ImageProviderAdapter {
 }
 
 function seedGrsaiModel(
-  adminRepository: Awaited<ReturnType<typeof createTestAppContext>>['adminRepository']
+  adminRepository: Awaited<
+    ReturnType<typeof createTestAppContext>
+  >['adminRepository']
 ): void {
   const now = new Date('2026-05-29T00:00:00.000Z');
   const credential = {

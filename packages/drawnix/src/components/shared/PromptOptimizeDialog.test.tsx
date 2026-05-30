@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PromptOptimizeDialog } from './PromptOptimizeDialog';
 import { LS_KEYS } from '../../constants/storage-keys';
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
-  .IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const mocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -172,8 +173,10 @@ vi.mock('../../utils/runtime-model-discovery', () => ({
 }));
 
 vi.mock('../../utils/model-selection', () => ({
-  findMatchingSelectableModel: (models: Array<{ id: string }>, modelId: string) =>
-    models.find((model) => model.id === modelId) || null,
+  findMatchingSelectableModel: (
+    models: Array<{ id: string }>,
+    modelId: string
+  ) => models.find((model) => model.id === modelId) || null,
   getModelRefFromConfig: (model: { id: string }) => ({
     profileId: null,
     modelId: model.id,
@@ -509,6 +512,91 @@ describe('PromptOptimizeDialog', () => {
         mode: 'polish',
       })
     );
+  });
+
+  it('uses the platform prompt optimizer only after fixed-cost confirmation', async () => {
+    const platformOptimization = {
+      quote: vi.fn().mockResolvedValue({ amount: 2, unit: 'points' as const }),
+      optimize: vi.fn().mockResolvedValue({
+        optimizedPrompt: '平台优化结果',
+        taskId: 'task-1',
+      }),
+    };
+    const { onApply } = renderDialog({ platformOptimization });
+    await act(async () => {
+      await flushPromises();
+    });
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('本次优化消耗 2 点')
+    );
+    expect(queryButton('mock text model')).toBeNull();
+    expect(getButton(/确认并优化/).disabled).toBe(true);
+
+    const confirm = document.body.querySelector<HTMLInputElement>(
+      '.prompt-optimize-dialog__platform-confirm input'
+    );
+    expect(confirm).not.toBeNull();
+    act(() => {
+      confirm!.click();
+    });
+    await act(async () => {
+      getButton(/确认并优化/).click();
+      await flushPromises();
+    });
+
+    await waitFor(() =>
+      expect(platformOptimization.optimize).toHaveBeenCalled()
+    );
+    expect(platformOptimization.optimize).toHaveBeenCalledWith({
+      prompt: '原始提示词',
+    });
+    expect(mocks.generateText).not.toHaveBeenCalled();
+    expect(onApply).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(getByLabelText('优化结果草稿')).toHaveProperty(
+        'value',
+        '平台优化结果'
+      )
+    );
+
+    act(() => {
+      getButton('回填').click();
+    });
+    expect(onApply).toHaveBeenCalledWith('平台优化结果');
+  });
+
+  it('keeps the original platform prompt editable when optimization fails', async () => {
+    const platformOptimization = {
+      quote: vi.fn().mockResolvedValue({ amount: 2, unit: 'points' as const }),
+      optimize: vi
+        .fn()
+        .mockRejectedValue(new Error('Prompt optimization failed')),
+    };
+    renderDialog({ platformOptimization });
+    await act(async () => {
+      await flushPromises();
+    });
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('本次优化消耗 2 点')
+    );
+    const confirm = document.body.querySelector<HTMLInputElement>(
+      '.prompt-optimize-dialog__platform-confirm input'
+    );
+    act(() => {
+      confirm!.click();
+    });
+    await act(async () => {
+      getButton(/确认并优化/).click();
+      await flushPromises();
+    });
+
+    await waitFor(() => expect(mocks.error).toHaveBeenCalled());
+    expect(document.body.textContent).toContain('Prompt optimization failed');
+    expect(getByLabelText('当前提示词').value).toBe('原始提示词');
+    expect(() => getByLabelText('优化结果草稿')).toThrow();
+    expect(mocks.generateText).not.toHaveBeenCalled();
   });
 
   it('uses the previously stored optimizer text model on open', async () => {

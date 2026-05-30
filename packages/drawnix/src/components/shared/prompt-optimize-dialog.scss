@@ -213,7 +213,9 @@
 }
 
 .prompt-optimize-dialog__section:not(.prompt-optimize-dialog__section--result)
-  .prompt-optimize-dialog__textarea:not(.prompt-optimize-dialog__textarea--current) {
+  .prompt-optimize-dialog__textarea:not(
+    .prompt-optimize-dialog__textarea--current
+  ) {
   height: 132px;
 }
 
@@ -282,6 +284,36 @@
 
 .prompt-optimize-dialog__model {
   width: 100%;
+}
+
+.prompt-optimize-dialog__platform-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+  max-width: 320px;
+  color: var(--color-text-secondary, #6b7280);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.prompt-optimize-dialog__platform-cost-text {
+  color: var(--color-text-primary, #111827);
+  word-break: break-word;
+}
+
+.prompt-optimize-dialog__platform-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary, #6b7280);
+  cursor: pointer;
+}
+
+.prompt-optimize-dialog__platform-confirm input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
 .prompt-optimize-dialog__footer {

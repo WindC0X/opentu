@@ -70,6 +70,10 @@ import {
   addVideoPromptHistory,
   type PromptType,
 } from '../../services/prompt-storage-service';
+import {
+  optimizePlatformPrompt,
+  quotePlatformPromptOptimization,
+} from '../../services/platform-image-task-service';
 import { useSelectableModels } from '../../hooks/use-runtime-models';
 import { getPinnedSelectableModel } from '../../utils/runtime-model-discovery';
 import {
@@ -1088,6 +1092,18 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     // 当前选中的生成类型（图片、视频、Agent）
     const [generationType, setGenerationType] = useState<GenerationType>(
       initialGenerationType
+    );
+    const platformPromptOptimization = useMemo(
+      () =>
+        generationType === 'image'
+          ? {
+              optimize: ({ prompt }: { prompt: string }) =>
+                optimizePlatformPrompt({ prompt }),
+              quote: ({ prompt }: { prompt: string }) =>
+                quotePlatformPromptOptimization({ prompt }),
+            }
+          : undefined,
+      [generationType]
     );
     // 当前选中的 Skill ID（仅在 Agent 模式下有效）
     const [selectedSkillId, setSelectedSkillId] = useState<string>(
@@ -4911,6 +4927,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                       scenarioId={`ai-input.${generationType}` as const}
                       disabled={isSubmitting}
                       allowStructuredMode={true}
+                      platformOptimization={platformPromptOptimization}
                       onOpenChange={setIsPromptOptimizeOpen}
                       onMouseDown={(event) => {
                         event.preventDefault();

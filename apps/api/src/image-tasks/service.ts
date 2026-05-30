@@ -1,9 +1,6 @@
 import { randomUUID } from 'crypto';
 
-import {
-  AssetService,
-  type GeneratedAssetInput,
-} from '../assets/service';
+import { AssetService, type GeneratedAssetInput } from '../assets/service';
 import { toAssetView } from '../assets/service';
 import type { AssetRepository } from '../assets/types';
 import type { AuthenticatedSession } from '../auth/types';
@@ -12,6 +9,9 @@ import { AppError } from '../errors';
 import type { ProjectRepository } from '../projects/types';
 import {
   MOCK_MODEL_KEY,
+  MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+  MOCK_PROMPT_OPTIMIZER_VERSION,
+  optimizePromptWithMock,
 } from '../providers/mock-provider';
 import { EnvProviderCredentialResolver } from '../providers/credentials';
 import { MockImageModelCatalog } from '../providers/model-catalog';
@@ -80,7 +80,8 @@ export class ImageTaskService {
       options.credentialResolver ?? new EnvProviderCredentialResolver();
     this.modelCatalog = options.modelCatalog ?? new MockImageModelCatalog();
     this.now = options.now ?? (() => new Date());
-    this.providerRegistry = options.providerRegistry ?? createDefaultProviderRegistry();
+    this.providerRegistry =
+      options.providerRegistry ?? createDefaultProviderRegistry();
     this.tenantId = options.tenantId ?? DEFAULT_TENANT_ID;
   }
 
@@ -156,7 +157,9 @@ export class ImageTaskService {
       tenantId: this.tenantId,
     });
 
-    if (this.autoRunWorker) {
+    if (this.autoRunWorker && normalized.operationType === 'prompt_optimize') {
+      await this.runPromptOptimizeWorker(auth, task, normalized, quote, model);
+    } else if (this.autoRunWorker) {
       await this.runProviderWorker(auth, task, normalized, quote, model);
     }
 
@@ -424,7 +427,12 @@ export class ImageTaskService {
     });
 
     const providerResult = await this.executeProvider(task, input, model);
-    const usage = await this.createProviderUsage(task, input, model, providerResult);
+    const usage = await this.createProviderUsage(
+      task,
+      input,
+      model,
+      providerResult
+    );
     await this.repository.updateTask(task.id, { providerUsageId: usage.id });
 
     if (providerResult.successCount === 0) {
@@ -452,6 +460,104 @@ export class ImageTaskService {
       model,
       providerResult
     );
+  }
+
+  private async runPromptOptimizeWorker(
+    auth: AuthenticatedSession,
+    task: ImageTask,
+    input: CreateImageTaskInput,
+    quote: ImageTaskQuote,
+    model: ResolvedImageModel
+  ): Promise<void> {
+    await this.repository.updateTask(task.id, {
+      actualModelKey: MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+      actualProvider: model.providerKey,
+      canvasSyncStatus: 'not_required',
+      status: 'running',
+    });
+
+    const result = optimizePromptWithMock(task, input);
+    const usage = await this.repository.createProviderUsage({
+      imageTaskId: task.id,
+      latencyMs: result.latencyMs,
+      providerConfigId: model.providerConfigId,
+      providerCostAmount: 0,
+      providerCostCurrency: 'POINTS',
+      providerModelId: MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+      rawErrorCode: result.rawErrorCode,
+      rawErrorMessage: result.rawErrorMessage,
+      requestId: result.providerRequestId,
+      requestSnapshot: {
+        modelKey: input.modelKey,
+        operationType: input.operationType,
+        optimizerModelKey: MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+        optimizerVersion: MOCK_PROMPT_OPTIMIZER_VERSION,
+        providerKey: model.providerKey,
+        promptLength: input.prompt.length,
+      },
+      responseSnapshot: result.responseSnapshot,
+      status: result.status,
+      tenantId: this.tenantId,
+    });
+    await this.repository.updateTask(task.id, { providerUsageId: usage.id });
+
+    if (!result.optimizedPrompt) {
+      await this.quotaService.release(auth, quote, {
+        amount: quote.amount,
+        idempotencyKey: `prompt_optimize_fail:${task.id}`,
+        taskId: task.id,
+      });
+      await this.repository.updateTask(task.id, {
+        canvasSyncStatus: 'not_required',
+        failureCode: result.rawErrorCode ?? 'PROMPT_OPTIMIZE_FAILED',
+        failureCount: 1,
+        failureMessage: result.rawErrorMessage ?? 'Prompt optimization failed',
+        status: 'failed',
+      });
+      return;
+    }
+
+    await this.quotaService.consume(auth, quote, {
+      amount: quote.amount,
+      idempotencyKey: `prompt_optimize_success:${task.id}`,
+      taskId: task.id,
+    });
+    await this.repository.createOutboxEvent({
+      aggregateId: task.id,
+      aggregateType: 'image_task',
+      eventType: 'image_task_succeeded',
+      idempotencyKey: `prompt_optimize_succeeded:${task.id}`,
+      payload: {
+        imageTaskId: task.id,
+        operationType: input.operationType,
+        optimizedPromptLength: result.optimizedPrompt.length,
+      },
+      tenantId: this.tenantId,
+    });
+    await this.repository.updateTask(task.id, {
+      canvasSyncStatus: 'not_required',
+      failureCount: 0,
+      finalPrompt: result.optimizedPrompt,
+      normalizedParams: {
+        ...task.normalizedParams,
+        maskAssetId: null,
+        promptOptimizerModel: MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+        promptOptimizerVersion: MOCK_PROMPT_OPTIMIZER_VERSION,
+        ratio: input.ratio,
+        referenceAssets: [],
+        sourceAssetId: null,
+      },
+      optimizedPrompt: result.optimizedPrompt,
+      rawProviderParams: {
+        ...task.rawProviderParams,
+        promptOptimizerModel: MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+        promptOptimizerVersion: MOCK_PROMPT_OPTIMIZER_VERSION,
+      },
+      settledAt: this.now(),
+      settledPriceAmount: quote.amount,
+      status: 'succeeded',
+      successCount: 1,
+    });
   }
 
   private async createProviderUsage(
@@ -622,7 +728,11 @@ export class ImageTaskService {
       );
       const referenceImages = await Promise.all(
         (input.referenceAssets ?? []).map((reference) =>
-          this.providerInputImage(reference.assetId, reference.role, reference.order)
+          this.providerInputImage(
+            reference.assetId,
+            reference.role,
+            reference.order
+          )
         )
       );
       const result = await adapter.recoverLateResult({
@@ -676,7 +786,11 @@ export class ImageTaskService {
       );
       const referenceImages = await Promise.all(
         (input.referenceAssets ?? []).map((reference) =>
-          this.providerInputImage(reference.assetId, reference.role, reference.order)
+          this.providerInputImage(
+            reference.assetId,
+            reference.role,
+            reference.order
+          )
         )
       );
       const result = await adapter.execute({
@@ -918,7 +1032,8 @@ function normalizeOperationType(
     value === 'text_to_image' ||
     value === 'image_to_image' ||
     value === 'inpaint' ||
-    value === 'reference_generate'
+    value === 'reference_generate' ||
+    value === 'prompt_optimize'
   ) {
     return value;
   }
@@ -956,6 +1071,16 @@ function assertOperationAssetRequirements(input: {
   sourceAssetId?: string | null;
 }): void {
   const referenceCount = input.referenceAssets?.length ?? 0;
+  if (input.operationType === 'prompt_optimize') {
+    if (input.sourceAssetId || input.maskAssetId || referenceCount > 0) {
+      throw new AppError(
+        'BAD_REQUEST',
+        400,
+        'prompt_optimize cannot include source, mask, or reference assets'
+      );
+    }
+    return;
+  }
   if (input.operationType === 'text_to_image') {
     if (input.sourceAssetId || input.maskAssetId || referenceCount > 0) {
       throw new AppError(

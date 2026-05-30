@@ -17,6 +17,10 @@ export const MOCK_MODEL_VERSION = '2026-05-27';
 export const MOCK_PRICE_POLICY_ID = '00000000-0000-0000-0000-00000000f101';
 export const MOCK_PRICE_VERSION = 1;
 export const MOCK_PRICE_PER_IMAGE = 10;
+export const MOCK_PROMPT_OPTIMIZE_PRICE = 2;
+export const MOCK_PROMPT_OPTIMIZER_MODEL_KEY = 'mock-prompt-optimizer-v1';
+export const MOCK_PROMPT_OPTIMIZER_VERSION = '2026-05-30';
+export const MOCK_PROMPT_OPTIMIZE_FAIL_TOKEN = '__mock_prompt_optimize_fail__';
 
 export const MOCK_IMAGE_MODEL: ImageModelView = {
   capabilities: {
@@ -28,6 +32,7 @@ export const MOCK_IMAGE_MODEL: ImageModelView = {
       'image_to_image',
       'inpaint',
       'reference_generate',
+      'prompt_optimize',
     ],
     supportedRatios: ['1:1', '16:9', '9:16'],
     supportsBatch: true,
@@ -56,6 +61,18 @@ export interface MockProviderResult {
   usageSnapshot: Record<string, unknown>;
 }
 
+export interface MockPromptOptimizerResult {
+  failureCount: number;
+  latencyMs: number;
+  optimizedPrompt: string | null;
+  providerRequestId: string;
+  rawErrorCode: string | null;
+  rawErrorMessage: string | null;
+  responseSnapshot: Record<string, unknown>;
+  status: 'succeeded' | 'failed';
+  successCount: number;
+}
+
 const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
   'base64'
@@ -64,7 +81,9 @@ const ONE_PIXEL_PNG = Buffer.from(
 export class MockImageProvider implements ImageProviderAdapter {
   readonly providerKey = MOCK_PROVIDER_KEY;
 
-  async execute(input: ImageProviderExecutionInput): Promise<ImageProviderResult> {
+  async execute(
+    input: ImageProviderExecutionInput
+  ): Promise<ImageProviderResult> {
     const result = await this.generate(input.task, input.input);
     return {
       failureCount: result.failureCount,
@@ -74,7 +93,8 @@ export class MockImageProvider implements ImageProviderAdapter {
       providerCostCurrency: 'USD',
       providerRequestId: result.providerRequestId,
       rawErrorCode: result.status === 'failed' ? 'MOCK_PROVIDER_FAILED' : null,
-      rawErrorMessage: result.status === 'failed' ? 'Mock provider failed' : null,
+      rawErrorMessage:
+        result.status === 'failed' ? 'Mock provider failed' : null,
       responseSnapshot: result.usageSnapshot,
       status: result.status,
       successCount: result.successCount,
@@ -131,6 +151,57 @@ export class MockImageProvider implements ImageProviderAdapter {
       },
     };
   }
+}
+
+export function optimizePromptWithMock(
+  task: ImageTask,
+  input: CreateImageTaskInput
+): MockPromptOptimizerResult {
+  const providerRequestId = `mock_prompt_opt_${task.id}`;
+  if (input.prompt.includes(MOCK_PROMPT_OPTIMIZE_FAIL_TOKEN)) {
+    return {
+      failureCount: 1,
+      latencyMs: 1,
+      optimizedPrompt: null,
+      providerRequestId,
+      rawErrorCode: 'MOCK_PROMPT_OPTIMIZER_FAILED',
+      rawErrorMessage: 'Prompt optimization failed',
+      responseSnapshot: {
+        code: 'MOCK_PROMPT_OPTIMIZER_FAILED',
+        message: 'Mock prompt optimization failure requested by prompt',
+        modelKey: MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+        modelVersion: MOCK_PROMPT_OPTIMIZER_VERSION,
+        operationType: input.operationType,
+        promptLength: input.prompt.length,
+      },
+      status: 'failed',
+      successCount: 0,
+    };
+  }
+
+  const normalizedPrompt = input.prompt.trim().replace(/\s+/g, ' ');
+  const optimizedPrompt = [
+    `[Mock Optimized v1] ${normalizedPrompt}`,
+    'Add a clear subject, concrete visual details, composition, lighting, style, and output constraints.',
+  ].join(' ');
+
+  return {
+    failureCount: 0,
+    latencyMs: 1,
+    optimizedPrompt,
+    providerRequestId,
+    rawErrorCode: null,
+    rawErrorMessage: null,
+    responseSnapshot: {
+      modelKey: MOCK_PROMPT_OPTIMIZER_MODEL_KEY,
+      modelVersion: MOCK_PROMPT_OPTIMIZER_VERSION,
+      operationType: input.operationType,
+      promptLength: input.prompt.length,
+      resultLength: optimizedPrompt.length,
+    },
+    status: 'succeeded',
+    successCount: 1,
+  };
 }
 
 export function listMockImageModels(): ImageModelView[] {

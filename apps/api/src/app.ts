@@ -533,8 +533,13 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       ok(
         c,
         await dependencies.assetService.listAdminAssets(c.get('auth'), {
-          includeDeleted: optionalBooleanQuery(c, 'includeDeleted', 'include_deleted'),
-          ownerUserId: c.req.query('ownerUserId') ?? c.req.query('owner_user_id'),
+          includeDeleted: optionalBooleanQuery(
+            c,
+            'includeDeleted',
+            'include_deleted'
+          ),
+          ownerUserId:
+            c.req.query('ownerUserId') ?? c.req.query('owner_user_id'),
           projectId: c.req.query('projectId') ?? c.req.query('project_id'),
         })
       )
@@ -567,7 +572,10 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
     requireAuth(dependencies),
     requireAdmin(),
     async (c) =>
-      ok(c, await requireAdminService(dependencies).listProviders(c.get('auth')))
+      ok(
+        c,
+        await requireAdminService(dependencies).listProviders(c.get('auth'))
+      )
   );
 
   app.post(
@@ -687,7 +695,8 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
         c,
         await dependencies.authService.listAuditLogs(c.get('auth'), {
           action: c.req.query('action'),
-          actorUserId: c.req.query('actorUserId') ?? c.req.query('actor_user_id'),
+          actorUserId:
+            c.req.query('actorUserId') ?? c.req.query('actor_user_id'),
           limit: optionalIntegerQuery(c, 'limit'),
           targetId: c.req.query('targetId') ?? c.req.query('target_id'),
           targetType: c.req.query('targetType') ?? c.req.query('target_type'),
@@ -719,7 +728,11 @@ function requireAdmin() {
 
 function requireAdminService(dependencies: AppDependencies): AdminService {
   if (!dependencies.adminService) {
-    throw new AppError('NOT_IMPLEMENTED', 501, 'Admin service is not configured');
+    throw new AppError(
+      'NOT_IMPLEMENTED',
+      501,
+      'Admin service is not configured'
+    );
   }
   return dependencies.adminService;
 }
@@ -990,7 +1003,8 @@ function isImageTaskOperationType(
     value === 'text_to_image' ||
     value === 'image_to_image' ||
     value === 'inpaint' ||
-    value === 'reference_generate'
+    value === 'reference_generate' ||
+    value === 'prompt_optimize'
   );
 }
 

@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createPlatformImageTaskFromLocalTask,
   normalizePlatformImageRatio,
+  optimizePlatformPrompt,
   platformImageTaskToTaskPatch,
+  quotePlatformPromptOptimization,
   resolvePlatformOperationType,
   withPlatformImageTaskMetadata,
   type PlatformImageTaskView,
@@ -175,6 +177,110 @@ describe('platform image task service', () => {
   it('normalizes platform ratios without expanding the supported contract', () => {
     expect(normalizePlatformImageRatio('9x16')).toBe('9:16');
     expect(normalizePlatformImageRatio('4x3')).toBe('1:1');
+  });
+
+  it('quotes and creates prompt optimization tasks through the Image Task API', async () => {
+    window.history.pushState({}, '', '/canvas?project_id=project-1');
+    const requests: Array<{ body?: unknown; url: string }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ body: init?.body, url });
+        if (url === '/api/image-tasks/quote') {
+          return jsonResponse({
+            quote: {
+              amount: 2,
+              batchSize: 1,
+              modelKey: 'mock-image-v1',
+              operationType: 'prompt_optimize',
+              pricePolicyId: 'price-policy-1',
+              priceVersion: 1,
+              ratio: '1:1',
+              referenceAssets: [],
+              sourceAssetId: null,
+              unit: 'points',
+            },
+          });
+        }
+        if (url === '/api/image-tasks') {
+          const body = JSON.parse(String(init?.body));
+          return jsonResponse({
+            task: {
+              ...createPlatformTaskFixture(),
+              assets: [],
+              canvasSync: null,
+              canvasSyncStatus: 'not_required',
+              finalPrompt: '平台优化结果',
+              id: 'prompt-task-1',
+              operationType: body.operationType,
+              optimizedPrompt: '平台优化结果',
+              quotedPriceAmount: 2,
+              settledPriceAmount: 2,
+              status: 'succeeded',
+              successCount: 1,
+              userPrompt: body.prompt,
+            },
+          });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const quote = await quotePlatformPromptOptimization({ prompt: '一只小猫' });
+    const result = await optimizePlatformPrompt({
+      idempotencyKey: 'prompt-optimize-1',
+      prompt: '一只小猫',
+    });
+
+    expect(quote).toMatchObject({
+      amount: 2,
+      operationType: 'prompt_optimize',
+    });
+    expect(result).toMatchObject({
+      optimizedPrompt: '平台优化结果',
+      taskId: 'prompt-task-1',
+    });
+    expect(requests.map((request) => JSON.parse(String(request.body)))).toEqual(
+      [
+        expect.objectContaining({
+          operationType: 'prompt_optimize',
+          projectId: 'project-1',
+        }),
+        expect.objectContaining({
+          idempotencyKey: 'prompt-optimize-1',
+          operationType: 'prompt_optimize',
+          prompt: '一只小猫',
+          projectId: 'project-1',
+        }),
+      ]
+    );
+  });
+
+  it('surfaces prompt optimization task failures without applying a draft', async () => {
+    window.history.pushState({}, '', '/canvas?project_id=project-1');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          task: {
+            ...createPlatformTaskFixture(),
+            assets: [],
+            canvasSync: null,
+            canvasSyncStatus: 'not_required',
+            failureMessage: 'Prompt optimization failed',
+            operationType: 'prompt_optimize',
+            optimizedPrompt: null,
+            status: 'failed',
+            successCount: 0,
+          },
+        })
+      )
+    );
+
+    await expect(
+      optimizePlatformPrompt({ prompt: '一只小猫' })
+    ).rejects.toThrow('Prompt optimization failed');
   });
 });
 

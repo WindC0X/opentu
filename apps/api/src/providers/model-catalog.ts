@@ -8,12 +8,10 @@ import type {
 } from '../admin/types';
 import { DEFAULT_TENANT_ID } from '../auth/types';
 import { AppError } from '../errors';
-import type {
-  ImageModelCatalog,
-  ResolvedImageModel,
-} from './types';
+import type { ImageModelCatalog, ResolvedImageModel } from './types';
 import {
   MOCK_MODEL_KEY,
+  MOCK_PROMPT_OPTIMIZE_PRICE,
   MOCK_PRICE_POLICY_ID,
   MOCK_PRICE_VERSION,
   MOCK_PROVIDER_CONFIG_ID,
@@ -49,18 +47,20 @@ export class MockImageModelCatalog implements ImageModelCatalog {
     const modelView = requireMockImageModel(input.modelKey);
     validateModelCapability(modelView.capabilities, input);
     const model: ResolvedImageModel = {
-      capabilities: modelView.capabilities.operationTypes.map((operationType) => ({
-        maxBatchSize: modelView.capabilities.maxBatchSize,
-        maxReferenceImages: modelView.capabilities.maxReferenceImages,
-        operationType,
-        supported: true,
-        supportedRatios: modelView.capabilities.supportedRatios,
-        supportedSizes: [],
-        supportLevel: 'native',
-        supportsBatch: modelView.capabilities.supportsBatch,
-        supportsMask: modelView.capabilities.supportsMask,
-        supportsSeed: false,
-      })),
+      capabilities: modelView.capabilities.operationTypes.map(
+        (operationType) => ({
+          maxBatchSize: modelView.capabilities.maxBatchSize,
+          maxReferenceImages: modelView.capabilities.maxReferenceImages,
+          operationType,
+          supported: true,
+          supportedRatios: modelView.capabilities.supportedRatios,
+          supportedSizes: [],
+          supportLevel: 'native',
+          supportsBatch: modelView.capabilities.supportsBatch,
+          supportsMask: modelView.capabilities.supportsMask,
+          supportsSeed: false,
+        })
+      ),
       credential: null,
       displayName: modelView.displayName,
       modelFamily: 'mock-image',
@@ -199,7 +199,12 @@ export class AdminImageModelCatalog implements ImageModelCatalog {
       (candidate) => candidate.id === model.pricePolicyId
     );
     const capabilities = model.capabilities.filter(isImageCapability);
-    if (!provider || provider.status === 'disabled' || !price || capabilities.length === 0) {
+    if (
+      !provider ||
+      provider.status === 'disabled' ||
+      !price ||
+      capabilities.length === 0
+    ) {
       return null;
     }
     const primary = capabilities[0]!;
@@ -215,8 +220,12 @@ export class AdminImageModelCatalog implements ImageModelCatalog {
           (capability) => capability.operationType as ImageTaskOperationType
         ),
         supportedRatios: primary.supportedRatios,
-        supportsBatch: capabilities.some((capability) => capability.supportsBatch),
-        supportsMask: capabilities.some((capability) => capability.supportsMask),
+        supportsBatch: capabilities.some(
+          (capability) => capability.supportsBatch
+        ),
+        supportsMask: capabilities.some(
+          (capability) => capability.supportsMask
+        ),
       },
       displayName: model.displayName,
       modelKey: model.modelKey,
@@ -244,7 +253,9 @@ function buildQuote(
 ): ImageTaskQuote {
   return {
     amount:
-      model.price.unit === 'per_image'
+      input.operationType === 'prompt_optimize'
+        ? MOCK_PROMPT_OPTIMIZE_PRICE
+        : model.price.unit === 'per_image'
         ? model.price.amount * input.batchSize
         : model.price.amount,
     batchSize: input.batchSize,
@@ -274,7 +285,11 @@ function validateResolvedCapability(
       candidate.supported && candidate.operationType === input.operationType
   );
   if (!capability) {
-    throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前操作');
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前操作'
+    );
   }
   validateModelCapability(
     {
@@ -300,13 +315,25 @@ function validateModelCapability(
   }
 ): void {
   if (!capability.operationTypes.includes(input.operationType)) {
-    throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前操作');
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前操作'
+    );
   }
   if (!capability.supportedRatios.includes(input.ratio)) {
-    throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前比例');
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前比例'
+    );
   }
   if (input.batchSize > capability.maxBatchSize) {
-    throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前批量数量');
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前批量数量'
+    );
   }
   if (input.operationType === 'inpaint' && !capability.supportsMask) {
     throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持 mask');
@@ -315,7 +342,11 @@ function validateModelCapability(
     input.referenceAssets &&
     input.referenceAssets.length > capability.maxReferenceImages
   ) {
-    throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前参考图数量');
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前参考图数量'
+    );
   }
 }
 
@@ -338,6 +369,7 @@ function isImageCapability(
     capability.operationType === 'text_to_image' ||
     capability.operationType === 'image_to_image' ||
     capability.operationType === 'inpaint' ||
-    capability.operationType === 'reference_generate'
+    capability.operationType === 'reference_generate' ||
+    capability.operationType === 'prompt_optimize'
   );
 }

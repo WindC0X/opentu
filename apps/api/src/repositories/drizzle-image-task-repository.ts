@@ -22,7 +22,10 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
       .insert(schema.mtImageTasks)
       .values({
         batchSize: input.input.batchSize,
-        canvasSyncStatus: 'pending',
+        canvasSyncStatus:
+          input.input.operationType === 'prompt_optimize'
+            ? 'not_required'
+            : 'pending',
         finalPrompt: input.input.prompt,
         id: input.id,
         idempotencyKey: input.input.idempotencyKey,
@@ -35,9 +38,11 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
           sourceAssetId: input.input.sourceAssetId ?? null,
         },
         operationType: input.input.operationType,
-        optimizedPrompt: input.input.promptOptimize
-          ? `${input.input.prompt} optimized`
-          : null,
+        optimizedPrompt:
+          input.input.operationType !== 'prompt_optimize' &&
+          input.input.promptOptimize
+            ? `${input.input.prompt} optimized`
+            : null,
         ownerUserId: input.auth.user.id,
         pricePolicyId: input.quote.pricePolicyId,
         priceVersion: input.quote.priceVersion,
@@ -140,7 +145,11 @@ export class DrizzleImageTaskRepository implements ImageTaskRepository {
         failureCode: patch.failureCode,
         failureCount: patch.failureCount,
         failureMessage: patch.failureMessage,
+        finalPrompt: patch.finalPrompt,
+        normalizedParams: patch.normalizedParams,
+        optimizedPrompt: patch.optimizedPrompt,
         providerUsageId: patch.providerUsageId,
+        rawProviderParams: patch.rawProviderParams,
         settledAt: patch.settledAt,
         settledPriceAmount: patch.settledPriceAmount,
         status: patch.status,
