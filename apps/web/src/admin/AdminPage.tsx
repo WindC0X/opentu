@@ -10,6 +10,7 @@ import {
   Activity,
   Boxes,
   ClipboardList,
+  DatabaseBackup,
   DollarSign,
   Image,
   KeyRound,
@@ -37,6 +38,8 @@ import {
 import type {
   AdminData,
   AdminOperationType,
+  BackupStatus,
+  BackupStatusSummary,
   ModelHealthStatus,
   ModelSupportLevel,
   ModelVisibility,
@@ -51,6 +54,7 @@ type AdminSection =
   | 'users'
   | 'tasks'
   | 'assets'
+  | 'backup'
   | 'providers'
   | 'models'
   | 'pricing'
@@ -68,6 +72,7 @@ const sections: Array<{
   { icon: <Users size={16} />, id: 'users', label: '用户' },
   { icon: <ClipboardList size={16} />, id: 'tasks', label: '任务' },
   { icon: <Image size={16} />, id: 'assets', label: '资产' },
+  { icon: <DatabaseBackup size={16} />, id: 'backup', label: '备份' },
   { icon: <ServerCog size={16} />, id: 'providers', label: '供应商' },
   { icon: <Boxes size={16} />, id: 'models', label: '模型' },
   { icon: <DollarSign size={16} />, id: 'pricing', label: '价格' },
@@ -571,6 +576,12 @@ export function AdminPage({ onOpenHome }: AdminPageProps) {
           </Panel>
         )}
 
+        {activeSection === 'backup' && (
+          <Panel title="备份状态">
+            <BackupStatusPanel status={data.backupStatus} />
+          </Panel>
+        )}
+
         {activeSection === 'providers' && (
           <Panel title="供应商">
             <div className={styles.formGrid}>
@@ -902,6 +913,54 @@ function Panel({ children, title }: { children: ReactNode; title: string }) {
   );
 }
 
+function BackupStatusPanel({ status }: { status: BackupStatusSummary }) {
+  if (status.state === 'missing') {
+    return <p className={styles.empty}>暂无备份记录</p>;
+  }
+
+  if (status.state === 'unavailable') {
+    return (
+      <section className={styles.backupNotice}>
+        <strong>备份状态暂不可用</strong>
+        <span>
+          {status.errorCode}: {status.message}
+        </span>
+      </section>
+    );
+  }
+
+  const backup = status.backup;
+  return (
+    <div className={styles.detailGrid}>
+      <DetailItem label="状态" value={backup.status} />
+      <DetailItem label="开始时间" value={formatTime(backup.startedAt)} />
+      <DetailItem label="完成时间" value={formatTime(backup.finishedAt)} />
+      <DetailItem label="耗时" value={formatDuration(backup.durationMs)} />
+      <DetailItem label="输出目录" value={backup.outputDir} />
+      <DetailItem label="Dump 文件" value={backup.dumpFile} />
+      <DetailItem label="Manifest 文件" value={backup.manifestFile} />
+      <DetailItem label="大小" value={formatBytes(backup.sizeBytes)} />
+      <DetailItem label="SHA-256" value={checksumPrefix(backup.sha256)} />
+      <DetailItem label="pg_dump" value={backup.pgDumpVersion ?? '-'} />
+      <DetailItem label="DB Host Hash" value={backup.databaseHostHash ?? '-'} />
+      <DetailItem label="DB Name Hash" value={backup.databaseNameHash ?? '-'} />
+      <DetailItem label="保留天数" value={`${backup.retentionDays}`} />
+      <DetailItem label="模式" value={backup.mode} />
+      <DetailItem label="Dry Run" value={backup.dryRun ? 'yes' : 'no'} />
+      <DetailItem label="错误" value={backupErrorText(backup)} />
+    </div>
+  );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <section className={styles.detailItem}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </section>
+  );
+}
+
 function DataTable({
   headers,
   rows,
@@ -1023,4 +1082,38 @@ function formatTime(value: string | null): string {
     return '-';
   }
   return new Date(value).toLocaleString();
+}
+
+function formatDuration(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+  if (value < 1000) {
+    return `${value}ms`;
+  }
+  return `${(value / 1000).toFixed(1)}s`;
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null) {
+    return '-';
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function checksumPrefix(value: string | null): string {
+  return value ? `${value.slice(0, 16)}...` : '-';
+}
+
+function backupErrorText(backup: BackupStatus): string {
+  if (!backup.errorCode && !backup.errorMessage) {
+    return '-';
+  }
+  return [backup.errorCode, backup.errorMessage].filter(Boolean).join(': ');
 }

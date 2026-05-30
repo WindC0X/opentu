@@ -413,6 +413,38 @@ async function installS09AdminApiMocks(page: Page, role: 'admin' | 'user') {
       return;
     }
 
+    if (request.method() === 'GET' && path === '/api/admin/backups/latest') {
+      await route.fulfill({
+        body: JSON.stringify(
+          s07Envelope({
+            backup: {
+              databaseHostHash: 'sha256:smokehost',
+              databaseNameHash: 'sha256:smokedb',
+              dryRun: true,
+              dumpFile: 'mengtu-db-20260531T010203Z.dump',
+              durationMs: 1200,
+              errorCode: null,
+              errorMessage: null,
+              finishedAt: now,
+              manifestFile: 'mengtu-db-20260531T010203Z.manifest.json',
+              mode: 'test-fake-pg-dump',
+              outputDir: '.data/backups/db',
+              pgDumpVersion: 'fake-pg_dump 0.0.0',
+              retentionDays: 7,
+              sha256:
+                '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+              sizeBytes: 128,
+              startedAt: now,
+              status: 'succeeded',
+            },
+          })
+        ),
+        contentType: 'application/json',
+        status: 200,
+      });
+      return;
+    }
+
     if (path === '/api/admin/providers') {
       if (request.method() === 'GET') {
         await route.fulfill({
@@ -807,6 +839,11 @@ test.describe('@smoke 核心功能验证', () => {
     await page.getByRole('button', { name: '新价格版本' }).click();
     await expect(
       page.getByRole('cell', { name: '2', exact: true }).first()
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: '备份' }).click();
+    await expect(
+      page.getByText('mengtu-db-20260531T010203Z.dump')
     ).toBeVisible();
   });
 

@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app';
 import type { ModelCapabilityRecord, ModelConfigRecord } from './admin/types';
+import { FileDatabaseBackupStatusReader } from './backup/status';
 import { AppError } from './errors';
 import { StaticProviderCredentialResolver } from './providers/credentials';
 import type {
@@ -10,6 +15,16 @@ import type {
   ImageProviderResult,
 } from './providers/types';
 import { createTestAppContext, createUserWithQuota } from './test/helpers';
+
+const backupStatusTempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    backupStatusTempDirs.splice(0).map((dir) =>
+      rm(dir, { force: true, recursive: true })
+    )
+  );
+});
 
 describe('S03 auth/access API', () => {
   it('registers by invite, logs in, redeems quota, and blocks disabled login', async () => {
@@ -1478,6 +1493,147 @@ describe('S09 admin/provider ops API', () => {
   });
 });
 
+describe('S14 admin backup status API', () => {
+  it('returns sanitized latest backup status for admins only', async () => {
+    const outputDir = await tempBackupStatusDir();
+    await writeLatestBackupStatus(outputDir, {
+      status: 'succeeded',
+      startedAt: '2026-05-31T01:02:03.000Z',
+      finishedAt: '2026-05-31T01:02:06.000Z',
+      durationMs: 3000,
+      outputDir,
+      dumpFile: join(outputDir, 'mengtu-db-20260531T010203Z.dump'),
+      manifestFile: join(
+        outputDir,
+        'mengtu-db-20260531T010203Z.manifest.json'
+      ),
+      sizeBytes: 12345,
+      sha256:
+        '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      pgDumpVersion: 'pg_dump (PostgreSQL) 16.0',
+      databaseHostHash: 'sha256:hosthash',
+      databaseNameHash: 'sha256:namehash',
+      retentionDays: 7,
+      mode: 'dump',
+      dryRun: false,
+      errorCode: null,
+      errorMessage: null,
+    });
+
+    const {
+      assetService,
+      imageTaskService,
+      projectService,
+      repository,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      backupStatusReader: new FileDatabaseBackupStatusReader(outputDir),
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+
+    await createUserWithQuota(repository, {
+      email: 's14-owner@mengtu.local',
+      password: 'owner-password',
+      username: 's14-owner',
+    });
+    const ownerLogin = await post(app, '/api/auth/login', {
+      login: 's14-owner@mengtu.local',
+      password: 'owner-password',
+    });
+    const adminLogin = await post(app, '/api/auth/login', {
+      login: 'admin@mengtu.local',
+      password: 'admin-password',
+    });
+
+    const forbidden = await get(
+      app,
+      '/api/admin/backups/latest',
+      ownerLogin.cookie
+    );
+    expect(forbidden.response.status).toBe(403);
+    expect(forbidden.json.error.code).toBe('FORBIDDEN');
+
+    const latest = await get(
+      app,
+      '/api/admin/backups/latest',
+      adminLogin.cookie
+    );
+    expect(latest.response.status).toBe(200);
+    expect(latest.json.data.backup).toMatchObject({
+      databaseHostHash: 'sha256:hosthash',
+      databaseNameHash: 'sha256:namehash',
+      dumpFile: 'mengtu-db-20260531T010203Z.dump',
+      manifestFile: 'mengtu-db-20260531T010203Z.manifest.json',
+      mode: 'dump',
+      retentionDays: 7,
+      status: 'succeeded',
+    });
+    expect(latest.json.data.backup.outputDir).not.toContain(outputDir);
+    expect(latest.json.data.backup.dumpFile).not.toContain(outputDir);
+    expect(JSON.stringify(latest.json)).not.toContain('postgres://');
+  });
+
+  it('returns stable missing and unavailable errors without leaking status file content', async () => {
+    const missingDir = await tempBackupStatusDir();
+    const malformedDir = await tempBackupStatusDir();
+    const passwordValue = ['super', 'secret'].join('-');
+    await writeFile(
+      join(malformedDir, 'latest.json'),
+      `{"status":"failed","errorMessage":"password=${passwordValue}"`,
+      'utf8'
+    );
+
+    const {
+      assetService,
+      imageTaskService,
+      projectService,
+      service,
+    } = await createTestAppContext();
+    const app = createApp({
+      assetService,
+      authService: service,
+      backupStatusReader: new FileDatabaseBackupStatusReader(missingDir),
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+    const adminLogin = await post(app, '/api/auth/login', {
+      login: 'admin@mengtu.local',
+      password: 'admin-password',
+    });
+
+    const missing = await get(
+      app,
+      '/api/admin/backups/latest',
+      adminLogin.cookie
+    );
+    expect(missing.response.status).toBe(404);
+    expect(missing.json.error.code).toBe('BACKUP_STATUS_NOT_FOUND');
+
+    const malformedApp = createApp({
+      assetService,
+      authService: service,
+      backupStatusReader: new FileDatabaseBackupStatusReader(malformedDir),
+      imageTaskService,
+      projectService,
+      secureCookies: false,
+    });
+    const malformed = await get(
+      malformedApp,
+      '/api/admin/backups/latest',
+      adminLogin.cookie
+    );
+    expect(malformed.response.status).toBe(500);
+    expect(malformed.json.error.code).toBe('BACKUP_STATUS_UNAVAILABLE');
+    expect(JSON.stringify(malformed.json)).not.toContain(passwordValue);
+  });
+});
+
 describe('S11 real provider execution API', () => {
   it('dispatches configured provider execution, persists outputs, settles quota, and sanitizes provider usage', async () => {
     const secret = 's11-secret-token';
@@ -1810,6 +1966,23 @@ async function rawGet(
     headers: cookie ? { cookie } : undefined,
     method: 'GET',
   });
+}
+
+async function tempBackupStatusDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'mengtu-backup-status-'));
+  backupStatusTempDirs.push(dir);
+  return dir;
+}
+
+async function writeLatestBackupStatus(
+  outputDir: string,
+  manifest: Record<string, unknown>
+): Promise<void> {
+  await writeFile(
+    join(outputDir, 'latest.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    'utf8'
+  );
 }
 
 async function upload(

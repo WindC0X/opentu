@@ -1,9 +1,11 @@
-import { getHomeSummary, request } from '../mengtu/api-client';
+import { ApiClientError, getHomeSummary, request } from '../mengtu/api-client';
 import type {
   AdminData,
   AdminOperationType,
   AdminUser,
   AuditLog,
+  BackupStatus,
+  BackupStatusSummary,
   ModelConfig,
   ModelHealthStatus,
   ModelSupportLevel,
@@ -22,6 +24,7 @@ export async function loadAdminData(): Promise<AdminData> {
     users,
     tasks,
     assets,
+    backupStatus,
     providers,
     models,
     pricePolicies,
@@ -31,6 +34,7 @@ export async function loadAdminData(): Promise<AdminData> {
     listAdminUsers(),
     listAdminTasks(),
     listAdminAssets(),
+    getBackupStatusSummary(),
     listProviders(),
     listModels(),
     listPricePolicies(),
@@ -40,6 +44,7 @@ export async function loadAdminData(): Promise<AdminData> {
   return {
     assets,
     auditLogs,
+    backupStatus,
     models,
     pricePolicies,
     providers,
@@ -47,6 +52,29 @@ export async function loadAdminData(): Promise<AdminData> {
     tasks,
     users,
   };
+}
+
+export async function getBackupStatusSummary(): Promise<BackupStatusSummary> {
+  try {
+    const result = await request<{ backup: BackupStatus }>(
+      '/api/admin/backups/latest'
+    );
+    return { backup: result.backup, state: 'available' };
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      if (error.code === 'BACKUP_STATUS_NOT_FOUND') {
+        return { state: 'missing' };
+      }
+      if (error.code === 'BACKUP_STATUS_UNAVAILABLE') {
+        return {
+          errorCode: error.code,
+          message: error.message,
+          state: 'unavailable',
+        };
+      }
+    }
+    throw error;
+  }
 }
 
 export async function listAdminUsers(): Promise<AdminUser[]> {

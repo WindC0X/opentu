@@ -15,6 +15,12 @@ import type {
 import { AssetService } from './assets/service';
 import type { AssetVariantType } from './assets/types';
 import { AuthService } from './auth/service';
+import {
+  DatabaseBackupStatusError,
+  FileDatabaseBackupStatusReader,
+  type DatabaseBackupStatusReader,
+} from './backup/status';
+import { loadConfig } from './config';
 import { AppError, toAppError } from './errors';
 import {
   clearSessionCookie,
@@ -36,6 +42,7 @@ export interface AppDependencies {
   adminService?: AdminService;
   assetService: AssetService;
   authService: AuthService;
+  backupStatusReader?: DatabaseBackupStatusReader;
   imageTaskService: ImageTaskService;
   projectService: ProjectService;
   secureCookies?: boolean;
@@ -568,6 +575,16 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   );
 
   app.get(
+    '/api/admin/backups/latest',
+    requireAuth(dependencies),
+    requireAdmin(),
+    async (c) =>
+      ok(c, {
+        backup: await readLatestBackupStatus(dependencies),
+      })
+  );
+
+  app.get(
     '/api/admin/providers',
     requireAuth(dependencies),
     requireAdmin(),
@@ -735,6 +752,26 @@ function requireAdminService(dependencies: AppDependencies): AdminService {
     );
   }
   return dependencies.adminService;
+}
+
+async function readLatestBackupStatus(dependencies: AppDependencies) {
+  try {
+    return await backupStatusReader(dependencies).readLatest();
+  } catch (error) {
+    if (error instanceof DatabaseBackupStatusError) {
+      throw new AppError(error.code, error.status, error.message);
+    }
+    throw error;
+  }
+}
+
+function backupStatusReader(
+  dependencies: AppDependencies
+): DatabaseBackupStatusReader {
+  return (
+    dependencies.backupStatusReader ??
+    new FileDatabaseBackupStatusReader(loadConfig().dbBackupOutputDir)
+  );
 }
 
 async function readJson(c: Context<AppEnv>): Promise<Record<string, unknown>> {

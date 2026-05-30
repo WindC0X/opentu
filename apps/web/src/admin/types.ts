@@ -107,9 +107,35 @@ export interface AuditLog {
   targetType: string;
 }
 
+export interface BackupStatus {
+  databaseHostHash: string | null;
+  databaseNameHash: string | null;
+  dryRun: boolean;
+  dumpFile: string;
+  durationMs: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  finishedAt: string;
+  manifestFile: string;
+  mode: 'dry-run' | 'test-fake-pg-dump' | 'dump';
+  outputDir: string;
+  pgDumpVersion: string | null;
+  retentionDays: number;
+  sha256: string | null;
+  sizeBytes: number | null;
+  startedAt: string;
+  status: 'succeeded' | 'failed';
+}
+
+export type BackupStatusSummary =
+  | { state: 'available'; backup: BackupStatus }
+  | { state: 'missing' }
+  | { errorCode: string; message: string; state: 'unavailable' };
+
 export interface AdminData {
   assets: AssetSummary[];
   auditLogs: AuditLog[];
+  backupStatus: BackupStatusSummary;
   models: ModelConfig[];
   pricePolicies: PricePolicy[];
   providers: ProviderConfig[];
