@@ -195,6 +195,51 @@ describe('GrsaiImageProviderAdapter', () => {
     expect(resultPolls).toBe(2);
   });
 
+  it('reads successful provider URLs from the GrsAI results array', async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/v1/api/generate')) {
+        return jsonResponse({ id: 'grsai-task-results', status: 'running' });
+      }
+      if (url.includes('/v1/api/result')) {
+        return jsonResponse({
+          progress: 100,
+          results: [{ url: 'https://cdn.example.test/results.png' }],
+          status: 'succeeded',
+        });
+      }
+      if (url === 'https://cdn.example.test/results.png') {
+        return new Response(tinyPng(), {
+          headers: { 'content-type': 'image/png' },
+          status: 200,
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+    const adapter = new GrsaiImageProviderAdapter({
+      baseUrl: 'https://fake-grsai.example',
+      fetchImpl,
+      pollIntervalMs: 0,
+      timeoutMs: 1000,
+    });
+
+    const result = await adapter.execute(
+      createExecutionInput({ credentialSecret: 'secret-token' })
+    );
+
+    expect(result).toMatchObject({
+      failureCount: 0,
+      providerRequestId: 'grsai-task-results',
+      status: 'succeeded',
+      successCount: 1,
+    });
+    expect(result.responseSnapshot).toMatchObject({
+      imageCount: 1,
+      providerStatus: 'succeeded',
+      resultUrlCount: 1,
+    });
+  });
+
   it('recovers a late async result without starting a new generation', async () => {
     const calls: string[] = [];
     const fetchImpl: typeof fetch = async (input) => {

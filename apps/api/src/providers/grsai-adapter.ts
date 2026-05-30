@@ -40,6 +40,7 @@ interface GrsaiResult {
   id?: string;
   message?: string;
   output?: unknown;
+  results?: unknown;
   status?: string;
   url?: string;
   urls?: string[];
@@ -296,7 +297,13 @@ function extractRequestId(response: GrsaiAsyncStart): string | null {
 }
 
 function extractResultUrls(result: GrsaiResult): string[] {
-  const values: unknown[] = [result.url, result.urls, result.output, result.data];
+  const values: unknown[] = [
+    result.url,
+    result.urls,
+    result.output,
+    result.data,
+    result.results,
+  ];
   const urls: string[] = [];
   for (const value of values) {
     collectUrls(value, urls);
