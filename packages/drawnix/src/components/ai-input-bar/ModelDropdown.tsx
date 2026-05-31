@@ -187,6 +187,8 @@ export interface ModelDropdownProps {
   showProviderAction?: boolean;
   /** 是否在传入模型列表未命中时回退到内置模型配置 */
   allowBuiltinFallback?: boolean;
+  /** 平台前台用户模式：隐藏技术短码并使用产品化文案 */
+  platformProductMode?: boolean;
 }
 
 /**
@@ -210,6 +212,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   providerProfilesOverride,
   showProviderAction = true,
   allowBuiltinFallback = true,
+  platformProductMode = false,
 }) => {
   const { setAppState } = useDrawnix();
   const { value: isOpen, setValue: setIsOpen } = useControllableState({
@@ -416,7 +419,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
     (): VendorTab[] =>
       providerGroups.map((g) => ({
         id: g.providerId,
-        label: g.providerName,
+        label: platformProductMode ? '梦图平台' : g.providerName,
         count: g.totalCount,
         icon: g.providerIconUrl ? (
           <ModelSourceIcon
@@ -436,7 +439,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
           />
         ),
       })),
-    [providerGroups]
+    [platformProductMode, providerGroups]
   );
 
   // 厂商分类标签列表（中间列）
@@ -444,11 +447,11 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
     (): VendorTab[] =>
       (activeProvider?.vendorCategories || []).map((c) => ({
         id: c.vendor,
-        label: c.label,
+        label: platformProductMode ? '全部模型' : c.label,
         count: c.models.length,
         icon: <ModelVendorMark vendor={c.vendor} size={14} />,
       })),
-    [activeProvider]
+    [activeProvider, platformProductMode]
   );
 
   // 切换供应商
@@ -808,8 +811,16 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
               className="model-dropdown__trigger-source-icon"
             />
           ) : null}
-          <span className="model-dropdown__at">#</span>
-          <span className="model-dropdown__code">{shortCode}</span>
+          {platformProductMode ? (
+            <span className="model-dropdown__code model-dropdown__code--product">
+              {currentModel?.shortLabel || currentModel?.label || selectedModel}
+            </span>
+          ) : (
+            <>
+              <span className="model-dropdown__at">#</span>
+              <span className="model-dropdown__code">{shortCode}</span>
+            </>
+          )}
           <ModelHealthBadge
             modelId={selectedModel}
             profileId={currentProfile?.id || currentModel?.sourceProfileId || null}
@@ -972,7 +983,11 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
                       value={searchQuery}
                       onChange={(event) => setSearchQuery(event.target.value)}
                       placeholder={
-                        language === 'zh'
+                        platformProductMode
+                          ? language === 'zh'
+                            ? '搜索模型 / 能力'
+                            : 'Search model / capability'
+                          : language === 'zh'
                           ? '搜索模型名 / 展示名 / 供应商'
                           : 'Search model id / label / provider'
                       }
@@ -1064,9 +1079,11 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
                                   size={16}
                                 />
                               </span>
-                              <span className="model-dropdown__item-code">
-                                #{model.shortCode || model.id}
-                              </span>
+                              {!platformProductMode && (
+                                <span className="model-dropdown__item-code">
+                                  #{model.shortCode || model.id}
+                                </span>
+                              )}
                               <span className="model-dropdown__item-label">
                                 {model.shortLabel || model.label}
                               </span>

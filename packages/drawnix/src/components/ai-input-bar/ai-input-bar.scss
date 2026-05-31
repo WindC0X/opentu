@@ -404,75 +404,42 @@ $ai-input-small-expanded-max-height: $ai-input-small-line-height * 6 +
     overflow: hidden;
   }
 
-  &__platform-capability {
-    display: grid;
-    gap: 6px;
-    width: 100%;
-    margin-bottom: 8px;
-    padding: 8px 10px;
-    border: 1px solid rgba(47, 125, 140, 0.18);
-    border-radius: 8px;
-    background: #f7fbfc;
-    color: #2f4858;
-    font-size: 12px;
-    line-height: 1.45;
+  &__platform-operations {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    min-width: 0;
     pointer-events: auto;
   }
 
-  &__platform-capability-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-width: 0;
-
-    strong,
-    span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    span {
-      color: #667381;
-    }
-  }
-
-  &__platform-capability-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-  }
-
-  &__platform-chip {
+  &__platform-operation-chip {
     display: inline-flex;
     align-items: center;
-    min-height: 22px;
-    padding: 0 7px;
-    border: 1px solid #d5e2e7;
+    justify-content: center;
+    min-height: 24px;
+    padding: 0 8px;
+    border: 1px solid #d7e3e7;
     border-radius: 6px;
-    background: #fff;
+    background: #f8fbfc;
     color: #405563;
+    font-size: 12px;
+    line-height: 1;
     white-space: nowrap;
   }
 
-  &__platform-chip--active {
+  &__platform-operation-chip--active {
     border-color: #2f7d8c;
     background: #e8f4f6;
     color: #255f69;
     font-weight: 600;
   }
 
-  &__platform-operation {
-    color: #2f5f3c;
-  }
-
-  &__platform-operation--blocked {
-    color: #a13d2d;
-  }
-
-  &__platform-candidates {
-    color: #667381;
+  &__platform-operation-chip--disabled {
+    border-color: #e4e8eb;
+    background: #f6f7f8;
+    color: #8a949e;
   }
 
   // 输入区域 - 向上扩展
@@ -1741,6 +1708,17 @@ $ai-input-small-expanded-max-height: $ai-input-small-line-height * 6 +
     &__bottom-start,
     &__bottom-controls {
       gap: 2px;
+    }
+
+    &__platform-operations {
+      max-width: 100%;
+      gap: 3px;
+    }
+
+    &__platform-operation-chip {
+      min-height: 22px;
+      padding: 0 6px;
+      font-size: 11px;
     }
 
     &__type-btn {

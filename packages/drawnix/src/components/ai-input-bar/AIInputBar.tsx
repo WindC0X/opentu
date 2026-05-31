@@ -79,7 +79,6 @@ import {
 import {
   getPlatformModelConfigCapabilities,
   getPlatformRatioParamConfig,
-  PLATFORM_IMAGE_MODEL_CANDIDATES,
   type PlatformImageModelCapabilities,
   type PlatformImageOperationType,
   usePlatformSelectableImageModels,
@@ -484,10 +483,6 @@ function formatPlatformOperationLabel(
   }
 }
 
-function getPlatformOperationBadgeText(operationType: PlatformImageOperationType) {
-  return formatPlatformOperationLabel(operationType);
-}
-
 function getPlatformOperationPreview(
   content: SelectedContent[],
   capabilities: PlatformImageModelCapabilities | null
@@ -567,89 +562,117 @@ function buildPlatformCompatibleParams(model?: ModelConfig | null): ParamConfig[
   return ratioParam ? [ratioParam] : [];
 }
 
-function PlatformCapabilityPanel({
+const PLATFORM_OPERATION_OPTIONS: PlatformImageOperationType[] = [
+  'text_to_image',
+  'image_to_image',
+  'inpaint',
+  'reference_generate',
+];
+
+function getPlatformOperationProductReason(
+  operationType: PlatformImageOperationType,
+  operationPreview: ReturnType<typeof getPlatformOperationPreview>,
+  capabilities: PlatformImageModelCapabilities | null
+) {
+  if (!capabilities) {
+    return '模型能力加载中';
+  }
+  if (!capabilities.operationTypes.includes(operationType)) {
+    return `当前模型不支持${formatPlatformOperationLabel(operationType)}`;
+  }
+  if (operationType === 'text_to_image') {
+    return operationPreview.referenceCount > 0
+      ? '清空选中图片后使用'
+      : '输入提示词后生成图片';
+  }
+  if (operationType === 'image_to_image') {
+    return operationPreview.referenceCount === 1 &&
+      operationPreview.operationType === 'image_to_image'
+      ? operationPreview.reason
+      : '选择一张图片后使用';
+  }
+  if (operationType === 'inpaint') {
+    if (!capabilities.supportsMask) {
+      return '当前模型不支持局部重绘';
+    }
+    return operationPreview.operationType === 'inpaint'
+      ? operationPreview.reason
+      : '选择带蒙版的图片后使用';
+  }
+  return operationPreview.referenceCount > 1 &&
+    operationPreview.operationType === 'reference_generate'
+    ? operationPreview.reason
+    : '选择多张参考图后使用';
+}
+
+function isPlatformOperationReady(
+  operationType: PlatformImageOperationType,
+  operationPreview: ReturnType<typeof getPlatformOperationPreview>,
+  capabilities: PlatformImageModelCapabilities | null
+) {
+  if (!capabilities?.operationTypes.includes(operationType)) {
+    return false;
+  }
+  if (operationType === 'text_to_image') {
+    return operationPreview.referenceCount === 0;
+  }
+  if (operationType === 'image_to_image') {
+    return (
+      operationPreview.operationType === 'image_to_image' &&
+      operationPreview.supported
+    );
+  }
+  if (operationType === 'inpaint') {
+    return (
+      capabilities.supportsMask &&
+      operationPreview.operationType === 'inpaint' &&
+      operationPreview.supported
+    );
+  }
+  return (
+    operationPreview.operationType === 'reference_generate' &&
+    operationPreview.supported
+  );
+}
+
+function PlatformOperationModeChips({
   capabilities,
-  configuredModelKeys,
-  model,
   operationPreview,
 }: {
   capabilities: PlatformImageModelCapabilities | null;
-  configuredModelKeys: Set<string>;
-  model: ModelConfig | null;
   operationPreview: ReturnType<typeof getPlatformOperationPreview>;
 }) {
-  if (!model) {
-    return (
-      <div
-        className="ai-input-bar__platform-capability"
-        data-testid="platform-capability-panel"
-      >
-        <span>平台模型加载中</span>
-      </div>
-    );
-  }
-
-  const unavailableCandidates = PLATFORM_IMAGE_MODEL_CANDIDATES.filter(
-    (candidate) => !configuredModelKeys.has(candidate.modelKey)
-  );
-
   return (
     <div
-      className="ai-input-bar__platform-capability"
-      data-testid="platform-capability-panel"
+      className="ai-input-bar__platform-operations"
+      data-testid="platform-operation-mode-chips"
     >
-      <div className="ai-input-bar__platform-capability-row">
-        <strong>{model.label}</strong>
-        <span>{model.description || '平台模型'}</span>
-      </div>
-      {capabilities && (
-        <div className="ai-input-bar__platform-capability-chips">
-          {capabilities.operationTypes
-            .filter((operationType) => operationType !== 'prompt_optimize')
-            .map((operationType) => (
-              <span
-                className={
-                  operationPreview.operationType === operationType
-                    ? 'ai-input-bar__platform-chip ai-input-bar__platform-chip--active'
-                    : 'ai-input-bar__platform-chip'
-                }
-                key={operationType}
-              >
-                {getPlatformOperationBadgeText(operationType)}
-              </span>
-            ))}
-          <span className="ai-input-bar__platform-chip">
-            比例 {capabilities.supportedRatios.join('/')}
+      {PLATFORM_OPERATION_OPTIONS.map((operationType) => {
+        const active = operationPreview.operationType === operationType;
+        const ready = isPlatformOperationReady(
+          operationType,
+          operationPreview,
+          capabilities
+        );
+        const reason = getPlatformOperationProductReason(
+          operationType,
+          operationPreview,
+          capabilities
+        );
+        return (
+          <span
+            className={classNames('ai-input-bar__platform-operation-chip', {
+              'ai-input-bar__platform-operation-chip--active':
+                active && operationPreview.supported,
+              'ai-input-bar__platform-operation-chip--disabled': !ready,
+            })}
+            key={operationType}
+            title={reason}
+          >
+            {formatPlatformOperationLabel(operationType)}
           </span>
-          <span className="ai-input-bar__platform-chip">
-            批量 {capabilities.supportsBatch ? `≤${capabilities.maxBatchSize}` : '首版固定 1'}
-          </span>
-          <span className="ai-input-bar__platform-chip">
-            参考图 ≤{capabilities.maxReferenceImages}
-          </span>
-          <span className="ai-input-bar__platform-chip">
-            分辨率/质量 待后台字段
-          </span>
-        </div>
-      )}
-      <div
-        className={
-          operationPreview.supported
-            ? 'ai-input-bar__platform-operation'
-            : 'ai-input-bar__platform-operation ai-input-bar__platform-operation--blocked'
-        }
-      >
-        当前入口：{formatPlatformOperationLabel(operationPreview.operationType)} ·{' '}
-        {operationPreview.reason}
-      </div>
-      {unavailableCandidates.length > 0 && (
-        <div className="ai-input-bar__platform-candidates">
-          候选未配置：
-          {unavailableCandidates
-            .map((candidate) => `${candidate.displayName}（${candidate.reason}）`)
-            .join('；')}
-        </div>
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -1658,10 +1681,6 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const selectedPlatformCapabilities = useMemo(
       () => getPlatformModelConfigCapabilities(selectedPlatformModel),
       [selectedPlatformModel]
-    );
-    const configuredPlatformModelKeys = useMemo(
-      () => new Set(platformImageModelState.models.map((model) => model.id)),
-      [platformImageModelState.models]
     );
     const platformOperationPreview = useMemo(
       () =>
@@ -5039,14 +5058,6 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             'ai-input-bar__container--expanded': shouldKeepExpanded,
           })}
         >
-          {platformMode && (
-            <PlatformCapabilityPanel
-              capabilities={selectedPlatformCapabilities}
-              configuredModelKeys={configuredPlatformModelKeys}
-              model={selectedPlatformModel}
-              operationPreview={platformOperationPreview}
-            />
-          )}
           <div className="ai-input-bar__bottom-bar">
             <div className="ai-input-bar__bottom-start">
               <input
@@ -5148,7 +5159,15 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 onOpenChange={handleModelDropdownChange}
                 showProviderAction={!platformMode}
                 allowBuiltinFallback={!platformMode}
+                platformProductMode={platformMode}
               />
+
+              {platformMode && (
+                <PlatformOperationModeChips
+                  capabilities={selectedPlatformCapabilities}
+                  operationPreview={platformOperationPreview}
+                />
+              )}
 
               {generationType === 'agent' &&
                 selectedSkillId !== SKILL_AUTO_ID &&

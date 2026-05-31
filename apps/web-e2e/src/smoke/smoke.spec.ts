@@ -637,12 +637,35 @@ test.describe('@smoke 核心功能验证', () => {
     await home.createProjectAndOpenCanvas('Smoke S18 平台画布');
     await expect(page.getByText('可用点数 200')).toBeVisible();
     await expect(page.getByRole('button', { name: '管理后台' })).toBeVisible();
-    await expect(page.getByTestId('platform-capability-panel')).toContainText(
-      'GPT Image 2'
+    await expect(page.getByTestId('platform-operation-mode-chips')).toContainText(
+      '文生图'
     );
-    await expect(page.getByTestId('platform-capability-panel')).toContainText(
-      'Nano Banana Pro'
+    await expect(page.getByTestId('platform-operation-mode-chips')).toContainText(
+      '图生图'
     );
+    await expect(
+      page.getByText('候选未配置').or(page.getByText('后台字段'))
+    ).toHaveCount(0);
+
+    const platformModelSelector = page
+      .getByTestId('ai-input-bar')
+      .getByTestId('model-selector')
+      .first()
+      .locator('button[aria-haspopup="listbox"]');
+    await expect(platformModelSelector).toContainText('GPT Image 2');
+    await expect(platformModelSelector).not.toContainText('#');
+    await platformModelSelector.click();
+    const platformModelList = page.locator('.model-dropdown__menu');
+    await expect(platformModelList.getByText('梦图平台')).toBeVisible();
+    await expect(platformModelList.getByText('全部模型')).toBeVisible();
+    await expect(platformModelList.getByText('GPT Image 2')).toBeVisible();
+    await expect(platformModelList.getByText('平台价 10 点/张')).toBeVisible();
+    await expect(platformModelList.getByText('参考图生成')).toBeVisible();
+    await expect(platformModelList.getByPlaceholder('搜索模型 / 能力')).toBeVisible();
+    await expect(
+      platformModelList.locator('.model-dropdown__item-code')
+    ).toHaveCount(0);
+    await page.keyboard.press('Escape');
     await page.locator('.board-host-svg').dblclick({
       force: true,
       position: { x: 320, y: 220 },

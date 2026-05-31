@@ -76,24 +76,6 @@ const DEFAULT_PLATFORM_OPERATION_TYPES: PlatformImageOperationType[] = [
   'text_to_image',
 ];
 
-export const PLATFORM_IMAGE_MODEL_CANDIDATES = [
-  {
-    displayName: 'GPT Image 2',
-    modelKey: 'gpt-image-2',
-    reason: '仅当后台 /api/models 返回该模型时才可执行',
-  },
-  {
-    displayName: 'Nano Banana Pro',
-    modelKey: 'nano-banana-pro',
-    reason: '候选模型，当前前端不硬编码 provider model id',
-  },
-  {
-    displayName: 'Nano Banana 2',
-    modelKey: 'nano-banana-2',
-    reason: '候选模型，等待后台模型配置',
-  },
-] as const;
-
 function normalizePlatformProviderKey(providerKey: string): string {
   return providerKey.trim() || 'platform';
 }
@@ -243,7 +225,7 @@ export function mapPlatformImageModelToModelConfig(
       : '平台模型';
 
   return {
-    description: `${providerKey} · ${priceText} · ${formatCapabilitySummary(
+    description: `${priceText} · ${formatCapabilitySummary(
       capabilities
     )}`,
     id: model.modelKey,
@@ -260,7 +242,7 @@ export function mapPlatformImageModelToModelConfig(
     shortCode: platformModelShortCode(model.modelKey, providerKey),
     shortLabel: model.displayName || model.modelKey,
     sourceProfileId: `${PLATFORM_PROVIDER_PROFILE_PREFIX}${providerKey}`,
-    sourceProfileName: `平台 ${providerKey}`,
+    sourceProfileName: '梦图平台',
     tags: [
       'platform-image-task',
       ...capabilities.operationTypes.map(
