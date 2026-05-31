@@ -10,6 +10,7 @@ import {
   AlertCircle,
   FolderOpen,
   LogIn,
+  LogOut,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -21,6 +22,8 @@ import {
   getHomeSummary,
   listAssets,
   listProjects,
+  login,
+  logout,
   openProjectCanvas,
 } from './api-client';
 import type {
@@ -50,6 +53,8 @@ export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePagePr
   const [message, setMessage] = useState('');
   const [creating, setCreating] = useState(false);
   const [openingProjectId, setOpeningProjectId] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loginForm, setLoginForm] = useState({ login: '', password: '' });
 
   const load = useCallback(async () => {
     setStatus('loading');
@@ -112,6 +117,38 @@ export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePagePr
     }
   };
 
+  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage('');
+    setLoggingIn(true);
+    try {
+      await login({
+        login: loginForm.login.trim(),
+        password: loginForm.password,
+      });
+      setLoginForm({ login: '', password: '' });
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '登录失败');
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setMessage('');
+    try {
+      await logout();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '退出失败');
+      return;
+    }
+    setSummary(null);
+    setProjects([]);
+    setAssetCount(0);
+    setStatus('unauthenticated');
+  };
+
   const handleOpen = async (project: ProjectSummary) => {
     setMessage('');
     setOpeningProjectId(project.id);
@@ -140,9 +177,52 @@ export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePagePr
   if (status === 'unauthenticated') {
     return (
       <StatusPanel
+        action={
+          <form className={styles.loginForm} onSubmit={handleLogin}>
+            <label>
+              账号
+              <input
+                autoComplete="username"
+                className={styles.input}
+                onChange={(event) =>
+                  setLoginForm((current) => ({
+                    ...current,
+                    login: event.target.value,
+                  }))
+                }
+                placeholder="用户名或邮箱"
+                value={loginForm.login}
+              />
+            </label>
+            <label>
+              密码
+              <input
+                autoComplete="current-password"
+                className={styles.input}
+                onChange={(event) =>
+                  setLoginForm((current) => ({
+                    ...current,
+                    password: event.target.value,
+                  }))
+                }
+                placeholder="密码"
+                type="password"
+                value={loginForm.password}
+              />
+            </label>
+            {message && <p className={styles.errorTextInline}>{message}</p>}
+            <button className={styles.button} disabled={loggingIn} type="submit">
+              <LogIn size={16} />
+              登录
+            </button>
+            <p className={styles.statusHint}>
+              第一版不开放公开注册；账号由管理员创建或通过邀请码准入。
+            </p>
+          </form>
+        }
         icon={<LogIn size={22} />}
-        title="请先登录"
-        text="当前会话不可用。"
+        title="登录梦图"
+        text="使用内测账号进入项目、画布和后台。"
       />
     );
   }
@@ -182,6 +262,10 @@ export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePagePr
           <button className={styles.ghostButton} onClick={() => void load()}>
             <RefreshCw size={16} />
             刷新
+          </button>
+          <button className={styles.ghostButton} onClick={() => void handleLogout()}>
+            <LogOut size={16} />
+            退出
           </button>
         </div>
       </header>

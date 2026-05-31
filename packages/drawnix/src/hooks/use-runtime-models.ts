@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ModelVendor,
   type ModelConfig,
+  type ParamConfig,
   type ModelType,
 } from '../constants/model-config';
 import {
@@ -24,7 +25,13 @@ interface ApiEnvelope<T> {
 
 export interface PlatformImageModelSummary {
   capabilities?: {
+    maxBatchSize?: 1 | 2 | 4;
+    maxReferenceImages?: number;
+    operationType?: PlatformImageOperationType;
+    operationTypes?: PlatformImageOperationType[];
     supportedRatios?: string[];
+    supportsBatch?: boolean;
+    supportsMask?: boolean;
   };
   displayName: string;
   modelKey: string;
@@ -36,6 +43,28 @@ export interface PlatformImageModelSummary {
   providerKey: string;
 }
 
+export type PlatformImageOperationType =
+  | 'text_to_image'
+  | 'image_to_image'
+  | 'inpaint'
+  | 'reference_generate'
+  | 'prompt_optimize';
+
+export interface PlatformImageModelCapabilities {
+  maxBatchSize: 1 | 2 | 4;
+  maxReferenceImages: number;
+  operationTypes: PlatformImageOperationType[];
+  supportedRatios: string[];
+  supportsBatch: boolean;
+  supportsMask: boolean;
+}
+
+export interface PlatformModelConfig extends ModelConfig {
+  platformCapabilities: PlatformImageModelCapabilities;
+  platformProviderKey: string;
+  platformPriceText: string;
+}
+
 export interface PlatformSelectableModelsState {
   error: string | null;
   loading: boolean;
@@ -43,6 +72,27 @@ export interface PlatformSelectableModelsState {
 }
 
 const PLATFORM_PROVIDER_PROFILE_PREFIX = 'platform:';
+const DEFAULT_PLATFORM_OPERATION_TYPES: PlatformImageOperationType[] = [
+  'text_to_image',
+];
+
+export const PLATFORM_IMAGE_MODEL_CANDIDATES = [
+  {
+    displayName: 'GPT Image 2',
+    modelKey: 'gpt-image-2',
+    reason: '仅当后台 /api/models 返回该模型时才可执行',
+  },
+  {
+    displayName: 'Nano Banana Pro',
+    modelKey: 'nano-banana-pro',
+    reason: '候选模型，当前前端不硬编码 provider model id',
+  },
+  {
+    displayName: 'Nano Banana 2',
+    modelKey: 'nano-banana-2',
+    reason: '候选模型，等待后台模型配置',
+  },
+] as const;
 
 function normalizePlatformProviderKey(providerKey: string): string {
   return providerKey.trim() || 'platform';
@@ -80,31 +130,143 @@ function platformModelShortCode(modelKey: string, providerKey: string): string {
     .toLowerCase() || 'mt';
 }
 
+function normalizePlatformBatchSize(value?: number): 1 | 2 | 4 {
+  if (value === 4) {
+    return 4;
+  }
+  if (value === 2) {
+    return 2;
+  }
+  return 1;
+}
+
+function normalizePlatformOperationTypes(
+  model: PlatformImageModelSummary
+): PlatformImageOperationType[] {
+  const operationTypes = model.capabilities?.operationTypes?.length
+    ? model.capabilities.operationTypes
+    : model.capabilities?.operationType
+    ? [model.capabilities.operationType]
+    : DEFAULT_PLATFORM_OPERATION_TYPES;
+  return Array.from(new Set(operationTypes));
+}
+
+export function getPlatformCapabilitiesFromModel(
+  model: PlatformImageModelSummary | PlatformModelConfig
+): PlatformImageModelCapabilities {
+  if ('platformCapabilities' in model) {
+    return model.platformCapabilities;
+  }
+  return {
+    maxBatchSize: normalizePlatformBatchSize(model.capabilities?.maxBatchSize),
+    maxReferenceImages: Math.max(0, model.capabilities?.maxReferenceImages ?? 0),
+    operationTypes: normalizePlatformOperationTypes(model),
+    supportedRatios: model.capabilities?.supportedRatios?.length
+      ? model.capabilities.supportedRatios
+      : ['1:1'],
+    supportsBatch: Boolean(model.capabilities?.supportsBatch),
+    supportsMask: Boolean(model.capabilities?.supportsMask),
+  };
+}
+
+export function getPlatformModelConfigCapabilities(
+  model?: ModelConfig | null
+): PlatformImageModelCapabilities | null {
+  if (!model || !('platformCapabilities' in model)) {
+    return null;
+  }
+  return (model as PlatformModelConfig).platformCapabilities;
+}
+
+export function getPlatformRatioParamConfig(
+  model?: ModelConfig | null
+): ParamConfig | null {
+  const capabilities = getPlatformModelConfigCapabilities(model);
+  if (!model || !capabilities) {
+    return null;
+  }
+  const ratios = capabilities.supportedRatios.length
+    ? capabilities.supportedRatios
+    : ['1:1'];
+  return {
+    compatibleModels: [model.id],
+    defaultValue: ratios[0] ?? '1:1',
+    description: '平台模型支持的图片比例；提交前会按该比例报价。',
+    id: 'size',
+    label: '比例',
+    modelType: 'image',
+    options: ratios.map((ratio) => ({ label: ratio, value: ratio })),
+    shortLabel: '比例',
+    valueType: 'enum',
+  };
+}
+
+function formatPlatformOperationLabel(operationType: PlatformImageOperationType) {
+  switch (operationType) {
+    case 'text_to_image':
+      return '文生图';
+    case 'image_to_image':
+      return '图生图';
+    case 'inpaint':
+      return '局部重绘';
+    case 'reference_generate':
+      return '参考图生成';
+    case 'prompt_optimize':
+      return '提示词优化';
+  }
+}
+
+function formatCapabilitySummary(capabilities: PlatformImageModelCapabilities) {
+  const operations = capabilities.operationTypes
+    .map(formatPlatformOperationLabel)
+    .join(' / ');
+  const refs =
+    capabilities.maxReferenceImages > 0
+      ? `参考图≤${capabilities.maxReferenceImages}`
+      : '无参考图';
+  const batch = capabilities.supportsBatch
+    ? `批量≤${capabilities.maxBatchSize}`
+    : '首版单张';
+  return `${operations || '能力未知'} · ${capabilities.supportedRatios.join(
+    '/'
+  )} · ${refs} · ${batch}`;
+}
+
 export function mapPlatformImageModelToModelConfig(
   model: PlatformImageModelSummary
-): ModelConfig {
+): PlatformModelConfig {
   const providerKey = normalizePlatformProviderKey(model.providerKey);
-  const supportedRatios = model.capabilities?.supportedRatios ?? ['1:1'];
+  const capabilities = getPlatformCapabilitiesFromModel(model);
   const priceText =
     typeof model.price?.amount === 'number'
       ? `平台价 ${model.price.amount} 点/张`
       : '平台模型';
 
   return {
-    description: `${providerKey} · ${priceText}`,
+    description: `${providerKey} · ${priceText} · ${formatCapabilitySummary(
+      capabilities
+    )}`,
     id: model.modelKey,
     imageDefaults: {
-      aspectRatio: supportedRatios[0] ?? '1:1',
+      aspectRatio: capabilities.supportedRatios[0] ?? '1:1',
       height: 1024,
       width: 1024,
     },
     label: model.displayName || model.modelKey,
+    platformCapabilities: capabilities,
+    platformPriceText: priceText,
+    platformProviderKey: providerKey,
     selectionKey: `${PLATFORM_PROVIDER_PROFILE_PREFIX}${providerKey}::${model.modelKey}`,
     shortCode: platformModelShortCode(model.modelKey, providerKey),
     shortLabel: model.displayName || model.modelKey,
     sourceProfileId: `${PLATFORM_PROVIDER_PROFILE_PREFIX}${providerKey}`,
     sourceProfileName: `平台 ${providerKey}`,
-    tags: ['platform-image-task'],
+    tags: [
+      'platform-image-task',
+      ...capabilities.operationTypes.map(
+        (operationType) => `platform-op:${operationType}`
+      ),
+    ],
     type: 'image',
     vendor: inferPlatformVendor(providerKey),
   };

@@ -278,6 +278,18 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
       task.priceQuote && task.params.platformManagedImageTask
         ? `${task.priceQuote.amount}点`
         : null;
+    const platformOperationText =
+      task.params.platformManagedImageTask && task.params.platformOperationType
+        ? String(task.params.platformOperationType)
+        : null;
+    const platformCanvasSyncText =
+      task.params.platformManagedImageTask && task.canvasSyncStatus
+        ? `画布 ${task.canvasSyncStatus}`
+        : null;
+    const platformAssetText =
+      task.params.platformManagedImageTask && task.platformAssetIds?.length
+        ? `资产 ${task.platformAssetIds.length}`
+        : null;
 
     // 使用传入的布局模式，如果没有传入则使用内部的 ResizeObserver（兼容旧用法）
     const isCompactLayout =
@@ -754,6 +766,9 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                   {task.params.platformManagedImageTask && (
                     <Tag variant="outline">平台托管</Tag>
                   )}
+                  {platformOperationText && (
+                    <Tag variant="outline">{platformOperationText}</Tag>
+                  )}
 
                   {/* Model Tag */}
                   {platformModelKey && (
@@ -763,6 +778,12 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                   )}
                   {platformQuoteText && (
                     <Tag variant="outline">{platformQuoteText}</Tag>
+                  )}
+                  {platformCanvasSyncText && (
+                    <Tag variant="outline">{platformCanvasSyncText}</Tag>
+                  )}
+                  {platformAssetText && (
+                    <Tag variant="outline">{platformAssetText}</Tag>
                   )}
                   {isChatTask && videoAnalyzerTypeTag && (
                     <Tag variant="outline">{videoAnalyzerTypeTag}</Tag>

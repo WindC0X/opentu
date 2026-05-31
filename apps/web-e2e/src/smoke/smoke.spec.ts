@@ -34,9 +34,17 @@ async function installS07ImageTaskApiMocks(page: Page) {
               {
                 capabilities: {
                   maxBatchSize: 4,
+                  maxReferenceImages: 5,
                   operationType: 'text_to_image',
+                  operationTypes: [
+                    'text_to_image',
+                    'image_to_image',
+                    'inpaint',
+                    'reference_generate',
+                  ],
                   supportedRatios: ['1:1', '16:9', '9:16'],
                   supportsBatch: true,
+                  supportsMask: true,
                 },
                 displayName: 'Mock Image v1',
                 modelKey: 'mock-image-v1',
@@ -211,6 +219,30 @@ async function installS09AdminApiMocks(page: Page, role: 'admin' | 'user') {
           supportedSizes: [],
           supportsBatch: true,
           supportsMask: false,
+          supportsSeed: false,
+        },
+        {
+          maxBatchSize: 4,
+          maxReferenceImages: 5,
+          operationType: 'image_to_image',
+          supportLevel: 'native',
+          supported: true,
+          supportedRatios: ['1:1', '16:9'],
+          supportedSizes: [],
+          supportsBatch: true,
+          supportsMask: false,
+          supportsSeed: false,
+        },
+        {
+          maxBatchSize: 1,
+          maxReferenceImages: 5,
+          operationType: 'inpaint',
+          supportLevel: 'native',
+          supported: true,
+          supportedRatios: ['1:1'],
+          supportedSizes: [],
+          supportsBatch: false,
+          supportsMask: true,
           supportsSeed: false,
         },
       ],
@@ -582,6 +614,57 @@ async function installS09AdminApiMocks(page: Page, role: 'admin' | 'user') {
 }
 
 test.describe('@smoke 核心功能验证', () => {
+  test('S18 平台登录、点数、模型能力和参数入口可见', async ({ page }) => {
+    const home = new MengtuHomeApp(page);
+    await home.installApiMocks({
+      imageTaskEnabled: true,
+      quotaBalance: 200,
+      role: 'admin',
+    });
+    await home.gotoHome();
+
+    await expect(page.getByText('admin-smoke · admin')).toBeVisible();
+    await expect(page.getByText('200')).toBeVisible();
+    await page.getByRole('button', { name: '退出' }).click();
+    await expect(page.getByRole('heading', { name: '登录梦图' })).toBeVisible();
+    await page.getByLabel('账号').fill('admin-smoke');
+    await page.getByLabel('密码').fill('password');
+    await page.getByRole('button', { name: '登录' }).click();
+    await expect(
+      page.getByRole('heading', { exact: true, level: 1, name: '梦图' })
+    ).toBeVisible({ timeout: WORKBENCH_READY_TIMEOUT });
+
+    await home.createProjectAndOpenCanvas('Smoke S18 平台画布');
+    await expect(page.getByText('可用点数 200')).toBeVisible();
+    await expect(page.getByRole('button', { name: '管理后台' })).toBeVisible();
+    await expect(page.getByTestId('platform-capability-panel')).toContainText(
+      'GPT Image 2'
+    );
+    await expect(page.getByTestId('platform-capability-panel')).toContainText(
+      'Nano Banana Pro'
+    );
+    await page.locator('.board-host-svg').dblclick({
+      force: true,
+      position: { x: 320, y: 220 },
+    });
+    await expect(page.locator('.quick-creation-toolbar')).toBeVisible();
+
+    const paramsButton = page.getByTestId('parameters-dropdown-trigger');
+    await expect(paramsButton).toBeVisible();
+    await paramsButton.click();
+    await expect(
+      page.locator('.parameters-dropdown__menu').getByText('16:9', {
+        exact: true,
+      })
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('button', { name: '返回主页' }).click();
+    await expect(
+      page.getByRole('heading', { exact: true, level: 1, name: '梦图' })
+    ).toBeVisible({ timeout: WORKBENCH_READY_TIMEOUT });
+  });
+
   /**
    * 测试1：主画布所有组件和交互
    */
@@ -595,6 +678,11 @@ test.describe('@smoke 核心功能验证', () => {
     const drawnix = page.locator('.drawnix');
     await expect(drawnix).toBeVisible({ timeout: WORKBENCH_READY_TIMEOUT });
     await page.waitForTimeout(2000);
+
+    const aiInput = page.locator('[data-testid="ai-input-textarea"]');
+    await expect(aiInput).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
     
     // 2. 验证工具栏存在（必须通过）
     const handToolContainer = page.locator('div').filter({ has: page.getByRole('radio', { name: /手形工具/ }) }).first();
@@ -621,8 +709,9 @@ test.describe('@smoke 核心功能验证', () => {
     await page.waitForTimeout(100);
     
     // 4. AI 输入栏交互（必须通过）
-    const aiInput = page.locator('[data-testid="ai-input-textarea"]');
-    await expect(aiInput).toBeVisible();
+    await expect(aiInput).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
     await aiInput.fill('测试输入');
     await expect(aiInput).toHaveValue('测试输入');
 
@@ -710,8 +799,14 @@ test.describe('@smoke 核心功能验证', () => {
     }
     
     // 验证项目抽屉已打开（必须通过）
-    const projectTitle = page.getByRole('heading', { name: '项目', level: 3, exact: true });
-    await expect(projectTitle).toBeVisible();
+    const projectTitle = page.getByRole('heading', {
+      name: '项目',
+      level: 3,
+      exact: true,
+    });
+    await expect(projectTitle).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
     
     // === 工具箱 ===
     const openToolboxBtn = page.getByRole('button', { name: '打开工具箱' });
@@ -721,8 +816,14 @@ test.describe('@smoke 核心功能验证', () => {
     }
     
     // 验证工具箱已打开（必须通过）
-    const toolboxTitle = page.getByRole('heading', { name: '工具箱', level: 3, exact: true });
-    await expect(toolboxTitle).toBeVisible();
+    const toolboxTitle = page.getByRole('heading', {
+      name: '工具箱',
+      level: 3,
+      exact: true,
+    });
+    await expect(toolboxTitle).toBeVisible({
+      timeout: WORKBENCH_READY_TIMEOUT,
+    });
     
     // 抽屉打开验证通过即可（关闭功能在视觉测试中已覆盖）
     

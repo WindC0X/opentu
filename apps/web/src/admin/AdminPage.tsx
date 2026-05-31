@@ -40,6 +40,7 @@ import type {
   AdminOperationType,
   BackupStatus,
   BackupStatusSummary,
+  ModelCapability,
   ModelHealthStatus,
   ModelSupportLevel,
   ModelVisibility,
@@ -47,6 +48,7 @@ import type {
   PricePolicyUnit,
   ProviderStatus,
 } from './types';
+import type { ImageTaskSummary } from '../mengtu/types';
 import styles from './AdminPage.module.scss';
 
 type AdminStatus = 'loading' | 'ready' | 'denied' | 'error';
@@ -547,14 +549,29 @@ export function AdminPage({ onOpenHome }: AdminPageProps) {
         {activeSection === 'tasks' && (
           <Panel title="任务">
             <DataTable
-              headers={['任务', '状态', '操作', '用户', '模型', '错误']}
+              headers={[
+                '任务',
+                '状态',
+                '操作',
+                '用户',
+                '模型路径',
+                '供应商',
+                '点数',
+                '画布/资产',
+                '错误',
+              ]}
               rows={data.tasks.map((task) => [
                 shortId(task.id),
                 task.status,
                 task.operationType,
                 shortId(task.ownerUserId),
-                task.requestedModelKey,
-                task.failureMessage ?? '-',
+                `${task.requestedModelKey} -> ${task.actualModelKey ?? '-'}`,
+                `${task.requestedProvider} -> ${task.actualProvider ?? '-'}`,
+                formatTaskQuota(task),
+                `${task.canvasSyncStatus} / ${task.assets.length} asset(s)`,
+                task.failureCode || task.failureMessage
+                  ? `${task.failureCode ?? '-'} ${task.failureMessage ?? ''}`.trim()
+                  : '-',
               ])}
             />
           </Panel>
@@ -716,13 +733,28 @@ export function AdminPage({ onOpenHome }: AdminPageProps) {
               </form>
             </div>
             <DataTable
-              headers={['Key', '名称', '状态', '默认', '凭据', '更新']}
+              headers={[
+                'Key',
+                '名称',
+                '状态',
+                '默认',
+                '凭据',
+                '数据边界',
+                '更新',
+              ]}
               rows={data.providers.map((provider) => [
                 provider.providerKey,
                 provider.displayName,
                 provider.status,
                 provider.isDefault ? 'yes' : 'no',
                 provider.credential?.maskedValue ?? '-',
+                [
+                  provider.dataRegion,
+                  provider.dataRetentionPolicy,
+                  provider.dataTrainingUsage,
+                ]
+                  .filter(Boolean)
+                  .join(' / ') || '-',
                 formatTime(provider.updatedAt),
               ])}
             />
@@ -806,13 +838,23 @@ export function AdminPage({ onOpenHome }: AdminPageProps) {
               </button>
             </form>
             <DataTable
-              headers={['模型', '供应商', '可见性', '健康', '能力']}
+              headers={[
+                '模型',
+                '供应商',
+                '可见性',
+                '健康',
+                '能力',
+                '比例/分辨率',
+                '参考/批量/mask',
+              ]}
               rows={data.models.map((model) => [
                 model.modelKey,
                 model.providerKey ?? '-',
                 model.visibility,
                 model.healthStatus,
-                model.capabilities.map((capability) => capability.operationType).join(', '),
+                model.capabilities.map(formatCapabilityOperation).join(', '),
+                formatModelRatiosAndSizes(model.capabilities),
+                formatModelLimits(model.capabilities),
               ])}
             />
           </Panel>
@@ -1075,6 +1117,55 @@ function optionalText(value: string): string | undefined {
 
 function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+}
+
+function formatTaskQuota(task: ImageTaskSummary): string {
+  const settled =
+    typeof task.settledPriceAmount === 'number'
+      ? `settled ${task.settledPriceAmount}`
+      : 'unsettled';
+  return `quote ${task.quotedPriceAmount} v${task.priceVersion} / ${settled}`;
+}
+
+function formatCapabilityOperation(capability: ModelCapability): string {
+  const support = capability.supported
+    ? capability.supportLevel
+    : 'unsupported';
+  return `${capability.operationType}(${support})`;
+}
+
+function formatModelRatiosAndSizes(capabilities: ModelCapability[]): string {
+  const ratios = Array.from(
+    new Set(capabilities.flatMap((capability) => capability.supportedRatios))
+  );
+  const sizes = Array.from(
+    new Set(capabilities.flatMap((capability) => capability.supportedSizes))
+  );
+  return [
+    ratios.length ? `ratio ${ratios.join('/')}` : 'ratio -',
+    sizes.length ? `size ${sizes.join('/')}` : 'size not exposed',
+  ].join(' / ');
+}
+
+function formatModelLimits(capabilities: ModelCapability[]): string {
+  if (capabilities.length === 0) {
+    return '-';
+  }
+  const maxReferenceImages = Math.max(
+    0,
+    ...capabilities.map((capability) => capability.maxReferenceImages)
+  );
+  const maxBatchSize = Math.max(
+    1,
+    ...capabilities.map((capability) => capability.maxBatchSize)
+  );
+  const supportsMask = capabilities.some((capability) => capability.supportsMask);
+  const supportsBatch = capabilities.some(
+    (capability) => capability.supportsBatch
+  );
+  return `ref≤${maxReferenceImages} / batch${
+    supportsBatch ? `≤${maxBatchSize}` : '=1'
+  } / mask ${supportsMask ? 'yes' : 'no'}`;
 }
 
 function formatTime(value: string | null): string {

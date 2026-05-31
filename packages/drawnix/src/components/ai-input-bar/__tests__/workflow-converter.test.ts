@@ -159,6 +159,9 @@ describe('workflow-converter', () => {
         const workflow = convertDirectGenerationToWorkflow(params, referenceImages);
 
         expect(workflow.steps[0].args.referenceImages).toEqual(referenceImages);
+        expect(workflow.steps[0].args.platformOperationType).toBe(
+          'reference_generate'
+        );
       });
 
       it('单张图片带蒙版时应该创建 image_edit 请求参数', () => {
@@ -182,6 +185,7 @@ describe('workflow-converter', () => {
           referenceImages: ['https://example.com/source.png'],
           generationMode: 'image_edit',
           maskImage: '/__aitu_cache__/image/mask.png',
+          platformOperationType: 'inpaint',
         });
       });
 

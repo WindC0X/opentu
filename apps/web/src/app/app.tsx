@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Drawnix } from '@drawnix/drawnix';
-import { ArrowLeft, Coins, ShieldCheck, UserCircle } from 'lucide-react';
+import { ArrowLeft, Coins, LogOut, ShieldCheck, UserCircle } from 'lucide-react';
 import {
   WorkspaceService,
   migrateToWorkspace,
@@ -28,7 +28,7 @@ import { ErrorFallbackUI, safeModeReload, goToDebug } from './ErrorBoundary';
 import { AdminPage } from '../admin/AdminPage';
 import { collectAndDownloadErrorLog } from '../utils/error-log-exporter';
 import { ProjectHomePage } from '../mengtu/ProjectHomePage';
-import { getHomeSummary, listProjects } from '../mengtu/api-client';
+import { getHomeSummary, listProjects, logout } from '../mengtu/api-client';
 import type {
   CanvasBootContext,
   CanvasShellContext,
@@ -210,6 +210,15 @@ function saveCanvasShellContext(shellContext: CanvasShellContext): void {
   }
 }
 
+function clearMengtuCanvasSession(): void {
+  try {
+    sessionStorage.removeItem(MENGTU_CANVAS_BOOT_KEY);
+    sessionStorage.removeItem(MENGTU_CANVAS_SHELL_KEY);
+  } catch (error) {
+    console.warn('[App] Failed to clear Mengtu canvas session:', error);
+  }
+}
+
 function loadCanvasBootContext(): Partial<CanvasBootContext> | null {
   try {
     const raw = sessionStorage.getItem(MENGTU_CANVAS_BOOT_KEY);
@@ -387,6 +396,23 @@ export function App() {
     setRoute('home');
   }, []);
 
+  const handleLogout = useCallback(async () => {
+    try {
+      await logout();
+    } catch (error) {
+      console.warn('[App] Failed to logout Mengtu session:', error);
+    }
+    clearMengtuCanvasSession();
+    setCanvasShellContext(null);
+    setCanvasFeatureFlags(DEFAULT_CANVAS_FEATURE_FLAGS);
+    window.history.pushState(
+      { route: 'home' },
+      '',
+      buildInternalNavigationUrl('/')
+    );
+    setRoute('home');
+  }, []);
+
   if (route === 'home') {
     return (
       <ProjectHomePage
@@ -404,6 +430,7 @@ export function App() {
     <div className={styles.canvasRoute}>
       <CanvasPlatformShell
         context={canvasShellContext}
+        onLogout={handleLogout}
         onOpenAdmin={handleOpenAdmin}
         onOpenHome={handleOpenHome}
       />
@@ -416,10 +443,12 @@ export function App() {
 
 function CanvasPlatformShell({
   context,
+  onLogout,
   onOpenAdmin,
   onOpenHome,
 }: {
   context: CanvasShellContext | null;
+  onLogout: () => void;
   onOpenAdmin: () => void;
   onOpenHome: () => void;
 }) {
@@ -460,6 +489,14 @@ function CanvasPlatformShell({
             管理后台
           </button>
         )}
+        <button
+          className={styles.canvasShellButton}
+          onClick={() => void onLogout()}
+          type="button"
+        >
+          <LogOut size={16} />
+          退出
+        </button>
       </div>
     </header>
   );

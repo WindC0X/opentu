@@ -1654,14 +1654,12 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
             />
           </Suspense>
           {/* Quick Creation Toolbar - 双击空白区域显示的快捷工具栏 */}
-          {!platformMode && (
-            <QuickCreationToolbar
-              position={quickToolbarPosition}
-              visible={quickToolbarVisible}
-              onClose={() => setQuickToolbarVisible(false)}
-              onOpenMediaLibrary={handleOpenMediaLibrary}
-            />
-          )}
+          <QuickCreationToolbar
+            position={quickToolbarPosition}
+            visible={quickToolbarVisible}
+            onClose={() => setQuickToolbarVisible(false)}
+            onOpenMediaLibrary={handleOpenMediaLibrary}
+          />
           {/* 浮动文本输入 - 文本工具双击画布时出现 */}
           {inlineTextInput && (
             <div

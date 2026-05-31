@@ -305,6 +305,13 @@ export function convertDirectGenerationToWorkflow(
         if (hasMaskImage) {
           imageArgs.generationMode = 'image_edit';
           imageArgs.maskImage = selection.maskImage;
+          imageArgs.platformOperationType = 'inpaint';
+        } else if (referenceImages.length > 1) {
+          imageArgs.generationMode = 'image_to_image';
+          imageArgs.platformOperationType = 'reference_generate';
+        } else {
+          imageArgs.generationMode = 'image_to_image';
+          imageArgs.platformOperationType = 'image_to_image';
         }
       }
       // 透传额外参数（如 seedream_quality）

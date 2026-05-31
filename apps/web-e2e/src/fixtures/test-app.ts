@@ -14,6 +14,12 @@ type MockProject = {
   updatedAt: string;
 };
 
+type MengtuHomeMockOptions = {
+  imageTaskEnabled?: boolean;
+  quotaBalance?: number;
+  role?: 'admin' | 'user';
+};
+
 const mockEnvelope = <T>(data: T) => ({
   data,
   error: null,
@@ -43,14 +49,60 @@ export class MengtuHomeApp {
     });
   }
 
-  async installApiMocks() {
+  async installApiMocks(options: MengtuHomeMockOptions = {}) {
     const projects: MockProject[] = [];
+    let authenticated = true;
+    const role = options.role ?? 'user';
 
     await this.page.route('**/api/**', async (route) => {
       const request = route.request();
       const url = new URL(request.url());
       const path = url.pathname;
       const now = new Date('2026-05-26T00:00:00.000Z').toISOString();
+
+      if (request.method() === 'POST' && path === '/api/auth/login') {
+        authenticated = true;
+        await route.fulfill({
+          body: JSON.stringify(
+            mockEnvelope({
+              quota: {
+                accountId: 'quota_smoke',
+                balanceAmount: options.quotaBalance ?? 100,
+                heldAmount: 0,
+              },
+              user: {
+                id: role === 'admin' ? 'admin_smoke' : 'user_smoke',
+                role,
+                username: role === 'admin' ? 'admin-smoke' : 'smoke-user',
+              },
+            })
+          ),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+
+      if (request.method() === 'POST' && path === '/api/auth/logout') {
+        authenticated = false;
+        await route.fulfill({
+          body: JSON.stringify(mockEnvelope({ loggedOut: true })),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+
+      if (!authenticated) {
+        await route.fulfill({
+          body: JSON.stringify(
+            mockErrorEnvelope('UNAUTHENTICATED', 'Not authenticated')
+          ),
+          contentType: 'application/json',
+          status: 401,
+        });
+        return;
+      }
 
       if (request.method() === 'GET' && path === '/api/home/summary') {
         await route.fulfill({
@@ -62,15 +114,15 @@ export class MengtuHomeApp {
               },
               quota: {
                 accountId: 'quota_smoke',
-                balanceAmount: 100,
+                balanceAmount: options.quotaBalance ?? 100,
                 heldAmount: 0,
               },
               recentAssets: [],
               recentTasks: [],
               user: {
-                id: 'user_smoke',
-                role: 'user',
-                username: 'smoke-user',
+                id: role === 'admin' ? 'admin_smoke' : 'user_smoke',
+                role,
+                username: role === 'admin' ? 'admin-smoke' : 'smoke-user',
               },
             })
           ),
@@ -146,11 +198,45 @@ export class MengtuHomeApp {
               featureFlags: {
                 agentEnabled: false,
                 experimentalToolsEnabled: false,
-                imageTaskEnabled: false,
+                imageTaskEnabled: options.imageTaskEnabled ?? false,
               },
               models: [],
               opentuWorkspaceId: project.opentuWorkspaceId,
               projectId: project.id,
+            })
+          ),
+          contentType: 'application/json',
+          status: 200,
+        });
+        return;
+      }
+
+      if (request.method() === 'GET' && path === '/api/models') {
+        await route.fulfill({
+          body: JSON.stringify(
+            mockEnvelope({
+              models: [
+                {
+                  capabilities: {
+                    maxBatchSize: 4,
+                    maxReferenceImages: 5,
+                    operationType: 'text_to_image',
+                    operationTypes: [
+                      'text_to_image',
+                      'image_to_image',
+                      'inpaint',
+                      'reference_generate',
+                    ],
+                    supportedRatios: ['1:1', '16:9', '9:16'],
+                    supportsBatch: true,
+                    supportsMask: true,
+                  },
+                  displayName: 'GPT Image 2',
+                  modelKey: 'gpt-image-2',
+                  price: { amount: 10, unit: 'per_image', version: 2 },
+                  providerKey: 'grsai',
+                },
+              ],
             })
           ),
           contentType: 'application/json',

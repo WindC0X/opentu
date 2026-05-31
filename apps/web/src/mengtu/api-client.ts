@@ -26,6 +26,21 @@ export async function getHomeSummary(): Promise<HomeSummary> {
   return request<HomeSummary>('/api/home/summary');
 }
 
+export async function login(input: {
+  login: string;
+  password: string;
+}): Promise<Pick<HomeSummary, 'quota' | 'user'>> {
+  return request<Pick<HomeSummary, 'quota' | 'user'>>('/api/auth/login', {
+    body: JSON.stringify(input),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export async function logout(): Promise<void> {
+  await request<{ loggedOut: true }>('/api/auth/logout', { method: 'POST' });
+}
+
 export async function listProjects(): Promise<ProjectSummary[]> {
   const result = await request<{ projects: ProjectSummary[] }>('/api/projects');
   return result.projects;

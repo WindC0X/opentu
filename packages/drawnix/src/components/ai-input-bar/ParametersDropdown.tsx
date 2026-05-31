@@ -310,6 +310,8 @@ export const ParametersDropdown: React.FC<ParametersDropdownProps> = ({
                 onKeyDown={handleTriggerKeyDown}
                 type="button"
                 disabled={disabled}
+                aria-label={triggerLabel}
+                data-testid="parameters-dropdown-trigger"
               >
                 <span className="parameters-dropdown__label">{triggerLabel}</span>
                 <ChevronDown

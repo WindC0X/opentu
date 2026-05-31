@@ -77,6 +77,11 @@ import {
   resolvePlatformOperationType,
 } from '../../services/platform-image-task-service';
 import {
+  getPlatformModelConfigCapabilities,
+  getPlatformRatioParamConfig,
+  PLATFORM_IMAGE_MODEL_CANDIDATES,
+  type PlatformImageModelCapabilities,
+  type PlatformImageOperationType,
   usePlatformSelectableImageModels,
   useSelectableModels,
 } from '../../hooks/use-runtime-models';
@@ -90,6 +95,7 @@ import {
   getDefaultTextModel,
   getCompatibleParams,
   type ModelConfig,
+  type ParamConfig,
 } from '../../constants/model-config';
 import { getEffectiveVideoCompatibleParams } from '../../services/video-binding-utils';
 import { BUILT_IN_TOOLS } from '../../constants/built-in-tools';
@@ -437,6 +443,14 @@ function buildPlatformQuoteParams(
     ...parsedParams.selection.images,
     ...parsedParams.selection.graphics,
   ];
+  const operationType: PlatformImageOperationType = parsedParams.selection
+    .maskImage
+    ? 'inpaint'
+    : referenceImages.length > 1
+    ? 'reference_generate'
+    : referenceImages.length === 1
+    ? 'image_to_image'
+    : 'text_to_image';
 
   return {
     generationMode:
@@ -446,6 +460,7 @@ function buildPlatformQuoteParams(
     maskImage: parsedParams.selection.maskImage,
     model: parsedParams.modelId,
     modelRef: parsedParams.modelRef,
+    platformOperationType: operationType,
     prompt: parsedParams.prompt,
     referenceImages,
     size: parsedParams.size,
@@ -467,6 +482,176 @@ function formatPlatformOperationLabel(
     case 'prompt_optimize':
       return '提示词优化';
   }
+}
+
+function getPlatformOperationBadgeText(operationType: PlatformImageOperationType) {
+  return formatPlatformOperationLabel(operationType);
+}
+
+function getPlatformOperationPreview(
+  content: SelectedContent[],
+  capabilities: PlatformImageModelCapabilities | null
+): {
+  operationType: PlatformImageOperationType;
+  reason: string;
+  referenceCount: number;
+  supported: boolean;
+} {
+  const referenceCount = content.filter(
+    (item) =>
+      (item.type === 'image' || item.type === 'graphics') &&
+      typeof item.url === 'string' &&
+      item.url.length > 0
+  ).length;
+  const hasMask =
+    referenceCount === 1 &&
+    content.some(
+      (item) =>
+        item.type === 'image' &&
+        typeof item.maskImage === 'string' &&
+        item.maskImage.length > 0
+    );
+  const operationType: PlatformImageOperationType = hasMask
+    ? 'inpaint'
+    : referenceCount > 1
+    ? 'reference_generate'
+    : referenceCount === 1
+    ? 'image_to_image'
+    : 'text_to_image';
+
+  if (!capabilities) {
+    return {
+      operationType,
+      reason: '平台模型能力加载中',
+      referenceCount,
+      supported: false,
+    };
+  }
+  if (!capabilities.operationTypes.includes(operationType)) {
+    return {
+      operationType,
+      reason: `当前模型不支持${formatPlatformOperationLabel(operationType)}`,
+      referenceCount,
+      supported: false,
+    };
+  }
+  if (operationType === 'inpaint' && !capabilities.supportsMask) {
+    return {
+      operationType,
+      reason: '当前模型未声明 mask 能力',
+      referenceCount,
+      supported: false,
+    };
+  }
+  if (referenceCount > 0 && referenceCount > capabilities.maxReferenceImages) {
+    return {
+      operationType,
+      reason: `当前模型最多支持 ${capabilities.maxReferenceImages} 张参考图`,
+      referenceCount,
+      supported: false,
+    };
+  }
+  return {
+    operationType,
+    reason:
+      referenceCount > 0
+        ? `${referenceCount} 张画布图片将作为平台任务输入`
+        : '输入提示词后创建平台文生图任务',
+    referenceCount,
+    supported: true,
+  };
+}
+
+function buildPlatformCompatibleParams(model?: ModelConfig | null): ParamConfig[] {
+  const ratioParam = getPlatformRatioParamConfig(model);
+  return ratioParam ? [ratioParam] : [];
+}
+
+function PlatformCapabilityPanel({
+  capabilities,
+  configuredModelKeys,
+  model,
+  operationPreview,
+}: {
+  capabilities: PlatformImageModelCapabilities | null;
+  configuredModelKeys: Set<string>;
+  model: ModelConfig | null;
+  operationPreview: ReturnType<typeof getPlatformOperationPreview>;
+}) {
+  if (!model) {
+    return (
+      <div
+        className="ai-input-bar__platform-capability"
+        data-testid="platform-capability-panel"
+      >
+        <span>平台模型加载中</span>
+      </div>
+    );
+  }
+
+  const unavailableCandidates = PLATFORM_IMAGE_MODEL_CANDIDATES.filter(
+    (candidate) => !configuredModelKeys.has(candidate.modelKey)
+  );
+
+  return (
+    <div
+      className="ai-input-bar__platform-capability"
+      data-testid="platform-capability-panel"
+    >
+      <div className="ai-input-bar__platform-capability-row">
+        <strong>{model.label}</strong>
+        <span>{model.description || '平台模型'}</span>
+      </div>
+      {capabilities && (
+        <div className="ai-input-bar__platform-capability-chips">
+          {capabilities.operationTypes
+            .filter((operationType) => operationType !== 'prompt_optimize')
+            .map((operationType) => (
+              <span
+                className={
+                  operationPreview.operationType === operationType
+                    ? 'ai-input-bar__platform-chip ai-input-bar__platform-chip--active'
+                    : 'ai-input-bar__platform-chip'
+                }
+                key={operationType}
+              >
+                {getPlatformOperationBadgeText(operationType)}
+              </span>
+            ))}
+          <span className="ai-input-bar__platform-chip">
+            比例 {capabilities.supportedRatios.join('/')}
+          </span>
+          <span className="ai-input-bar__platform-chip">
+            批量 {capabilities.supportsBatch ? `≤${capabilities.maxBatchSize}` : '首版固定 1'}
+          </span>
+          <span className="ai-input-bar__platform-chip">
+            参考图 ≤{capabilities.maxReferenceImages}
+          </span>
+          <span className="ai-input-bar__platform-chip">
+            分辨率/质量 待后台字段
+          </span>
+        </div>
+      )}
+      <div
+        className={
+          operationPreview.supported
+            ? 'ai-input-bar__platform-operation'
+            : 'ai-input-bar__platform-operation ai-input-bar__platform-operation--blocked'
+        }
+      >
+        当前入口：{formatPlatformOperationLabel(operationPreview.operationType)} ·{' '}
+        {operationPreview.reason}
+      </div>
+      {unavailableCandidates.length > 0 && (
+        <div className="ai-input-bar__platform-candidates">
+          候选未配置：
+          {unavailableCandidates
+            .map((candidate) => `${candidate.displayName}（${candidate.reason}）`)
+            .join('；')}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const AI_INPUT_COLLAPSED_ROWS = 1;
@@ -1451,6 +1636,42 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const allContent = useMemo(() => {
       return [...uploadedContent, ...selectedContent];
     }, [uploadedContent, selectedContent]);
+    const selectedPlatformModel = useMemo(() => {
+      if (!platformMode) {
+        return null;
+      }
+      return (
+        findMatchingSelectableModel(
+          platformImageModelState.models,
+          selectedModel,
+          selectedModelRef
+        ) ||
+        platformImageModelState.models[0] ||
+        null
+      );
+    }, [
+      platformImageModelState.models,
+      platformMode,
+      selectedModel,
+      selectedModelRef,
+    ]);
+    const selectedPlatformCapabilities = useMemo(
+      () => getPlatformModelConfigCapabilities(selectedPlatformModel),
+      [selectedPlatformModel]
+    );
+    const configuredPlatformModelKeys = useMemo(
+      () => new Set(platformImageModelState.models.map((model) => model.id)),
+      [platformImageModelState.models]
+    );
+    const platformOperationPreview = useMemo(
+      () =>
+        getPlatformOperationPreview(allContent, selectedPlatformCapabilities),
+      [allContent, selectedPlatformCapabilities]
+    );
+    const platformCompatibleParams = useMemo(
+      () => buildPlatformCompatibleParams(selectedPlatformModel),
+      [selectedPlatformModel]
+    );
     const localImageMessages = useMemo(
       () => ({
         invalidFile:
@@ -1668,7 +1889,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
 
     // 预计算当前模型的可用参数，避免子组件内部 stale 计算
     const compatibleParams = useMemo(() => {
-      if (platformMode) return [];
+      if (platformMode) return platformCompatibleParams;
       if (generationType === 'agent') return [];
       if (generationType === 'video') {
         return getEffectiveVideoCompatibleParams(
@@ -1701,6 +1922,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     }, [
       generationType,
       platformMode,
+      platformCompatibleParams,
       selectedModel,
       selectedModelRef,
       selectedParams,
@@ -4736,7 +4958,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
         selectedModelRef?.profileId,
       ]
     );
-    const canGenerate = prompt.trim().length > 0 || allContent.length > 0;
+    const canGenerate =
+      (prompt.trim().length > 0 || allContent.length > 0) &&
+      (!platformMode ||
+        (Boolean(selectedPlatformModel) && platformOperationPreview.supported));
     const shouldHighlightInspirationSend =
       isInspirationSendGuideActive && canGenerate && !isSubmitting;
     const showInspirationBoard = !platformMode && isCanvasEmpty === true;
@@ -4814,6 +5039,14 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             'ai-input-bar__container--expanded': shouldKeepExpanded,
           })}
         >
+          {platformMode && (
+            <PlatformCapabilityPanel
+              capabilities={selectedPlatformCapabilities}
+              configuredModelKeys={configuredPlatformModelKeys}
+              model={selectedPlatformModel}
+              operationPreview={platformOperationPreview}
+            />
+          )}
           <div className="ai-input-bar__bottom-bar">
             <div className="ai-input-bar__bottom-start">
               <input
