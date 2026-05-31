@@ -38,6 +38,13 @@ export interface HomeSummary {
   };
 }
 
+export interface CanvasShellContext {
+  projectId: string;
+  projectTitle: string;
+  quota: QuotaSummary;
+  user: HomeSummary['user'];
+}
+
 export interface CanvasBootContext {
   canvasUrl: string;
   featureFlags: {

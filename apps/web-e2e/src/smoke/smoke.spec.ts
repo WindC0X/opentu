@@ -793,9 +793,9 @@ test.describe('@smoke 核心功能验证', () => {
   test('/admin：权限拒绝和供应商配置 happy path', async ({ page }) => {
     await installS09AdminApiMocks(page, 'user');
     await page.goto('/?sw=0');
-    await expect(page.getByRole('heading', { name: '梦图' })).toBeVisible({
-      timeout: WORKBENCH_READY_TIMEOUT,
-    });
+    await expect(
+      page.getByRole('heading', { exact: true, level: 1, name: '梦图' })
+    ).toBeVisible({ timeout: WORKBENCH_READY_TIMEOUT });
     await page.evaluate(() => {
       window.history.pushState({ route: 'admin' }, '', '/admin?sw=0');
       window.dispatchEvent(new PopStateEvent('popstate'));

@@ -324,6 +324,7 @@ export const Drawnix: React.FC<DrawnixProps> = ({
     useState(false);
   const [minimizedToolsBarEnabled, setMinimizedToolsBarEnabled] =
     useState(false);
+  const isMengtuPlatformMode = mengtuFeatureFlags?.imageTaskEnabled === true;
 
   // 使用 ref 来保存 board 的最新引用,避免 useCallback 依赖问题
   const boardRef = useRef<DrawnixBoard | null>(null);
@@ -697,24 +698,26 @@ export const Drawnix: React.FC<DrawnixProps> = ({
 
       // 显示错误提示
       MessagePlugin.error({
-        content:
-          credentialReason === 'missing'
-            ? '缺少 API Key，请先在设置中配置'
-            : 'API Key 无效或已过期，请重新配置',
+        content: isMengtuPlatformMode
+          ? '平台生成任务认证失败，请稍后重试或联系管理员'
+          : credentialReason === 'missing'
+          ? '缺少 API Key，请先在设置中配置'
+          : 'API Key 无效或已过期，请重新配置',
         duration: 5000,
       });
 
       console.error('[Drawnix] API auth error:', message);
 
-      // 打开设置对话框
-      setAppState((prev) => ({ ...prev, openSettings: true }));
+      if (!isMengtuPlatformMode) {
+        setAppState((prev) => ({ ...prev, openSettings: true }));
+      }
     };
 
     window.addEventListener(API_AUTH_ERROR_EVENT, handleApiAuthError);
     return () => {
       window.removeEventListener(API_AUTH_ERROR_EVENT, handleApiAuthError);
     };
-  }, []);
+  }, [isMengtuPlatformMode]);
 
   const plugins: PlaitPlugin[] = [
     withDraw,
@@ -1022,6 +1025,7 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
   currentBoardId,
   mengtuFeatureFlags,
 }) => {
+  const platformMode = mengtuFeatureFlags?.imageTaskEnabled === true;
   const { setAppState: updateState } = useDrawnix();
   const { chatDrawerRef } = useChatDrawer();
   const { language } = useI18n();
@@ -1615,6 +1619,7 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
             deferredFeaturesEnabled={toolWindowManagerEnabled}
             minimizedToolsBarEnabled={minimizedToolsBarEnabled}
             onEnableToolWindows={enableToolWindows}
+            platformMode={platformMode}
           />
           {canvasAudioPlayerEnabled && (
             <Suspense fallback={null}>
@@ -1622,7 +1627,7 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
             </Suspense>
           )}
 
-          <PopupToolbar></PopupToolbar>
+          <PopupToolbar platformMode={platformMode}></PopupToolbar>
           <LinkPopup></LinkPopup>
           <ClosePencilToolbar></ClosePencilToolbar>
           <PencilSettingsToolbar></PencilSettingsToolbar>
@@ -1633,7 +1638,7 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
               <TTDDialog container={containerRef.current}></TTDDialog>
             </Suspense>
           )}
-          {appState.openSettings && (
+          {appState.openSettings && !platformMode && (
             <Suspense fallback={null}>
               <SettingsDialog container={containerRef.current}></SettingsDialog>
             </Suspense>
@@ -1649,12 +1654,14 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
             />
           </Suspense>
           {/* Quick Creation Toolbar - 双击空白区域显示的快捷工具栏 */}
-          <QuickCreationToolbar
-            position={quickToolbarPosition}
-            visible={quickToolbarVisible}
-            onClose={() => setQuickToolbarVisible(false)}
-            onOpenMediaLibrary={handleOpenMediaLibrary}
-          />
+          {!platformMode && (
+            <QuickCreationToolbar
+              position={quickToolbarPosition}
+              visible={quickToolbarVisible}
+              onClose={() => setQuickToolbarVisible(false)}
+              onOpenMediaLibrary={handleOpenMediaLibrary}
+            />
+          )}
           {/* 浮动文本输入 - 文本工具双击画布时出现 */}
           {inlineTextInput && (
             <div

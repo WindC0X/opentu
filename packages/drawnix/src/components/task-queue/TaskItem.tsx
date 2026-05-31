@@ -216,6 +216,29 @@ function getStatusLabel(status: TaskStatus): string {
   }
 }
 
+function getPlatformTaskStatusLabel(task: Task): string | null {
+  if (task.params.platformManagedImageTask !== true) {
+    return null;
+  }
+
+  switch (task.platformStatus) {
+    case 'queued':
+      return '平台排队中';
+    case 'running':
+      return '平台生成中';
+    case 'persisting':
+      return '平台入库中';
+    case 'succeeded':
+      return '平台已完成';
+    case 'failed':
+      return '平台失败';
+    case 'cancelled':
+      return '平台已取消';
+    default:
+      return `平台${getStatusLabel(task.status)}`;
+  }
+}
+
 /**
  * TaskItem component - displays a single task
  */
@@ -246,6 +269,15 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
     const isFailed = task.status === TaskStatus.FAILED;
     const isCancelled = task.status === TaskStatus.CANCELLED;
     const isRetryable = isFailed || isCancelled;
+    const platformStatusLabel = getPlatformTaskStatusLabel(task);
+    const platformModelKey =
+      task.params.platformModelKey ||
+      task.priceQuote?.modelKey ||
+      task.params.model;
+    const platformQuoteText =
+      task.priceQuote && task.params.platformManagedImageTask
+        ? `${task.priceQuote.amount}点`
+        : null;
 
     // 使用传入的布局模式，如果没有传入则使用内部的 ResizeObserver（兼容旧用法）
     const isCompactLayout =
@@ -716,14 +748,21 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                     variant="light"
                     className="task-item__status-tag"
                   >
-                    {getStatusLabel(task.status)}
+                    {platformStatusLabel || getStatusLabel(task.status)}
                   </Tag>
 
+                  {task.params.platformManagedImageTask && (
+                    <Tag variant="outline">平台托管</Tag>
+                  )}
+
                   {/* Model Tag */}
-                  {task.params.model && (
+                  {platformModelKey && (
                     <Tag variant="outline" className="task-item__model-tag">
-                      {task.params.model}
+                      {platformModelKey}
                     </Tag>
+                  )}
+                  {platformQuoteText && (
+                    <Tag variant="outline">{platformQuoteText}</Tag>
                   )}
                   {isChatTask && videoAnalyzerTypeTag && (
                     <Tag variant="outline">{videoAnalyzerTypeTag}</Tag>
@@ -976,7 +1015,9 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
             {isFailed && task.error && (
               <div className="task-item__error">
                 <div className="task-item__error-message">
-                  {task.error.message}
+                  {task.params.platformManagedImageTask
+                    ? `平台任务失败：${task.error.message}`
+                    : task.error.message}
                   {task.error.details?.originalError && (
                     <HoverTip
                       content={

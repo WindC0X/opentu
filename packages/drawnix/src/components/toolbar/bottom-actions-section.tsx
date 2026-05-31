@@ -56,6 +56,8 @@ export interface BottomActionsSectionProps {
   taskPanelExpanded: boolean;
   /** 任务面板切换回调 */
   onTaskPanelToggle: () => void;
+  /** Mengtu platform mode hides local workspace/toolbox entries */
+  platformMode?: boolean;
 }
 
 export const BottomActionsSection: React.FC<BottomActionsSectionProps> = ({
@@ -65,6 +67,7 @@ export const BottomActionsSection: React.FC<BottomActionsSectionProps> = ({
   onToolboxDrawerToggle,
   taskPanelExpanded,
   onTaskPanelToggle,
+  platformMode = false,
 }) => {
   const { activeTasks, completedTasks, failedTasks } = useTaskQueue();
   const [acknowledgedFailedAt, setAcknowledgedFailedAt] = useState(
@@ -105,25 +108,26 @@ export const BottomActionsSection: React.FC<BottomActionsSectionProps> = ({
       {/* 反馈按钮 */}
       <FeedbackButton />
 
-      {/* 打开项目按钮 - 使用 ToolButton */}
-      <ToolButton
-        type="icon"
-        icon={<FolderIcon />}
-        aria-label={projectDrawerOpen ? '关闭项目' : '打开项目'}
-        tooltip={projectDrawerOpen ? '关闭项目' : '打开项目'}
-        tooltipPlacement="right"
-        selected={projectDrawerOpen}
-        visible={true}
-        data-track="toolbar_click_project_drawer"
-        data-testid="toolbar-project"
-        onPointerDown={(e) => {
-          e.event.stopPropagation();
-        }}
-        onClick={onProjectDrawerToggle}
-      />
+      {!platformMode && (
+        <ToolButton
+          type="icon"
+          icon={<FolderIcon />}
+          aria-label={projectDrawerOpen ? '关闭项目' : '打开项目'}
+          tooltip={projectDrawerOpen ? '关闭项目' : '打开项目'}
+          tooltipPlacement="right"
+          selected={projectDrawerOpen}
+          visible={true}
+          data-track="toolbar_click_project_drawer"
+          data-testid="toolbar-project"
+          onPointerDown={(e) => {
+            e.event.stopPropagation();
+          }}
+          onClick={onProjectDrawerToggle}
+        />
+      )}
 
       {/* 工具箱按钮 */}
-      {onToolboxDrawerToggle && (
+      {!platformMode && onToolboxDrawerToggle && (
         <ToolButton
           type="icon"
           icon={<ToolboxIcon />}

@@ -95,6 +95,14 @@ export type PlatformImageTaskOperationType =
   | 'reference_generate'
   | 'prompt_optimize';
 
+export type PlatformImageTaskStatus =
+  | 'queued'
+  | 'running'
+  | 'persisting'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
+
 export type PlatformImageTaskReferenceAssetRole =
   | 'general'
   | 'subject'
@@ -462,6 +470,8 @@ export interface Task {
   platformAssetIds?: string[];
   /** Platform canvas sync status mirrored for image result insertion */
   canvasSyncStatus?: PlatformImageTaskCanvasSyncStatus;
+  /** Raw Mengtu platform task status mirrored for user-facing status copy */
+  platformStatus?: PlatformImageTaskStatus;
   /** Platform quote frozen when the image task was created */
   priceQuote?: PlatformImageTaskPriceQuoteMirror;
   /** Provider/model route snapshot used to resume async tasks with the original supplier */

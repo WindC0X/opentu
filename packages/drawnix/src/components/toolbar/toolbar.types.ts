@@ -69,6 +69,11 @@ export interface UnifiedToolbarProps {
    * 确保工具窗口运行时已启用
    */
   onEnableToolWindows?: () => void;
+
+  /**
+   * Mengtu platform mode hides local-only OpenTu management entries.
+   */
+  platformMode?: boolean;
 }
 
 /**
@@ -113,4 +118,9 @@ export interface ToolbarSectionProps {
    * 确保工具窗口运行时已启用
    */
   onEnableToolWindows?: () => void;
+
+  /**
+   * Mengtu platform mode hides local-only OpenTu management entries.
+   */
+  platformMode?: boolean;
 }

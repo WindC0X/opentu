@@ -35,6 +35,7 @@ export const AppToolbar: React.FC<AppToolbarProps> = ({
   iconMode = false,
   onOpenBackupRestore,
   onOpenCloudSync,
+  platformMode = false,
 }) => {
   const board = useBoard();
   const { t } = useI18n();
@@ -87,27 +88,31 @@ export const AppToolbar: React.FC<AppToolbarProps> = ({
                 setAppMenuOpen(false);
               }}
             >
-              <OpenFile></OpenFile>
-              <SaveToFile></SaveToFile>
+              {!platformMode && <OpenFile></OpenFile>}
+              {!platformMode && <SaveToFile></SaveToFile>}
               <SaveAsImage></SaveAsImage>
               <CleanBoard></CleanBoard>
               <CleanInvalidLinks></CleanInvalidLinks>
               <MenuSeparator />
               <LanguageSwitcherMenu />
-              <BackupRestore onOpenBackupRestore={() => {
-                setAppMenuOpen(false);
-                onOpenBackupRestore?.();
-              }} />
-              <DebugPanel />
-              <CloudSync onOpenCloudSync={() => {
-                setAppMenuOpen(false);
-                onOpenCloudSync?.();
-              }} />
-              <Settings />
-              <MenuSeparator />
-              <QuickCommands />
-              <UserManual />
-              <VersionInfo />
+              {!platformMode && (
+                <>
+                  <BackupRestore onOpenBackupRestore={() => {
+                    setAppMenuOpen(false);
+                    onOpenBackupRestore?.();
+                  }} />
+                  <DebugPanel />
+                  <CloudSync onOpenCloudSync={() => {
+                    setAppMenuOpen(false);
+                    onOpenCloudSync?.();
+                  }} />
+                  <Settings />
+                  <MenuSeparator />
+                  <QuickCommands />
+                  <UserManual />
+                  <VersionInfo />
+                </>
+              )}
             </Menu>
           </PopoverContent>
         </Popover>

@@ -202,7 +202,11 @@ const cancelPopupToolbarFrame = (frameId: number) => {
   window.clearTimeout(frameId);
 };
 
-export const PopupToolbar = () => {
+export const PopupToolbar = ({
+  platformMode = false,
+}: {
+  platformMode?: boolean;
+}) => {
   const board = useBoard();
   // 过滤掉 WorkZone 元素，避免点击 WorkZone 时弹出 popup-toolbar
   const allSelectedElements = getSelectedElements(board);
@@ -1493,7 +1497,7 @@ export const PopupToolbar = () => {
                 onPointerUp={openAIImageGenerationDialog}
               />
             )}
-            {state.hasAIVideo && (
+            {!platformMode && state.hasAIVideo && (
               <ToolButton
                 className="ai-video"
                 key={6}

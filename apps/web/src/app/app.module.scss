@@ -1,3 +1,114 @@
 .canvasRoute {
+  display: flex;
+  flex-direction: column;
   height: 100vh;
+  min-height: 0;
+  background: #f5f7f8;
+}
+
+.canvasShell {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 52px;
+  padding: 8px 14px 8px 12px;
+  border-bottom: 1px solid #d9e2e8;
+  background: #ffffff;
+  color: #1d2630;
+  box-shadow: 0 2px 10px rgba(22, 35, 49, 0.08);
+}
+
+.canvasShellPrimary,
+.canvasShellMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.canvasShellPrimary {
+  flex: 1 1 auto;
+}
+
+.canvasShellMeta {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.canvasShellProject {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.canvasShellProject strong {
+  overflow: hidden;
+  max-width: min(420px, 42vw);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.canvasShellEyebrow {
+  color: #687783;
+  font-size: 11px;
+}
+
+.canvasShellPill,
+.canvasShellButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.canvasShellPill {
+  padding: 0 10px;
+  border: 1px solid #d9e2e8;
+  background: #f7fafb;
+  color: #344655;
+}
+
+.canvasShellButton {
+  padding: 0 10px;
+  border: 1px solid #c5d2da;
+  background: #ffffff;
+  color: #2f4858;
+  cursor: pointer;
+}
+
+.canvasShellButton:hover {
+  background: #edf4f6;
+}
+
+.canvasStage {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (max-width: 780px) {
+  .canvasShell {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .canvasShellPrimary,
+  .canvasShellMeta {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .canvasShellProject strong {
+    max-width: calc(100vw - 150px);
+  }
 }

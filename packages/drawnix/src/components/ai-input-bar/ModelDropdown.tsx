@@ -185,6 +185,8 @@ export interface ModelDropdownProps {
   providerProfilesOverride?: ProviderProfile[];
   /** 是否显示供应商管理入口 */
   showProviderAction?: boolean;
+  /** 是否在传入模型列表未命中时回退到内置模型配置 */
+  allowBuiltinFallback?: boolean;
 }
 
 /**
@@ -207,6 +209,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   onOpenChange,
   providerProfilesOverride,
   showProviderAction = true,
+  allowBuiltinFallback = true,
 }) => {
   const { setAppState } = useDrawnix();
   const { value: isOpen, setValue: setIsOpen } = useControllableState({
@@ -342,7 +345,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const currentModel =
     models.find(
       (model) => getModelKey(model) === (selectedSelectionKey || selectedModel)
-    ) || getModelConfig(selectedModel);
+    ) || (allowBuiltinFallback ? getModelConfig(selectedModel) : undefined);
   const currentProfile = useMemo(
     () => (currentModel ? getModelProfile(currentModel) : null),
     [currentModel, getModelProfile]
@@ -350,7 +353,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const shouldUseVendorIconInTrigger =
     currentModel?.vendor === ModelVendor.HAPPYHORSE;
   // 使用 shortCode 或默认简写
-  const shortCode = currentModel?.shortCode || 'img';
+  const shortCode = currentModel?.shortCode || (allowBuiltinFallback ? 'img' : 'mt');
   const isSearching = Boolean(searchQuery.trim());
 
   // 从 selectionKey 或 currentModel 推导当前选中模型所属的供应商 ID 和 vendor
@@ -594,6 +597,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
       setIsOpen,
       variant,
       currentModel,
+      allowBuiltinFallback,
       selectedModel,
       selectedProviderHint,
       selectedVendorHint,

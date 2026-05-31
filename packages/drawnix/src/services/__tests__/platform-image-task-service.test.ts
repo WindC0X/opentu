@@ -5,6 +5,7 @@ import {
   normalizePlatformImageRatio,
   optimizePlatformPrompt,
   platformImageTaskToTaskPatch,
+  quotePlatformImageTask,
   quotePlatformPromptOptimization,
   resolvePlatformOperationType,
   withPlatformImageTaskMetadata,
@@ -36,6 +37,76 @@ describe('platform image task service', () => {
       platformProjectId: 'project-1',
       platformRatio: '16:9',
     });
+  });
+
+  it('keeps the selected platform model when mirroring text-to-image tasks', () => {
+    window.history.pushState({}, '', '/canvas?project_id=project-1');
+
+    const payload = withPlatformImageTaskMetadata(
+      {
+        generationMode: 'text_to_image',
+        model: 'grsai-image-v1',
+        prompt: '一只小猫',
+        size: '16x9',
+      },
+      TaskType.IMAGE
+    );
+
+    expect(payload).toMatchObject({
+      platformManagedImageTask: true,
+      platformModelKey: 'grsai-image-v1',
+      platformOperationType: 'text_to_image',
+      platformProjectId: 'project-1',
+      platformRatio: '16:9',
+    });
+  });
+
+  it('creates platform image tasks with the selected model key', async () => {
+    window.history.pushState({}, '', '/canvas?project_id=project-1');
+    const requests: Array<{ body?: unknown; url: string }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ body: init?.body, url });
+        if (url === '/api/image-tasks') {
+          const body = JSON.parse(String(init?.body));
+          return jsonResponse({
+            task: {
+              ...createPlatformTaskFixture(),
+              actualModelKey: body.modelKey,
+              requestedModelKey: body.modelKey,
+            },
+          });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const task = await createPlatformImageTaskFromLocalTask({
+      createdAt: 1,
+      id: 'local-task-1',
+      params: withPlatformImageTaskMetadata(
+        {
+          generationMode: 'text_to_image',
+          model: 'grsai-image-v1',
+          prompt: '一只小猫',
+          size: '16x9',
+        },
+        TaskType.IMAGE
+      ),
+      status: TaskStatus.PENDING,
+      type: TaskType.IMAGE,
+      updatedAt: 1,
+    });
+
+    expect(JSON.parse(String(requests[0]?.body))).toMatchObject({
+      modelKey: 'grsai-image-v1',
+      operationType: 'text_to_image',
+      projectId: 'project-1',
+      ratio: '16:9',
+    });
+    expect(task.requestedModelKey).toBe('grsai-image-v1');
   });
 
   it('takes over image edit and reference-image tasks with S08 operation metadata', () => {
@@ -177,6 +248,55 @@ describe('platform image task service', () => {
   it('normalizes platform ratios without expanding the supported contract', () => {
     expect(normalizePlatformImageRatio('9x16')).toBe('9:16');
     expect(normalizePlatformImageRatio('4x3')).toBe('1:1');
+  });
+
+  it('quotes image tasks with the selected model key and platform parameters', async () => {
+    const requests: Array<{ body?: unknown; url: string }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ body: init?.body, url });
+        if (url === '/api/image-tasks/quote') {
+          return jsonResponse({
+            quote: {
+              amount: 40,
+              batchSize: 4,
+              modelKey: 'grsai-image-v1',
+              operationType: 'text_to_image',
+              pricePolicyId: 'price-policy-1',
+              priceVersion: 1,
+              ratio: '9:16',
+              referenceAssets: [],
+              sourceAssetId: null,
+              unit: 'points',
+            },
+          });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const quote = await quotePlatformImageTask({
+      batchSize: 4,
+      modelKey: 'grsai-image-v1',
+      operationType: 'text_to_image',
+      projectId: 'project-1',
+      ratio: '9:16',
+    });
+
+    expect(JSON.parse(String(requests[0]?.body))).toMatchObject({
+      batchSize: 4,
+      modelKey: 'grsai-image-v1',
+      operationType: 'text_to_image',
+      projectId: 'project-1',
+      ratio: '9:16',
+    });
+    expect(quote).toMatchObject({
+      amount: 40,
+      modelKey: 'grsai-image-v1',
+      operationType: 'text_to_image',
+    });
   });
 
   it('quotes and creates prompt optimization tasks through the Image Task API', async () => {

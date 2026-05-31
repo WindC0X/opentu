@@ -23,14 +23,22 @@ import {
   listProjects,
   openProjectCanvas,
 } from './api-client';
-import type { CanvasBootContext, HomeSummary, ProjectSummary } from './types';
+import type {
+  CanvasBootContext,
+  CanvasShellContext,
+  HomeSummary,
+  ProjectSummary,
+} from './types';
 import styles from './ProjectHomePage.module.scss';
 
 type HomeStatus = 'loading' | 'ready' | 'unauthenticated' | 'error';
 
 interface ProjectHomePageProps {
   onOpenAdmin?: () => void;
-  onOpenCanvas: (bootContext: CanvasBootContext) => void;
+  onOpenCanvas: (
+    bootContext: CanvasBootContext,
+    shellContext: CanvasShellContext
+  ) => void;
 }
 
 export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePageProps) {
@@ -108,7 +116,16 @@ export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePagePr
     setMessage('');
     setOpeningProjectId(project.id);
     try {
-      onOpenCanvas(await openProjectCanvas(project.id));
+      const bootContext = await openProjectCanvas(project.id);
+      if (!summary) {
+        throw new Error('缺少当前账号信息，无法进入画布');
+      }
+      onOpenCanvas(bootContext, {
+        projectId: project.id,
+        projectTitle: project.title,
+        quota: summary.quota,
+        user: summary.user,
+      });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '无法进入画布');
     } finally {
@@ -216,7 +233,7 @@ export function ProjectHomePage({ onOpenAdmin, onOpenCanvas }: ProjectHomePagePr
                   <div>
                     <h3 className={styles.projectTitle}>{project.title}</h3>
                     <span className={styles.projectMeta}>
-                      workspace {project.opentuWorkspaceId}
+                      画布工作区 {project.opentuWorkspaceId}
                     </span>
                   </div>
                   <button

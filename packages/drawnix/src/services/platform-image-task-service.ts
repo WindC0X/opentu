@@ -2,8 +2,9 @@ import {
   TaskStatus,
   TaskType,
   type GenerationParams,
-  type PlatformImageTaskOperationType,
   type PlatformImageTaskCanvasSyncStatus,
+  type PlatformImageTaskOperationType,
+  type PlatformImageTaskStatus,
   type PlatformImageTaskPriceQuoteMirror,
   type PlatformImageTaskReferenceAsset,
   type PlatformImageTaskReferenceAssetRole,
@@ -35,14 +36,6 @@ interface ApiEnvelope<T> {
   } | null;
   request_id: string;
 }
-
-export type PlatformImageTaskStatus =
-  | 'queued'
-  | 'running'
-  | 'persisting'
-  | 'succeeded'
-  | 'failed'
-  | 'cancelled';
 
 export interface PlatformImageTaskQuote
   extends PlatformImageTaskPriceQuoteMirror {
@@ -160,7 +153,10 @@ export function withPlatformImageTaskMetadata(
   return {
     ...params,
     platformManagedImageTask: true,
-    platformModelKey: DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
+    platformModelKey:
+      cleanString(params.platformModelKey) ??
+      cleanString(params.model) ??
+      DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
     platformOperationType: resolvePlatformOperationType(params),
     platformProjectId: projectId,
     platformRatio: normalizePlatformImageRatio(
@@ -230,6 +226,41 @@ export async function quotePlatformPromptOptimization(
         ratio: DEFAULT_PLATFORM_IMAGE_RATIO,
         referenceAssets: [],
         sourceAssetId: null,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }
+  );
+  return result.quote;
+}
+
+export async function quotePlatformImageTask(input: {
+  batchSize?: number;
+  maskAssetId?: string | null;
+  modelKey?: string;
+  operationType?: PlatformImageTaskOperationType;
+  projectId?: string;
+  ratio?: string;
+  referenceAssets?: PlatformImageTaskReferenceAsset[];
+  sourceAssetId?: string | null;
+}): Promise<PlatformImageTaskQuote> {
+  const projectId = input.projectId ?? getPlatformImageTaskProjectId();
+  if (!projectId) {
+    throw new Error('缺少平台项目 ID，无法预估图片任务点数');
+  }
+
+  const result = await request<{ quote: PlatformImageTaskQuote }>(
+    '/api/image-tasks/quote',
+    {
+      body: JSON.stringify({
+        batchSize: normalizePlatformBatchSize(input.batchSize),
+        maskAssetId: input.maskAssetId ?? null,
+        modelKey: input.modelKey || DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
+        operationType: input.operationType ?? 'text_to_image',
+        projectId,
+        ratio: normalizePlatformImageRatio(input.ratio),
+        referenceAssets: input.referenceAssets ?? [],
+        sourceAssetId: input.sourceAssetId ?? null,
       }),
       headers: { 'content-type': 'application/json' },
       method: 'POST',
@@ -334,6 +365,7 @@ export function platformImageTaskToTaskPatch(
       canvasSyncStatus: platformTask.canvasSyncStatus,
       error,
       platformAssetIds: platformTask.assets.map((asset) => asset.id),
+      platformStatus: platformTask.status,
       platformTaskId: platformTask.id,
       priceQuote: platformImageTaskToQuoteMirror(platformTask),
       progress: platformTaskStatusProgress(platformTask.status),
@@ -400,7 +432,10 @@ async function buildPlatformImageTaskCreatePayload(
     batchSize: 1,
     idempotencyKey: params.platformIdempotencyKey || `drawnix:${task.id}`,
     maskAssetId,
-    modelKey: params.platformModelKey || DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
+    modelKey:
+      cleanString(params.platformModelKey) ??
+      cleanString(params.model) ??
+      DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
     operationType,
     prompt: params.prompt,
     projectId,
@@ -431,6 +466,16 @@ export function resolvePlatformOperationType(
     return 'reference_generate';
   }
   return 'text_to_image';
+}
+
+function normalizePlatformBatchSize(value?: number): 1 | 2 | 4 {
+  if (value === 4) {
+    return 4;
+  }
+  if (value === 2) {
+    return 2;
+  }
+  return 1;
 }
 
 function collectPlatformImageInputs(

@@ -119,4 +119,33 @@ describe('queue-utils', () => {
       TaskType.IMAGE
     );
   });
+
+  it('passes selected image model into platform task metadata', () => {
+    window.history.pushState({}, '', '/canvas?project_id=project-1');
+    createQueueTask(
+      {
+        prompt: 'test prompt',
+      },
+      {},
+      {
+        ...createConfig(),
+        buildTaskPayload: () => ({
+          generationMode: 'text_to_image',
+          model: 'grsai-image-v1',
+          prompt: 'test prompt',
+          size: '1x1',
+        }),
+      }
+    );
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platformManagedImageTask: true,
+        platformModelKey: 'grsai-image-v1',
+        platformOperationType: 'text_to_image',
+        platformProjectId: 'project-1',
+      }),
+      TaskType.IMAGE
+    );
+  });
 });

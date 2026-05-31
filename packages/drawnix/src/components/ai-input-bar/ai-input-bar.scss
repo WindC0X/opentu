@@ -2293,6 +2293,14 @@ $ai-input-small-expanded-max-height: $ai-input-small-line-height * 6 +
   color: $orange-primary;
 }
 
+.ai-input-bar__platform-quote {
+  display: grid;
+  gap: 6px;
+  color: var(--color-gray-70, #4b5563);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 // 深色模式下的 Portal 下拉菜单样式（使用应用级别主题检测，与其他组件一致）
 :root[data-theme='dark'] {
   .generation-type-dropdown__menu,

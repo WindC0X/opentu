@@ -93,6 +93,13 @@ const MinimizedToolsBar = lazy(() =>
   }))
 );
 
+const PLATFORM_HIDDEN_BUTTON_IDS = new Set([
+  'ai-video',
+  'markdown-to-drawnix',
+  'mermaid-to-drawnix',
+  'mind',
+]);
+
 export enum PopupKey {
   'shape' = 'shape',
   'arrow' = 'arrow',
@@ -238,6 +245,7 @@ export const CreationToolbar: React.FC<ToolbarSectionProps> = ({
   onOpenMediaLibrary,
   minimizedToolsBarEnabled = false,
   onEnableToolWindows,
+  platformMode = false,
 }) => {
   const board = useBoard();
   const { appState, openDialog } = useDrawnix();
@@ -249,15 +257,24 @@ export const CreationToolbar: React.FC<ToolbarSectionProps> = ({
     loading: configLoading,
     reorderButton,
   } = useToolbarConfig();
+  const effectiveVisibleButtons = useMemo(
+    () =>
+      platformMode
+        ? visibleButtons.filter(
+            (button) => !PLATFORM_HIDDEN_BUTTON_IDS.has(button.id)
+          )
+        : visibleButtons,
+    [platformMode, visibleButtons]
+  );
 
   // 拖拽排序
   const { getDragProps } = useDragSort({
-    items: visibleButtons,
+    items: effectiveVisibleButtons,
     getId: (item) => item.id,
     onReorder: (fromIndex, toIndex) => {
       reorderButton(fromIndex, toIndex, true);
     },
-    enabled: embedded, // 只在嵌入模式下启用拖拽
+    enabled: embedded && !platformMode, // 平台模式不允许重排隐藏后的本地工具列表
   });
 
   // 统一的 Popover 状态管理
@@ -895,14 +912,14 @@ export const CreationToolbar: React.FC<ToolbarSectionProps> = ({
     <Stack.Row gap={1}>
       {/* 渲染可见按钮（按配置顺序） */}
       {!configLoading &&
-        visibleButtons.map((buttonConfig, index) =>
+        effectiveVisibleButtons.map((buttonConfig, index) =>
           embedded
             ? renderDraggableButton(buttonConfig.id, index, true, index)
             : renderButtonById(buttonConfig.id, index)
         )}
-      <MoreToolsButton embedded={embedded} />
+      {!platformMode && <MoreToolsButton embedded={embedded} />}
       {/* 最小化工具栏 - 显示最小化和常驻的工具图标 */}
-      {embedded && minimizedToolsBarEnabled && (
+      {embedded && !platformMode && minimizedToolsBarEnabled && (
         <Suspense fallback={null}>
           <MinimizedToolsBar ensureToolWindowsEnabled={onEnableToolWindows} />
         </Suspense>

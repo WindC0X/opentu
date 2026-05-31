@@ -72,9 +72,14 @@ import {
 } from '../../services/prompt-storage-service';
 import {
   optimizePlatformPrompt,
+  quotePlatformImageTask,
   quotePlatformPromptOptimization,
+  resolvePlatformOperationType,
 } from '../../services/platform-image-task-service';
-import { useSelectableModels } from '../../hooks/use-runtime-models';
+import {
+  usePlatformSelectableImageModels,
+  useSelectableModels,
+} from '../../hooks/use-runtime-models';
 import { getPinnedSelectableModel } from '../../utils/runtime-model-discovery';
 import {
   getDefaultAudioModel,
@@ -96,7 +101,11 @@ import { setCapabilitiesBoard } from '../../services/sw-capabilities/handler';
 import { initializeLongVideoChainService } from '../../services/long-video-chain-service';
 import { gridImageService } from '../../services/photo-wall';
 import type { MCPTaskResult } from '../../mcp/types';
-import { parseAIInput, type GenerationType } from '../../utils/ai-input-parser';
+import {
+  parseAIInput,
+  type GenerationType,
+  type ParsedGenerationParams,
+} from '../../utils/ai-input-parser';
 import {
   convertToWorkflow,
   convertSkillFlowToWorkflow,
@@ -419,6 +428,45 @@ function getPromptLengthBucket(length: number): string {
   if (length <= 300) return '101-300';
   if (length <= 800) return '301-800';
   return '800+';
+}
+
+function buildPlatformQuoteParams(
+  parsedParams: ParsedGenerationParams
+): GenerationParams {
+  const referenceImages = [
+    ...parsedParams.selection.images,
+    ...parsedParams.selection.graphics,
+  ];
+
+  return {
+    generationMode:
+      referenceImages.length > 0 || parsedParams.selection.maskImage
+        ? 'image_to_image'
+        : 'text_to_image',
+    maskImage: parsedParams.selection.maskImage,
+    model: parsedParams.modelId,
+    modelRef: parsedParams.modelRef,
+    prompt: parsedParams.prompt,
+    referenceImages,
+    size: parsedParams.size,
+  };
+}
+
+function formatPlatformOperationLabel(
+  operationType: ReturnType<typeof resolvePlatformOperationType>
+): string {
+  switch (operationType) {
+    case 'text_to_image':
+      return '文生图';
+    case 'image_to_image':
+      return '图生图';
+    case 'inpaint':
+      return '局部重绘';
+    case 'reference_generate':
+      return '参考图生成';
+    case 'prompt_optimize':
+      return '提示词优化';
+  }
 }
 
 const AI_INPUT_COLLAPSED_ROWS = 1;
@@ -787,7 +835,12 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     // console.log('[AIInputBar] Component rendering');
 
     const { language } = useI18n();
-    const imageModels = useSelectableModels('image');
+    const platformMode = featureFlags?.imageTaskEnabled === true;
+    const baseImageModels = useSelectableModels('image');
+    const platformImageModelState = usePlatformSelectableImageModels(platformMode);
+    const imageModels = platformMode
+      ? platformImageModelState.models
+      : baseImageModels;
     const videoModels = useSelectableModels('video');
     const audioModels = useSelectableModels('audio');
     const textModels = useSelectableModels('text');
@@ -1006,9 +1059,13 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       [resolvePersistedModelSelection]
     );
 
-    const agentEnabled = featureFlags?.agentEnabled ?? true;
+    const agentEnabled = platformMode
+      ? false
+      : featureFlags?.agentEnabled ?? true;
     const initialGenerationType =
-      !agentEnabled && initialPreferences.generationType === 'agent'
+      platformMode
+        ? 'image'
+        : !agentEnabled && initialPreferences.generationType === 'agent'
         ? 'image'
         : initialPreferences.generationType;
     const initialModelsForType =
@@ -1093,18 +1150,6 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const [generationType, setGenerationType] = useState<GenerationType>(
       initialGenerationType
     );
-    const platformPromptOptimization = useMemo(
-      () =>
-        generationType === 'image'
-          ? {
-              optimize: ({ prompt }: { prompt: string }) =>
-                optimizePlatformPrompt({ prompt }),
-              quote: ({ prompt }: { prompt: string }) =>
-                quotePlatformPromptOptimization({ prompt }),
-            }
-          : undefined,
-      [generationType]
-    );
     // 当前选中的 Skill ID（仅在 Agent 模式下有效）
     const [selectedSkillId, setSelectedSkillId] = useState<string>(
       initialPreferences.selectedSkillId || SKILL_AUTO_ID
@@ -1116,6 +1161,21 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const [selectedModelRef, setSelectedModelRef] = useState<ModelRef | null>(
       getModelRefFromConfig(initialSelectedModelConfig) ||
         initialSelectedModelRef
+    );
+    const platformPromptOptimization = useMemo(
+      () =>
+        platformMode && generationType === 'image'
+          ? {
+              optimize: ({ prompt }: { prompt: string }) =>
+                optimizePlatformPrompt({ modelKey: selectedModel, prompt }),
+              quote: ({ prompt }: { prompt: string }) =>
+                quotePlatformPromptOptimization({
+                  modelKey: selectedModel,
+                  prompt,
+                }),
+            }
+          : undefined,
+      [generationType, platformMode, selectedModel]
     );
     const [selectedAgentImageModel, setSelectedAgentImageModel] = useState(
       initialImageModel?.id || getDefaultImageModel()
@@ -1321,6 +1381,47 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const [selectedCount, setSelectedCount] = useState(
       initialPreferences.selectedCount
     );
+
+    useEffect(() => {
+      if (!platformMode) {
+        return;
+      }
+
+      if (generationType !== 'image') {
+        setGenerationType('image');
+      }
+      if (selectedCount !== 1) {
+        setSelectedCount(1);
+      }
+
+      const currentPlatformModel = findMatchingSelectableModel(
+        platformImageModelState.models,
+        selectedModel,
+        selectedModelRef
+      );
+      const nextPlatformModel =
+        currentPlatformModel || platformImageModelState.models[0];
+      if (!nextPlatformModel) {
+        return;
+      }
+
+      const currentSelectionKey = getSelectionKey(
+        selectedModel,
+        selectedModelRef
+      );
+      const nextSelectionKey = getSelectionKeyForModel(nextPlatformModel);
+      if (currentSelectionKey !== nextSelectionKey) {
+        setSelectedModel(nextPlatformModel.id);
+        setSelectedModelRef(getModelRefFromConfig(nextPlatformModel));
+      }
+    }, [
+      generationType,
+      platformImageModelState.models,
+      platformMode,
+      selectedCount,
+      selectedModel,
+      selectedModelRef,
+    ]);
 
     // 下拉菜单的打开状态（用于特殊符号触发）
     const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -1567,6 +1668,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
 
     // 预计算当前模型的可用参数，避免子组件内部 stale 计算
     const compatibleParams = useMemo(() => {
+      if (platformMode) return [];
       if (generationType === 'agent') return [];
       if (generationType === 'video') {
         return getEffectiveVideoCompatibleParams(
@@ -1596,7 +1698,13 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       }
 
       return params;
-    }, [generationType, selectedModel, selectedModelRef, selectedParams]);
+    }, [
+      generationType,
+      platformMode,
+      selectedModel,
+      selectedModelRef,
+      selectedParams,
+    ]);
 
     // 点击外部关闭输入框的展开状态
     useEffect(() => {
@@ -2971,6 +3079,42 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       setIsSubmitting(true);
 
       try {
+        if (platformMode) {
+          if (platformImageModelState.loading) {
+            MessagePlugin.warning('平台模型列表仍在加载，请稍后再试');
+            trackSubmitStatus('cancelled', {
+              reason: 'platform_models_loading',
+              submitMode: 'preflight',
+              submit_mode: 'preflight',
+            });
+            submitLockRef.current = false;
+            setIsSubmitting(false);
+            return;
+          }
+          if (platformImageModelState.error) {
+            MessagePlugin.error(platformImageModelState.error);
+            trackSubmitStatus('failed', {
+              reason: 'platform_models_failed',
+              submitMode: 'preflight',
+              submit_mode: 'preflight',
+            });
+            submitLockRef.current = false;
+            setIsSubmitting(false);
+            return;
+          }
+          if (platformImageModelState.models.length === 0) {
+            MessagePlugin.error('当前没有可用的平台图片模型');
+            trackSubmitStatus('failed', {
+              reason: 'platform_models_empty',
+              submitMode: 'preflight',
+              submit_mode: 'preflight',
+            });
+            submitLockRef.current = false;
+            setIsSubmitting(false);
+            return;
+          }
+        }
+
         // 检查 API key，如果没有配置则弹窗获取
         const currentRouteType =
           generationType === 'video'
@@ -2980,10 +3124,12 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             : generationType === 'text' || generationType === 'agent'
             ? 'text'
             : 'image';
-        const hasRouteCredentials = hasInvocationRouteCredentials(
-          currentRouteType,
-          selectedModelRef || selectedModel
-        );
+        const hasRouteCredentials =
+          platformMode ||
+          hasInvocationRouteCredentials(
+            currentRouteType,
+            selectedModelRef || selectedModel
+          );
         if (!hasRouteCredentials) {
           const newApiKey = await promptForApiKey();
           if (!newApiKey) {
@@ -3034,19 +3180,80 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
               : undefined,
         };
 
+        const platformSubmissionModel = platformMode
+          ? platformImageModelState.models.find(
+              (model) =>
+                getSelectionKeyForModel(model) ===
+                getSelectionKey(selectedModel, selectedModelRef)
+            ) || platformImageModelState.models[0]
+          : null;
+        const submissionModelId = platformSubmissionModel?.id || selectedModel;
+        const submissionModelRef =
+          getModelRefFromConfig(platformSubmissionModel) || selectedModelRef;
+
         // 解析输入内容，使用选中的模型和尺寸
         const parsedParams = parseAIInput(prompt, selection, {
-          modelId: selectedModel,
-          modelRef: selectedModelRef,
+          modelId: submissionModelId,
+          modelRef: submissionModelRef,
           params: selectedParams,
-          generationType: generationType,
-          count: selectedCount,
-          knowledgeContextRefs,
+          generationType: platformMode ? 'image' : generationType,
+          count: platformMode ? 1 : selectedCount,
+          knowledgeContextRefs: platformMode ? [] : knowledgeContextRefs,
           defaultModels:
             generationType === 'agent' ? agentMediaDefaultModels : undefined,
           defaultModelRefs:
             generationType === 'agent' ? agentMediaDefaultModelRefs : undefined,
         });
+
+        if (platformMode && parsedParams.generationType === 'image') {
+          const quoteParams = buildPlatformQuoteParams(parsedParams);
+          const operationType = resolvePlatformOperationType(quoteParams);
+          let quote: Awaited<ReturnType<typeof quotePlatformImageTask>>;
+          try {
+            quote = await quotePlatformImageTask({
+              batchSize: 1,
+              modelKey: parsedParams.modelId,
+              operationType,
+              ratio: parsedParams.size,
+            });
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : '平台任务报价失败';
+            MessagePlugin.error(message);
+            throw error;
+          }
+
+          const platformModel =
+            platformImageModelState.models.find(
+              (model) => model.id === parsedParams.modelId
+            ) || platformSubmissionModel;
+          const confirmed = await confirm({
+            cancelText: '取消',
+            confirmText: `确认生成（${quote.amount}点）`,
+            confirmTheme: 'primary',
+            children: (
+              <div className="ai-input-bar__platform-quote">
+                <div>模型：{platformModel?.label || quote.modelKey}</div>
+                <div>类型：{formatPlatformOperationLabel(operationType)}</div>
+                <div>预计消耗：{quote.amount} 点</div>
+                <div>数量：{quote.batchSize}</div>
+                <div>比例：{quote.ratio}</div>
+              </div>
+            ),
+            title: '确认平台生成任务',
+          });
+
+          if (!confirmed) {
+            trackSubmitStatus('cancelled', {
+              reason: 'platform_quote_declined',
+              submitMode: 'preflight',
+              submit_mode: 'preflight',
+            });
+            submitLockRef.current = false;
+            setIsSubmitting(false);
+            return;
+          }
+        }
 
         // 收集所有参考媒体（图片 + 图形 + 视频）
         const referenceImages = [...selection.images, ...selection.graphics];
@@ -3982,7 +4189,12 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       knowledgeContextRefs,
       agentMediaDefaultModels,
       agentMediaDefaultModelRefs,
+      confirm,
       generationType,
+      platformImageModelState.error,
+      platformImageModelState.loading,
+      platformImageModelState.models,
+      platformMode,
       selectedCount,
       bindCurrentImageAnchorTask,
       applyCurrentImageAnchorPresentationState,
@@ -4527,7 +4739,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const canGenerate = prompt.trim().length > 0 || allContent.length > 0;
     const shouldHighlightInspirationSend =
       isInspirationSendGuideActive && canGenerate && !isSubmitting;
-    const showInspirationBoard = isCanvasEmpty === true;
+    const showInspirationBoard = !platformMode && isCanvasEmpty === true;
     const hasSelectedTextContent = selectedContent.some(
       (item) => item.type === 'text' && item.text?.trim()
     );
@@ -4589,11 +4801,13 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
           onFrameSelected={handleFrameSelected}
         />
 
-        <InspirationBoard
-          isCanvasEmpty={showInspirationBoard}
-          onSelectPrompt={handleSelectInspirationPrompt}
-          onOpenPromptTool={handleOpenPromptToolFromInspiration}
-        />
+        {!platformMode && (
+          <InspirationBoard
+            isCanvasEmpty={showInspirationBoard}
+            onSelectPrompt={handleSelectInspirationPrompt}
+            onOpenPromptTool={handleOpenPromptToolFromInspiration}
+          />
+        )}
 
         <div
           className={classNames('ai-input-bar__container', {
@@ -4647,14 +4861,16 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 </button>
               </HoverTip>
 
-              <KnowledgeNoteContextSelector
-                value={knowledgeContextRefs}
-                onChange={handleKnowledgeContextChange}
-                disabled={isSubmitting}
-                language={language}
-                variant="compact"
-                className="ai-input-bar__knowledge-selector"
-              />
+              {!platformMode && (
+                <KnowledgeNoteContextSelector
+                  value={knowledgeContextRefs}
+                  onChange={handleKnowledgeContextChange}
+                  disabled={isSubmitting}
+                  language={language}
+                  variant="compact"
+                  className="ai-input-bar__knowledge-selector"
+                />
+              )}
             </div>
 
             <div className="ai-input-bar__bottom-controls">
@@ -4662,7 +4878,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 value={generationType}
                 onSelect={setGenerationType}
                 agentEnabled={agentEnabled}
-                disabled={isSubmitting}
+                disabled={isSubmitting || platformMode}
               />
 
               {/* Skill 下拉框：仅在 Agent 模式下显示 */}
@@ -4697,6 +4913,8 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 }
                 isOpen={modelDropdownOpen}
                 onOpenChange={handleModelDropdownChange}
+                showProviderAction={!platformMode}
+                allowBuiltinFallback={!platformMode}
               />
 
               {generationType === 'agent' &&
@@ -4788,7 +5006,8 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 />
               )}
 
-              {generationType !== 'agent' &&
+              {!platformMode &&
+                generationType !== 'agent' &&
                 generationType !== 'text' &&
                 generationType !== 'audio' && (
                   <CountDropdown

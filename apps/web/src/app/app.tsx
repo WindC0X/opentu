@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Drawnix } from '@drawnix/drawnix';
+import { ArrowLeft, Coins, ShieldCheck, UserCircle } from 'lucide-react';
 import {
   WorkspaceService,
   migrateToWorkspace,
@@ -27,7 +28,12 @@ import { ErrorFallbackUI, safeModeReload, goToDebug } from './ErrorBoundary';
 import { AdminPage } from '../admin/AdminPage';
 import { collectAndDownloadErrorLog } from '../utils/error-log-exporter';
 import { ProjectHomePage } from '../mengtu/ProjectHomePage';
-import type { CanvasBootContext } from '../mengtu/types';
+import { getHomeSummary, listProjects } from '../mengtu/api-client';
+import type {
+  CanvasBootContext,
+  CanvasShellContext,
+  ProjectSummary,
+} from '../mengtu/types';
 import styles from './app.module.scss';
 
 // 节流保存 viewport 的间隔（毫秒）
@@ -37,6 +43,7 @@ const VIEWPORT_SAVE_DEBOUNCE = 500;
 const BOARD_URL_PARAM = 'board';
 const BOARD_CLOSE_SNAPSHOT_KEY = 'aitu_board_close_snapshot_v1';
 const MENGTU_CANVAS_BOOT_KEY = 'mengtu_canvas_boot_context_v1';
+const MENGTU_CANVAS_SHELL_KEY = 'mengtu_canvas_shell_context_v1';
 
 // Global flag to prevent duplicate initialization in StrictMode
 let appInitialized = false;
@@ -192,15 +199,35 @@ function saveCanvasBootContext(bootContext: CanvasBootContext): void {
   }
 }
 
-function loadCanvasFeatureFlags(): MengtuCanvasFeatureFlags {
+function saveCanvasShellContext(shellContext: CanvasShellContext): void {
+  try {
+    sessionStorage.setItem(
+      MENGTU_CANVAS_SHELL_KEY,
+      JSON.stringify(shellContext)
+    );
+  } catch (error) {
+    console.warn('[App] Failed to save Mengtu canvas shell context:', error);
+  }
+}
+
+function loadCanvasBootContext(): Partial<CanvasBootContext> | null {
   try {
     const raw = sessionStorage.getItem(MENGTU_CANVAS_BOOT_KEY);
     if (!raw) {
-      return DEFAULT_CANVAS_FEATURE_FLAGS;
+      return null;
     }
-    const parsed = JSON.parse(raw) as Partial<CanvasBootContext>;
+    return JSON.parse(raw) as Partial<CanvasBootContext>;
+  } catch (error) {
+    console.warn('[App] Failed to load Mengtu canvas boot context:', error);
+    return null;
+  }
+}
+
+function loadCanvasFeatureFlags(): MengtuCanvasFeatureFlags {
+  try {
+    const parsed = loadCanvasBootContext();
     if (
-      typeof parsed.featureFlags?.agentEnabled !== 'boolean' ||
+      typeof parsed?.featureFlags?.agentEnabled !== 'boolean' ||
       typeof parsed.featureFlags?.experimentalToolsEnabled !== 'boolean' ||
       typeof parsed.featureFlags?.imageTaskEnabled !== 'boolean'
     ) {
@@ -213,10 +240,67 @@ function loadCanvasFeatureFlags(): MengtuCanvasFeatureFlags {
   }
 }
 
+function isCanvasShellContext(value: unknown): value is CanvasShellContext {
+  const candidate = value as Partial<CanvasShellContext> | null;
+  return (
+    Boolean(candidate) &&
+    typeof candidate?.projectId === 'string' &&
+    typeof candidate.projectTitle === 'string' &&
+    typeof candidate.user?.username === 'string' &&
+    (candidate.user.role === 'user' || candidate.user.role === 'admin') &&
+    typeof candidate.quota?.balanceAmount === 'number' &&
+    typeof candidate.quota?.heldAmount === 'number'
+  );
+}
+
+function loadCanvasShellContext(): CanvasShellContext | null {
+  try {
+    const raw = sessionStorage.getItem(MENGTU_CANVAS_SHELL_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    return isCanvasShellContext(parsed) ? parsed : null;
+  } catch (error) {
+    console.warn('[App] Failed to load Mengtu canvas shell context:', error);
+    return null;
+  }
+}
+
+function getProjectIdFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('project_id');
+}
+
+function getCanvasProjectId(): string | null {
+  return (
+    getProjectIdFromUrl() ||
+    loadCanvasBootContext()?.projectId ||
+    loadCanvasShellContext()?.projectId ||
+    null
+  );
+}
+
+function buildCanvasShellContext(
+  projectId: string,
+  projects: ProjectSummary[],
+  summary: Awaited<ReturnType<typeof getHomeSummary>>
+): CanvasShellContext {
+  const project = projects.find((candidate) => candidate.id === projectId);
+  return {
+    projectId,
+    projectTitle: project?.title || '当前项目',
+    quota: summary.quota,
+    user: summary.user,
+  };
+}
+
 export function App() {
   const [route, setRoute] = useState<AppRoute>(() => getCurrentRoute());
   const [canvasFeatureFlags, setCanvasFeatureFlags] =
     useState<MengtuCanvasFeatureFlags>(() => loadCanvasFeatureFlags());
+  const [canvasShellContext, setCanvasShellContext] =
+    useState<CanvasShellContext | null>(() => loadCanvasShellContext());
 
   useEffect(() => {
     const handlePopState = () => {
@@ -234,13 +318,55 @@ export function App() {
     }
   }, [route]);
 
-  const handleOpenCanvas = useCallback((bootContext: CanvasBootContext) => {
-    const canvasUrl = buildCanvasNavigationUrl(bootContext.canvasUrl);
-    saveCanvasBootContext(bootContext);
-    setCanvasFeatureFlags(bootContext.featureFlags);
-    window.history.pushState({ projectId: bootContext.projectId }, '', canvasUrl);
-    setRoute('canvas');
-  }, []);
+  useEffect(() => {
+    if (route !== 'canvas' || canvasShellContext) {
+      return;
+    }
+
+    let cancelled = false;
+    const projectId = getCanvasProjectId();
+    if (!projectId) {
+      return;
+    }
+
+    Promise.all([getHomeSummary(), listProjects()])
+      .then(([summary, projects]) => {
+        if (cancelled) {
+          return;
+        }
+        const nextContext = buildCanvasShellContext(
+          projectId,
+          projects,
+          summary
+        );
+        saveCanvasShellContext(nextContext);
+        setCanvasShellContext(nextContext);
+      })
+      .catch((error) => {
+        console.warn('[App] Failed to refresh Mengtu canvas shell:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canvasShellContext, route]);
+
+  const handleOpenCanvas = useCallback(
+    (bootContext: CanvasBootContext, shellContext: CanvasShellContext) => {
+      const canvasUrl = buildCanvasNavigationUrl(bootContext.canvasUrl);
+      saveCanvasBootContext(bootContext);
+      saveCanvasShellContext(shellContext);
+      setCanvasFeatureFlags(bootContext.featureFlags);
+      setCanvasShellContext(shellContext);
+      window.history.pushState(
+        { projectId: bootContext.projectId },
+        '',
+        canvasUrl
+      );
+      setRoute('canvas');
+    },
+    []
+  );
 
   const handleOpenAdmin = useCallback(() => {
     window.history.pushState(
@@ -257,6 +383,7 @@ export function App() {
       '',
       buildInternalNavigationUrl('/')
     );
+    setCanvasShellContext(null);
     setRoute('home');
   }, []);
 
@@ -275,8 +402,66 @@ export function App() {
 
   return (
     <div className={styles.canvasRoute}>
-      <CanvasApp featureFlags={canvasFeatureFlags} />
+      <CanvasPlatformShell
+        context={canvasShellContext}
+        onOpenAdmin={handleOpenAdmin}
+        onOpenHome={handleOpenHome}
+      />
+      <div className={styles.canvasStage}>
+        <CanvasApp featureFlags={canvasFeatureFlags} />
+      </div>
     </div>
+  );
+}
+
+function CanvasPlatformShell({
+  context,
+  onOpenAdmin,
+  onOpenHome,
+}: {
+  context: CanvasShellContext | null;
+  onOpenAdmin: () => void;
+  onOpenHome: () => void;
+}) {
+  const isAdmin = context?.user.role === 'admin';
+
+  return (
+    <header className={styles.canvasShell} aria-label="梦图画布平台信息">
+      <div className={styles.canvasShellPrimary}>
+        <button
+          className={styles.canvasShellButton}
+          onClick={onOpenHome}
+          type="button"
+        >
+          <ArrowLeft size={16} />
+          返回主页
+        </button>
+        <div className={styles.canvasShellProject}>
+          <span className={styles.canvasShellEyebrow}>当前项目</span>
+          <strong>{context?.projectTitle ?? '当前项目'}</strong>
+        </div>
+      </div>
+      <div className={styles.canvasShellMeta}>
+        <span className={styles.canvasShellPill}>
+          <UserCircle size={15} />
+          {context?.user.username ?? '未加载'} · {context?.user.role ?? 'user'}
+        </span>
+        <span className={styles.canvasShellPill}>
+          <Coins size={15} />
+          可用点数 {context?.quota.balanceAmount ?? 0}
+        </span>
+        {isAdmin && (
+          <button
+            className={styles.canvasShellButton}
+            onClick={onOpenAdmin}
+            type="button"
+          >
+            <ShieldCheck size={16} />
+            管理后台
+          </button>
+        )}
+      </div>
+    </header>
   );
 }
 
@@ -1051,7 +1236,7 @@ function CanvasApp({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          height: '100vh',
+          height: '100%',
         }}
       >
         加载中...
@@ -1060,7 +1245,7 @@ function CanvasApp({
   }
 
   return (
-    <div style={{ height: '100vh' }}>
+    <div style={{ height: '100%' }}>
       <Drawnix
         value={value.children}
         viewport={value.viewport}

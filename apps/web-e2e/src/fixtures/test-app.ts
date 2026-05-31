@@ -166,7 +166,7 @@ export class MengtuHomeApp {
   async gotoHome() {
     await this.page.goto('/?sw=0');
     await expect(
-      this.page.getByRole('heading', { name: '梦图' })
+      this.page.getByRole('heading', { exact: true, level: 1, name: '梦图' })
     ).toBeVisible({ timeout: 60000 });
   }
 

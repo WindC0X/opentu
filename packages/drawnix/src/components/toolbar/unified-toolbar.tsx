@@ -162,6 +162,7 @@ export const UnifiedToolbar: React.FC<UnifiedToolbarProps> = React.memo(
     deferredFeaturesEnabled = false,
     minimizedToolsBarEnabled = false,
     onEnableToolWindows,
+    platformMode = false,
   }) => {
     const [isIconMode, setIsIconMode] = useState(false);
     const [isMobileCollapsed, setIsMobileCollapsed] = useState(true); // 移动端默认收起
@@ -514,14 +515,15 @@ export const UnifiedToolbar: React.FC<UnifiedToolbarProps> = React.memo(
               >
                 <AIImageIcon />
               </button>
-              {/* AI 视频生成 */}
-              <button
-                className="unified-toolbar__collapsed-btn"
-                onClick={handleAIVideoClick}
-                aria-label="AI 视频生成"
-              >
-                <AIVideoIcon />
-              </button>
+              {!platformMode && (
+                <button
+                  className="unified-toolbar__collapsed-btn"
+                  onClick={handleAIVideoClick}
+                  aria-label="AI 视频生成"
+                >
+                  <AIVideoIcon />
+                </button>
+              )}
             </div>
           )}
 
@@ -543,6 +545,7 @@ export const UnifiedToolbar: React.FC<UnifiedToolbarProps> = React.memo(
               iconMode={isIconMode || isMobileOrTablet}
               onOpenBackupRestore={onOpenBackupRestore}
               onOpenCloudSync={onOpenCloudSync}
+              platformMode={platformMode}
             />
           </div>
 
@@ -555,8 +558,11 @@ export const UnifiedToolbar: React.FC<UnifiedToolbarProps> = React.memo(
                 iconMode={isIconMode || isMobileOrTablet}
                 onOpenMediaLibrary={onOpenMediaLibrary}
                 deferredFeaturesEnabled={deferredFeaturesEnabled}
-                minimizedToolsBarEnabled={minimizedToolsBarEnabled}
+                minimizedToolsBarEnabled={
+                  platformMode ? false : minimizedToolsBarEnabled
+                }
                 onEnableToolWindows={onEnableToolWindows}
+                platformMode={platformMode}
               />
             </div>
           </div>
@@ -570,6 +576,7 @@ export const UnifiedToolbar: React.FC<UnifiedToolbarProps> = React.memo(
               onToolboxDrawerToggle={onToolboxDrawerToggle}
               taskPanelExpanded={taskPanelExpanded}
               onTaskPanelToggle={handleTaskPanelToggle}
+              platformMode={platformMode}
             />
           </div>
         </Island>
