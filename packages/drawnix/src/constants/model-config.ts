@@ -89,6 +89,8 @@ export interface ParamConfig {
   shortLabel?: string;
   /** 描述信息 */
   description?: string;
+  /** 禁用原因（用于平台模型能力暂未声明但需要保留产品入口时展示） */
+  disabledReason?: string;
   /** 参数值类型 */
   valueType: ParamValueType;
   /** 可选值列表（enum 类型时使用） */

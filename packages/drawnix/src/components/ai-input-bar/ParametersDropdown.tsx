@@ -246,6 +246,9 @@ export const ParametersDropdown: React.FC<ParametersDropdownProps> = ({
 
       if (key === 'Enter' || key === ' ' || key === 'Tab') {
         // 选中当前高亮的选项
+        if (currentParam?.disabledReason) {
+          return true;
+        }
         const option = currentParam?.options?.[highlightedOptionIndex];
         if (option) {
           onParamChange(currentParam.id, option.value);
@@ -360,7 +363,11 @@ export const ParametersDropdown: React.FC<ParametersDropdownProps> = ({
                           <div className="parameters-dropdown__section-title">
                             {param.label}
                           </div>
-                          {param.valueType === 'enum' ? (
+                          {param.disabledReason ? (
+                            <div className="parameters-dropdown__disabled-reason">
+                              {param.disabledReason}
+                            </div>
+                          ) : param.valueType === 'enum' ? (
                             <div className="parameters-dropdown__options">
                               {param.options?.map((option, optionIndex) => {
                                 const isSelected =

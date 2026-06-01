@@ -77,8 +77,8 @@ import {
   resolvePlatformOperationType,
 } from '../../services/platform-image-task-service';
 import {
+  getPlatformCompatibleParams,
   getPlatformModelConfigCapabilities,
-  getPlatformRatioParamConfig,
   type PlatformImageModelCapabilities,
   type PlatformImageOperationType,
   usePlatformSelectableImageModels,
@@ -558,8 +558,32 @@ function getPlatformOperationPreview(
 }
 
 function buildPlatformCompatibleParams(model?: ModelConfig | null): ParamConfig[] {
-  const ratioParam = getPlatformRatioParamConfig(model);
-  return ratioParam ? [ratioParam] : [];
+  return getPlatformCompatibleParams(model);
+}
+
+function normalizePlatformSelectedCount(
+  count: number,
+  capabilities: PlatformImageModelCapabilities | null
+): 1 | 2 | 4 {
+  const maxBatchSize = capabilities?.supportsBatch
+    ? capabilities.maxBatchSize
+    : 1;
+  if (count >= 4 && maxBatchSize >= 4) {
+    return 4;
+  }
+  if (count >= 2 && maxBatchSize >= 2) {
+    return 2;
+  }
+  return 1;
+}
+
+function getPlatformCountOptions(
+  capabilities: PlatformImageModelCapabilities | null
+): number[] {
+  const maxBatchSize = capabilities?.supportsBatch
+    ? capabilities.maxBatchSize
+    : 1;
+  return [1, 2, 4].filter((count) => count <= maxBatchSize);
 }
 
 const PLATFORM_OPERATION_OPTIONS: PlatformImageOperationType[] = [
@@ -1598,9 +1622,6 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       if (generationType !== 'image') {
         setGenerationType('image');
       }
-      if (selectedCount !== 1) {
-        setSelectedCount(1);
-      }
 
       const currentPlatformModel = findMatchingSelectableModel(
         platformImageModelState.models,
@@ -1626,7 +1647,6 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       generationType,
       platformImageModelState.models,
       platformMode,
-      selectedCount,
       selectedModel,
       selectedModelRef,
     ]);
@@ -1682,6 +1702,24 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       () => getPlatformModelConfigCapabilities(selectedPlatformModel),
       [selectedPlatformModel]
     );
+    const platformCountOptions = useMemo(
+      () => getPlatformCountOptions(selectedPlatformCapabilities),
+      [selectedPlatformCapabilities]
+    );
+    const normalizedPlatformSelectedCount = useMemo(
+      () =>
+        normalizePlatformSelectedCount(
+          selectedCount,
+          selectedPlatformCapabilities
+        ),
+      [selectedCount, selectedPlatformCapabilities]
+    );
+    useEffect(() => {
+      if (!platformMode || selectedCount === normalizedPlatformSelectedCount) {
+        return;
+      }
+      setSelectedCount(normalizedPlatformSelectedCount);
+    }, [normalizedPlatformSelectedCount, platformMode, selectedCount]);
     const platformOperationPreview = useMemo(
       () =>
         getPlatformOperationPreview(allContent, selectedPlatformCapabilities),
@@ -3438,7 +3476,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
           modelRef: submissionModelRef,
           params: selectedParams,
           generationType: platformMode ? 'image' : generationType,
-          count: platformMode ? 1 : selectedCount,
+          count: platformMode ? normalizedPlatformSelectedCount : selectedCount,
           knowledgeContextRefs: platformMode ? [] : knowledgeContextRefs,
           defaultModels:
             generationType === 'agent' ? agentMediaDefaultModels : undefined,
@@ -3452,7 +3490,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
           let quote: Awaited<ReturnType<typeof quotePlatformImageTask>>;
           try {
             quote = await quotePlatformImageTask({
-              batchSize: 1,
+              batchSize: normalizedPlatformSelectedCount,
               modelKey: parsedParams.modelId,
               operationType,
               ratio: parsedParams.size,
@@ -4436,6 +4474,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       platformImageModelState.loading,
       platformImageModelState.models,
       platformMode,
+      normalizedPlatformSelectedCount,
       selectedCount,
       bindCurrentImageAnchorTask,
       applyCurrentImageAnchorPresentationState,
@@ -5258,14 +5297,14 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 />
               )}
 
-              {!platformMode &&
-                generationType !== 'agent' &&
+              {generationType !== 'agent' &&
                 generationType !== 'text' &&
                 generationType !== 'audio' && (
                   <CountDropdown
                     value={selectedCount}
                     onSelect={handleCountSelect}
                     disabled={isSubmitting}
+                    options={platformMode ? platformCountOptions : undefined}
                     isOpen={countDropdownOpen}
                     onOpenChange={handleCountDropdownChange}
                   />

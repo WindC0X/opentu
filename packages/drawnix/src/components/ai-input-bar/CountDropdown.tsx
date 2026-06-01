@@ -12,6 +12,7 @@ export interface CountDropdownProps {
   value: number;
   onSelect: (count: number) => void;
   disabled?: boolean;
+  options?: number[];
   /** 受控的打开状态 */
   isOpen?: boolean;
   /** 打开状态变化回调 */
@@ -24,6 +25,7 @@ export const CountDropdown: React.FC<CountDropdownProps> = ({
   value,
   onSelect,
   disabled = false,
+  options = COUNT_OPTIONS,
   isOpen: controlledIsOpen,
   onOpenChange,
 }) => {
@@ -40,10 +42,10 @@ export const CountDropdown: React.FC<CountDropdownProps> = ({
   // 打开时重置高亮索引到当前选中项
   useEffect(() => {
     if (isOpen) {
-      const currentIndex = COUNT_OPTIONS.indexOf(value);
+      const currentIndex = options.indexOf(value);
       setHighlightedIndex(currentIndex >= 0 ? currentIndex : 0);
     }
-  }, [isOpen, value]);
+  }, [isOpen, options, value]);
 
   // 确保高亮项可见
   useEffect(() => {
@@ -73,22 +75,25 @@ export const CountDropdown: React.FC<CountDropdownProps> = ({
     }
 
     if (key === 'ArrowDown') {
-      setHighlightedIndex(prev => (prev < COUNT_OPTIONS.length - 1 ? prev + 1 : 0));
+      setHighlightedIndex(prev => (prev < options.length - 1 ? prev + 1 : 0));
       return true;
     }
 
     if (key === 'ArrowUp') {
-      setHighlightedIndex(prev => (prev > 0 ? prev - 1 : COUNT_OPTIONS.length - 1));
+      setHighlightedIndex(prev => (prev > 0 ? prev - 1 : options.length - 1));
       return true;
     }
 
     if (key === 'Enter' || key === ' ' || key === 'Tab') {
-      handleSelect(COUNT_OPTIONS[highlightedIndex]);
+      const selectedOption = options[highlightedIndex];
+      if (selectedOption !== undefined) {
+        handleSelect(selectedOption);
+      }
       return true;
     }
 
     return false;
-  }, [highlightedIndex, handleSelect]);
+  }, [highlightedIndex, handleSelect, options]);
 
   return (
     <KeyboardDropdown
@@ -132,7 +137,7 @@ export const CountDropdown: React.FC<CountDropdownProps> = ({
                 <span>{language === 'zh' ? '生成数量 (↑↓ Tab)' : 'Count (↑↓ Tab)'}</span>
               </div>
               <div ref={listRef} className="count-dropdown__list">
-                {COUNT_OPTIONS.map((count, index) => {
+                {options.map((count, index) => {
                   const isSelected = count === value;
                   const isHighlighted = index === highlightedIndex;
                   return (

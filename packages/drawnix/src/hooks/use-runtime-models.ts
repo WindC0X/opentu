@@ -4,6 +4,7 @@ import {
   type ModelConfig,
   type ParamConfig,
   type ModelType,
+  getCompatibleParams,
 } from '../constants/model-config';
 import {
   getProfilePreferredModels,
@@ -75,6 +76,10 @@ const PLATFORM_PROVIDER_PROFILE_PREFIX = 'platform:';
 const DEFAULT_PLATFORM_OPERATION_TYPES: PlatformImageOperationType[] = [
   'text_to_image',
 ];
+const PLATFORM_PARAM_DISABLED_REASONS = {
+  quality: '当前模型暂未声明画质档位',
+  resolution: '当前模型暂未声明分辨率档位',
+} as const;
 
 function normalizePlatformProviderKey(providerKey: string): string {
   return providerKey.trim() || 'platform';
@@ -181,6 +186,139 @@ export function getPlatformRatioParamConfig(
     shortLabel: '比例',
     valueType: 'enum',
   };
+}
+
+function normalizeParamRatio(value?: string): string {
+  return value?.trim().replace('x', ':') || '';
+}
+
+function isPlatformSupportedRatio(
+  value: string | undefined,
+  supportedRatios: string[]
+): boolean {
+  const normalizedValue = normalizeParamRatio(value);
+  if (!normalizedValue || normalizedValue === 'auto') {
+    return false;
+  }
+  return supportedRatios.some(
+    (ratio) => normalizeParamRatio(ratio) === normalizedValue
+  );
+}
+
+function adaptPlatformRatioParam(
+  param: ParamConfig,
+  model: ModelConfig,
+  supportedRatios: string[]
+): ParamConfig {
+  const options = supportedRatios
+    .map((ratio) => {
+      const option = param.options?.find(
+        (candidate) =>
+          normalizeParamRatio(candidate.value) === normalizeParamRatio(ratio)
+      );
+      if (!option || !isPlatformSupportedRatio(option.value, supportedRatios)) {
+        return null;
+      }
+      return {
+        ...option,
+        label: ratio,
+      };
+    })
+    .filter((option): option is NonNullable<typeof option> => Boolean(option));
+
+  if (options.length === 0) {
+    return getPlatformRatioParamConfig(model) ?? param;
+  }
+
+  const defaultValue = options.some((option) => option.value === param.defaultValue)
+    ? param.defaultValue
+    : options[0]?.value;
+
+  return {
+    ...param,
+    compatibleModels: [model.id],
+    defaultValue,
+    description: '平台模型支持的图片比例；提交前会按该比例报价。',
+    label: '比例',
+    shortLabel: '比例',
+    options,
+  };
+}
+
+export function getPlatformCompatibleParams(
+  model?: ModelConfig | null
+): ParamConfig[] {
+  const capabilities = getPlatformModelConfigCapabilities(model);
+  if (!model || !capabilities) {
+    return [];
+  }
+
+  const staticParams = getCompatibleParams(model.id);
+  const supportedRatios = capabilities.supportedRatios.length
+    ? capabilities.supportedRatios
+    : ['1:1'];
+  const ratioParam = getPlatformRatioParamConfig(model);
+  const params: ParamConfig[] = [];
+
+  const staticRatioParam = staticParams.find((param) => param.id === 'size');
+  if (staticRatioParam) {
+    params.push(adaptPlatformRatioParam(staticRatioParam, model, supportedRatios));
+  } else if (ratioParam) {
+    params.push(ratioParam);
+  }
+
+  staticParams
+    .filter(
+      (param) =>
+        param.id !== 'size' &&
+        (param.id === 'resolution' ||
+          param.id === 'quality' ||
+          param.id === 'seedream_quality')
+    )
+    .forEach((param) => {
+      if (!params.some((existing) => existing.id === param.id)) {
+        params.push({
+          ...param,
+          compatibleModels: [model.id],
+        });
+      }
+    });
+
+  if (!params.some((param) => param.id === 'resolution')) {
+    params.push({
+      compatibleModels: [model.id],
+      defaultValue: 'default',
+      description: PLATFORM_PARAM_DISABLED_REASONS.resolution,
+      disabledReason: PLATFORM_PARAM_DISABLED_REASONS.resolution,
+      id: 'resolution',
+      label: '分辨率',
+      modelType: 'image',
+      options: [{ label: '随模型默认', value: 'default' }],
+      shortLabel: '分辨率',
+      valueType: 'enum',
+    });
+  }
+
+  if (
+    !params.some(
+      (param) => param.id === 'quality' || param.id === 'seedream_quality'
+    )
+  ) {
+    params.push({
+      compatibleModels: [model.id],
+      defaultValue: 'default',
+      description: PLATFORM_PARAM_DISABLED_REASONS.quality,
+      disabledReason: PLATFORM_PARAM_DISABLED_REASONS.quality,
+      id: 'quality',
+      label: '画质',
+      modelType: 'image',
+      options: [{ label: '随模型默认', value: 'default' }],
+      shortLabel: '画质',
+      valueType: 'enum',
+    });
+  }
+
+  return params;
 }
 
 function formatPlatformOperationLabel(operationType: PlatformImageOperationType) {

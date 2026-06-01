@@ -5,13 +5,14 @@
  * Subscribes to task updates and provides memoized selectors.
  */
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useMemo } from 'react';
 import { atom, useAtomValue, useSetAtom } from 'jotai';
 import { getDefaultStore } from 'jotai/vanilla';
 import { taskQueueService } from '../services/task-queue';
 import { taskStorageReader } from '../services/task-storage-reader';
 import { Task, TaskStatus, TaskType, TaskEvent, GenerationParams } from '../types/task.types';
 import { STORAGE_LIMITS } from '../constants/TASK_CONSTANTS';
+import { getCurrentPlatformProjectId } from '../services/asset-integration-service';
 
 /**
  * Return type for useTaskQueue hook
@@ -63,22 +64,30 @@ export interface UseTaskQueueReturn {
 
 const tasksAtom = atom<Task[]>([]);
 const isLoadingAtom = atom(true);
-const activeTasksAtom = atom((get) =>
-  get(tasksAtom).filter(
-    (task) => task.status === TaskStatus.PENDING || task.status === TaskStatus.PROCESSING
-  )
-);
-const completedTasksAtom = atom((get) =>
-  get(tasksAtom).filter((task) => task.status === TaskStatus.COMPLETED)
-);
-const failedTasksAtom = atom((get) =>
-  get(tasksAtom).filter((task) => task.status === TaskStatus.FAILED)
-);
-const cancelledTasksAtom = atom((get) =>
-  get(tasksAtom).filter((task) => task.status === TaskStatus.CANCELLED)
-);
-const totalCountAtom = atom((get) => get(tasksAtom).length);
-const loadedCountAtom = atom((get) => get(tasksAtom).length);
+
+function isPlatformManagedTask(task: Task): boolean {
+  return (
+    task.type === TaskType.IMAGE &&
+    task.params.platformManagedImageTask === true
+  );
+}
+
+export function filterScopedTaskQueueTasks(
+  tasks: Task[],
+  platformProjectId: string | null
+): Task[] {
+  return tasks.filter((task) => {
+    const isPlatformTask = isPlatformManagedTask(task);
+    if (!platformProjectId) {
+      return !isPlatformTask;
+    }
+    return (
+      isPlatformTask &&
+      task.params.platformProjectId === platformProjectId
+    );
+  });
+}
+
 const createTaskAtom = atom(
   null,
   (_get, set, payload: { params: GenerationParams; type: TaskType }): Task | null => {
@@ -274,12 +283,34 @@ export function useTaskActions() {
  */
 export function useTaskQueue(): UseTaskQueueReturn {
   const { tasks, isLoading } = useSharedTaskState();
-  const activeTasks = useAtomValue(activeTasksAtom);
-  const completedTasks = useAtomValue(completedTasksAtom);
-  const failedTasks = useAtomValue(failedTasksAtom);
-  const cancelledTasks = useAtomValue(cancelledTasksAtom);
-  const totalCount = useAtomValue(totalCountAtom);
-  const loadedCount = useAtomValue(loadedCountAtom);
+  const platformProjectId = getCurrentPlatformProjectId();
+  const scopedTasks = useMemo(
+    () => filterScopedTaskQueueTasks(tasks, platformProjectId),
+    [platformProjectId, tasks]
+  );
+  const activeTasks = useMemo(
+    () =>
+      scopedTasks.filter(
+        (task) =>
+          task.status === TaskStatus.PENDING ||
+          task.status === TaskStatus.PROCESSING
+      ),
+    [scopedTasks]
+  );
+  const completedTasks = useMemo(
+    () => scopedTasks.filter((task) => task.status === TaskStatus.COMPLETED),
+    [scopedTasks]
+  );
+  const failedTasks = useMemo(
+    () => scopedTasks.filter((task) => task.status === TaskStatus.FAILED),
+    [scopedTasks]
+  );
+  const cancelledTasks = useMemo(
+    () => scopedTasks.filter((task) => task.status === TaskStatus.CANCELLED),
+    [scopedTasks]
+  );
+  const totalCount = scopedTasks.length;
+  const loadedCount = scopedTasks.length;
   const isLoadingMore = false;
   const hasMore = false;
   const {
@@ -323,7 +354,7 @@ export function useTaskQueue(): UseTaskQueueReturn {
   }, [cancelTask]);
 
   return {
-    tasks,
+    tasks: scopedTasks,
     activeTasks,
     completedTasks,
     failedTasks,

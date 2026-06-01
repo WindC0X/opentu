@@ -299,6 +299,49 @@ describe('platform image task service', () => {
     });
   });
 
+  it('normalizes platform quote batch size to the platform contract', async () => {
+    const requests: Array<{ body?: unknown; url: string }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ body: init?.body, url });
+        if (url === '/api/image-tasks/quote') {
+          const body = JSON.parse(String(init?.body));
+          return jsonResponse({
+            quote: {
+              amount: 20,
+              batchSize: body.batchSize,
+              modelKey: 'grsai-image-v1',
+              operationType: 'text_to_image',
+              pricePolicyId: 'price-policy-1',
+              priceVersion: 1,
+              ratio: '1:1',
+              referenceAssets: [],
+              sourceAssetId: null,
+              unit: 'points',
+            },
+          });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      })
+    );
+
+    const quote = await quotePlatformImageTask({
+      batchSize: 3,
+      modelKey: 'grsai-image-v1',
+      operationType: 'text_to_image',
+      projectId: 'project-1',
+      ratio: '1:1',
+    });
+
+    expect(JSON.parse(String(requests[0]?.body))).toMatchObject({
+      batchSize: 1,
+      modelKey: 'grsai-image-v1',
+    });
+    expect(quote.batchSize).toBe(1);
+  });
+
   it('quotes and creates prompt optimization tasks through the Image Task API', async () => {
     window.history.pushState({}, '', '/canvas?project_id=project-1');
     const requests: Array<{ body?: unknown; url: string }> = [];
