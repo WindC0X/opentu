@@ -4,7 +4,6 @@ import {
   type ModelConfig,
   type ParamConfig,
   type ModelType,
-  getCompatibleParams,
 } from '../constants/model-config';
 import {
   getProfilePreferredModels,
@@ -30,9 +29,18 @@ export interface PlatformImageModelSummary {
     maxReferenceImages?: number;
     operationType?: PlatformImageOperationType;
     operationTypes?: PlatformImageOperationType[];
+    qualityOptions?: PlatformImageQuality[];
+    resolutionOptions?: PlatformImageResolution[];
+    supportedSizes?: string[];
     supportedRatios?: string[];
     supportsBatch?: boolean;
     supportsMask?: boolean;
+    defaultParams?: {
+      quality?: PlatformImageQuality;
+      ratio?: string;
+      resolution?: PlatformImageResolution;
+      size?: string;
+    };
   };
   displayName: string;
   modelKey: string;
@@ -50,11 +58,22 @@ export type PlatformImageOperationType =
   | 'inpaint'
   | 'reference_generate'
   | 'prompt_optimize';
+export type PlatformImageResolution = '1k' | '2k' | '4k';
+export type PlatformImageQuality = 'auto' | 'low' | 'medium' | 'high';
 
 export interface PlatformImageModelCapabilities {
+  defaultParams: {
+    quality?: PlatformImageQuality;
+    ratio: string;
+    resolution?: PlatformImageResolution;
+    size?: string;
+  };
   maxBatchSize: 1 | 2 | 4;
   maxReferenceImages: number;
   operationTypes: PlatformImageOperationType[];
+  qualityOptions: PlatformImageQuality[];
+  resolutionOptions: PlatformImageResolution[];
+  supportedSizes: string[];
   supportedRatios: string[];
   supportsBatch: boolean;
   supportsMask: boolean;
@@ -76,6 +95,17 @@ const PLATFORM_PROVIDER_PROFILE_PREFIX = 'platform:';
 const DEFAULT_PLATFORM_OPERATION_TYPES: PlatformImageOperationType[] = [
   'text_to_image',
 ];
+const PLATFORM_RESOLUTION_LABELS: Record<PlatformImageResolution, string> = {
+  '1k': '1K',
+  '2k': '2K',
+  '4k': '4K',
+};
+const PLATFORM_QUALITY_LABELS: Record<PlatformImageQuality, string> = {
+  auto: '自动',
+  high: '高清',
+  low: '省点',
+  medium: '标准',
+};
 const PLATFORM_PARAM_DISABLED_REASONS = {
   quality: '当前模型暂未声明画质档位',
   resolution: '当前模型暂未声明分辨率档位',
@@ -144,13 +174,23 @@ export function getPlatformCapabilitiesFromModel(
   if ('platformCapabilities' in model) {
     return model.platformCapabilities;
   }
+  const supportedRatios = model.capabilities?.supportedRatios?.length
+    ? model.capabilities.supportedRatios
+    : ['1:1'];
   return {
+    defaultParams: {
+      quality: model.capabilities?.defaultParams?.quality,
+      ratio: model.capabilities?.defaultParams?.ratio ?? supportedRatios[0] ?? '1:1',
+      resolution: model.capabilities?.defaultParams?.resolution,
+      size: model.capabilities?.defaultParams?.size,
+    },
     maxBatchSize: normalizePlatformBatchSize(model.capabilities?.maxBatchSize),
     maxReferenceImages: Math.max(0, model.capabilities?.maxReferenceImages ?? 0),
     operationTypes: normalizePlatformOperationTypes(model),
-    supportedRatios: model.capabilities?.supportedRatios?.length
-      ? model.capabilities.supportedRatios
-      : ['1:1'],
+    qualityOptions: model.capabilities?.qualityOptions ?? [],
+    resolutionOptions: model.capabilities?.resolutionOptions ?? [],
+    supportedRatios,
+    supportedSizes: model.capabilities?.supportedSizes ?? [],
     supportsBatch: Boolean(model.capabilities?.supportsBatch),
     supportsMask: Boolean(model.capabilities?.supportsMask),
   };
@@ -188,63 +228,6 @@ export function getPlatformRatioParamConfig(
   };
 }
 
-function normalizeParamRatio(value?: string): string {
-  return value?.trim().replace('x', ':') || '';
-}
-
-function isPlatformSupportedRatio(
-  value: string | undefined,
-  supportedRatios: string[]
-): boolean {
-  const normalizedValue = normalizeParamRatio(value);
-  if (!normalizedValue || normalizedValue === 'auto') {
-    return false;
-  }
-  return supportedRatios.some(
-    (ratio) => normalizeParamRatio(ratio) === normalizedValue
-  );
-}
-
-function adaptPlatformRatioParam(
-  param: ParamConfig,
-  model: ModelConfig,
-  supportedRatios: string[]
-): ParamConfig {
-  const options = supportedRatios
-    .map((ratio) => {
-      const option = param.options?.find(
-        (candidate) =>
-          normalizeParamRatio(candidate.value) === normalizeParamRatio(ratio)
-      );
-      if (!option || !isPlatformSupportedRatio(option.value, supportedRatios)) {
-        return null;
-      }
-      return {
-        ...option,
-        label: ratio,
-      };
-    })
-    .filter((option): option is NonNullable<typeof option> => Boolean(option));
-
-  if (options.length === 0) {
-    return getPlatformRatioParamConfig(model) ?? param;
-  }
-
-  const defaultValue = options.some((option) => option.value === param.defaultValue)
-    ? param.defaultValue
-    : options[0]?.value;
-
-  return {
-    ...param,
-    compatibleModels: [model.id],
-    defaultValue,
-    description: '平台模型支持的图片比例；提交前会按该比例报价。',
-    label: '比例',
-    shortLabel: '比例',
-    options,
-  };
-}
-
 export function getPlatformCompatibleParams(
   model?: ModelConfig | null
 ): ParamConfig[] {
@@ -253,39 +236,48 @@ export function getPlatformCompatibleParams(
     return [];
   }
 
-  const staticParams = getCompatibleParams(model.id);
   const supportedRatios = capabilities.supportedRatios.length
     ? capabilities.supportedRatios
     : ['1:1'];
-  const ratioParam = getPlatformRatioParamConfig(model);
   const params: ParamConfig[] = [];
 
-  const staticRatioParam = staticParams.find((param) => param.id === 'size');
-  if (staticRatioParam) {
-    params.push(adaptPlatformRatioParam(staticRatioParam, model, supportedRatios));
-  } else if (ratioParam) {
-    params.push(ratioParam);
-  }
+  params.push({
+    compatibleModels: [model.id],
+    defaultValue: normalizePlatformRatioOptionValue(
+      capabilities.defaultParams.ratio || supportedRatios[0] || '1:1'
+    ),
+    description: '平台模型支持的图片比例；提交前会按该比例报价。',
+    id: 'size',
+    label: '比例',
+    modelType: 'image',
+    options: supportedRatios.map((ratio) => ({
+      label: ratio,
+      value: normalizePlatformRatioOptionValue(ratio),
+    })),
+    shortLabel: '比例',
+    valueType: 'enum',
+  });
 
-  staticParams
-    .filter(
-      (param) =>
-        param.id !== 'size' &&
-        (param.id === 'resolution' ||
-          param.id === 'quality' ||
-          param.id === 'seedream_quality')
-    )
-    .forEach((param) => {
-      if (!params.some((existing) => existing.id === param.id)) {
-        params.push({
-          ...param,
-          compatibleModels: [model.id],
-        });
-      }
-    });
+  params.push(buildPlatformResolutionParam(model, capabilities));
+  params.push(buildPlatformQualityParam(model, capabilities));
 
-  if (!params.some((param) => param.id === 'resolution')) {
-    params.push({
+  return params;
+}
+
+function normalizePlatformRatioOptionValue(ratio: string): string {
+  return ratio.replace(':', 'x');
+}
+
+function buildPlatformResolutionParam(
+  model: ModelConfig,
+  capabilities: PlatformImageModelCapabilities
+): ParamConfig {
+  const options = capabilities.resolutionOptions.map((resolution) => ({
+    label: PLATFORM_RESOLUTION_LABELS[resolution],
+    value: resolution,
+  }));
+  if (options.length === 0) {
+    return {
       compatibleModels: [model.id],
       defaultValue: 'default',
       description: PLATFORM_PARAM_DISABLED_REASONS.resolution,
@@ -296,15 +288,31 @@ export function getPlatformCompatibleParams(
       options: [{ label: '随模型默认', value: 'default' }],
       shortLabel: '分辨率',
       valueType: 'enum',
-    });
+    };
   }
+  return {
+    compatibleModels: [model.id],
+    defaultValue: capabilities.defaultParams.resolution ?? options[0]?.value,
+    description: '平台模型声明的输出分辨率。',
+    id: 'resolution',
+    label: '分辨率',
+    modelType: 'image',
+    options,
+    shortLabel: '分辨率',
+    valueType: 'enum',
+  };
+}
 
-  if (
-    !params.some(
-      (param) => param.id === 'quality' || param.id === 'seedream_quality'
-    )
-  ) {
-    params.push({
+function buildPlatformQualityParam(
+  model: ModelConfig,
+  capabilities: PlatformImageModelCapabilities
+): ParamConfig {
+  const options = capabilities.qualityOptions.map((quality) => ({
+    label: PLATFORM_QUALITY_LABELS[quality],
+    value: quality,
+  }));
+  if (options.length === 0) {
+    return {
       compatibleModels: [model.id],
       defaultValue: 'default',
       description: PLATFORM_PARAM_DISABLED_REASONS.quality,
@@ -315,10 +323,19 @@ export function getPlatformCompatibleParams(
       options: [{ label: '随模型默认', value: 'default' }],
       shortLabel: '画质',
       valueType: 'enum',
-    });
+    };
   }
-
-  return params;
+  return {
+    compatibleModels: [model.id],
+    defaultValue: capabilities.defaultParams.quality ?? options[0]?.value,
+    description: '平台模型声明的画质档位。',
+    id: 'quality',
+    label: '画质',
+    modelType: 'image',
+    options,
+    shortLabel: '画质',
+    valueType: 'enum',
+  };
 }
 
 function formatPlatformOperationLabel(operationType: PlatformImageOperationType) {
@@ -346,10 +363,20 @@ function formatCapabilitySummary(capabilities: PlatformImageModelCapabilities) {
       : '无参考图';
   const batch = capabilities.supportsBatch
     ? `批量≤${capabilities.maxBatchSize}`
-    : '首版单张';
+    : '单张';
+  const resolution = capabilities.resolutionOptions.length
+    ? `分辨率 ${capabilities.resolutionOptions
+        .map((option) => PLATFORM_RESOLUTION_LABELS[option])
+        .join('/')}`
+    : '默认分辨率';
+  const quality = capabilities.qualityOptions.length
+    ? `画质 ${capabilities.qualityOptions
+        .map((option) => PLATFORM_QUALITY_LABELS[option])
+        .join('/')}`
+    : '默认画质';
   return `${operations || '能力未知'} · ${capabilities.supportedRatios.join(
     '/'
-  )} · ${refs} · ${batch}`;
+  )} · ${resolution} · ${quality} · ${refs} · ${batch}`;
 }
 
 export function mapPlatformImageModelToModelConfig(

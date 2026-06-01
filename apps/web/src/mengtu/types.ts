@@ -63,6 +63,8 @@ export type ImageTaskOperationType =
   | 'inpaint'
   | 'reference_generate'
   | 'prompt_optimize';
+export type ImageTaskResolution = '1k' | '2k' | '4k';
+export type ImageTaskQuality = 'auto' | 'low' | 'medium' | 'high';
 
 export type AssetReferenceRole =
   | 'general'
@@ -83,9 +85,18 @@ export interface ImageModelSummary {
     maxReferenceImages: number;
     operationType: ImageTaskOperationType;
     operationTypes: ImageTaskOperationType[];
+    qualityOptions: ImageTaskQuality[];
+    resolutionOptions: ImageTaskResolution[];
+    supportedSizes: string[];
     supportedRatios: string[];
     supportsBatch: boolean;
     supportsMask: boolean;
+    defaultParams: {
+      quality?: ImageTaskQuality;
+      ratio: string;
+      resolution?: ImageTaskResolution;
+      size?: string;
+    };
   };
   displayName: string;
   modelKey: string;

@@ -1703,6 +1703,59 @@ describe('S11 real provider execution API', () => {
       login.cookie
     );
 
+    const models = await get(app, '/api/models', login.cookie);
+    expect(models.response.status).toBe(200);
+    expect(models.json.data.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          modelKey: 'grsai-gpt-image-2-vip',
+          capabilities: expect.objectContaining({
+            defaultParams: {
+              quality: 'auto',
+              ratio: '1:1',
+              resolution: '1k',
+              size: '1024x1024',
+            },
+            qualityOptions: ['auto', 'low', 'medium', 'high'],
+            resolutionOptions: ['1k', '2k', '4k'],
+            supportedSizes: ['1024x1024'],
+          }),
+        }),
+      ])
+    );
+
+    const invalidParamsQuote = await post(
+      app,
+      '/api/image-tasks/quote',
+      {
+        batch_size: 1,
+        model_key: 'grsai-gpt-image-2-vip',
+        operation_type: 'text_to_image',
+        params: { size: '16x9' },
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(invalidParamsQuote.response.status).toBe(400);
+    expect(invalidParamsQuote.json.error.code).toBe(
+      'MODEL_UNSUPPORTED_OPERATION'
+    );
+
+    const quote = await post(
+      app,
+      '/api/image-tasks/quote',
+      {
+        batch_size: 1,
+        model_key: 'grsai-gpt-image-2-vip',
+        operation_type: 'text_to_image',
+        params: { quality: 'high', resolution: '2k', size: '1x1' },
+        ratio: '1:1',
+      },
+      login.cookie
+    );
+    expect(quote.response.status).toBe(200);
+    expect(quote.json.data.quote.amount).toBe(10);
+
     const created = await post(
       app,
       '/api/image-tasks',
@@ -1711,6 +1764,7 @@ describe('S11 real provider execution API', () => {
         idempotency_key: 's11-provider-success',
         model_key: 'grsai-gpt-image-2-vip',
         operation_type: 'text_to_image',
+        params: { quality: 'high', resolution: '2k', size: '1x1' },
         project_id: project.json.data.project.id,
         prompt: '真实 provider fake execution',
         ratio: '1:1',
@@ -1734,6 +1788,24 @@ describe('S11 real provider execution API', () => {
       successCount: 1,
     });
     expect(grsaiAdapter.calls).toHaveLength(1);
+    expect(grsaiAdapter.calls[0].input.params).toEqual({
+      quality: 'high',
+      resolution: '2k',
+      size: '1x1',
+    });
+    const persistedTask = imageTaskRepository.tasks.get(
+      created.json.data.task.id
+    );
+    expect(persistedTask?.normalizedParams.selectedParams).toEqual({
+      quality: 'high',
+      resolution: '2k',
+      size: '1x1',
+    });
+    expect(persistedTask?.rawProviderParams).toEqual({
+      quality: 'high',
+      resolution: '2k',
+      size: '1x1',
+    });
     expect(imageTaskRepository.providerUsage.size).toBe(1);
     const usage = imageTaskRepository.providerUsage.values().next().value;
     expect(usage).toMatchObject({
@@ -1744,6 +1816,11 @@ describe('S11 real provider execution API', () => {
       requestId: 'grsai-req-1',
       requestSnapshot: {
         modelKey: 'grsai-gpt-image-2-vip',
+        params: {
+          quality: 'high',
+          resolution: '2k',
+          size: '1x1',
+        },
         providerKey: 'grsai',
       },
       status: 'succeeded',

@@ -10,6 +10,12 @@ describe('platform runtime model mapping', () => {
   it('keeps platform capability metadata on selectable model config', () => {
     const model = mapPlatformImageModelToModelConfig({
       capabilities: {
+        defaultParams: {
+          quality: 'auto',
+          ratio: '1:1',
+          resolution: '1k',
+          size: '1024x1024',
+        },
         maxBatchSize: 4,
         maxReferenceImages: 5,
         operationType: 'text_to_image',
@@ -19,6 +25,9 @@ describe('platform runtime model mapping', () => {
           'inpaint',
           'reference_generate',
         ],
+        qualityOptions: ['auto', 'low', 'medium', 'high'],
+        resolutionOptions: ['1k', '2k', '4k'],
+        supportedSizes: ['1024x1024'],
         supportedRatios: ['1:1', '16:9', '9:16'],
         supportsBatch: true,
         supportsMask: true,
@@ -43,12 +52,21 @@ describe('platform runtime model mapping', () => {
     ]);
   });
 
-  it('reuses existing image params for platform models beyond ratio', () => {
+  it('uses runtime API parameter options for platform models beyond ratio', () => {
     const model = mapPlatformImageModelToModelConfig({
       capabilities: {
+        defaultParams: {
+          quality: 'auto',
+          ratio: '1:1',
+          resolution: '1k',
+          size: '1024x1024',
+        },
         maxBatchSize: 4,
         maxReferenceImages: 1,
         operationTypes: ['text_to_image'],
+        qualityOptions: ['auto', 'high'],
+        resolutionOptions: ['1k', '2k'],
+        supportedSizes: ['1024x1024'],
         supportedRatios: ['1:1', '16:9', '9:16'],
         supportsBatch: true,
         supportsMask: false,
@@ -73,19 +91,25 @@ describe('platform runtime model mapping', () => {
     expect(params.find((param) => param.id === 'resolution')?.options).toEqual([
       { value: '1k', label: '1K' },
       { value: '2k', label: '2K' },
-      { value: '4k', label: '4K' },
     ]);
-    expect(params.find((param) => param.id === 'quality')?.options).toContainEqual(
-      { value: 'high', label: '高清' }
-    );
+    expect(params.find((param) => param.id === 'quality')?.options).toEqual([
+      { value: 'auto', label: '自动' },
+      { value: 'high', label: '高清' },
+    ]);
   });
 
   it('keeps product entries with disabled reasons when params are not declared', () => {
     const model = mapPlatformImageModelToModelConfig({
       capabilities: {
+        defaultParams: {
+          ratio: '1:1',
+        },
         maxBatchSize: 1,
         maxReferenceImages: 0,
         operationTypes: ['text_to_image'],
+        qualityOptions: [],
+        resolutionOptions: [],
+        supportedSizes: ['1024x1024'],
         supportedRatios: ['1:1'],
         supportsBatch: false,
         supportsMask: false,

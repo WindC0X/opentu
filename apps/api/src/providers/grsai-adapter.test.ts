@@ -100,6 +100,55 @@ describe('GrsaiImageProviderAdapter', () => {
     );
   });
 
+  it('passes validated image task params to the GrsAI generation body', async () => {
+    const calls: Array<{ body?: unknown; url: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        url,
+      });
+      if (url.endsWith('/v1/api/generate')) {
+        return jsonResponse({ id: 'grsai-task-params', status: 'running' });
+      }
+      if (url.includes('/v1/api/result')) {
+        return jsonResponse({
+          status: 'succeeded',
+          urls: ['https://cdn.example.test/params.png'],
+        });
+      }
+      if (url === 'https://cdn.example.test/params.png') {
+        return new Response(tinyPng(), {
+          headers: { 'content-type': 'image/png' },
+          status: 200,
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+    const adapter = new GrsaiImageProviderAdapter({
+      baseUrl: 'https://fake-grsai.example',
+      fetchImpl,
+      pollIntervalMs: 0,
+      timeoutMs: 1000,
+    });
+
+    const result = await adapter.execute(
+      createExecutionInput({
+        credentialSecret: 'secret-token',
+        params: { quality: 'high', resolution: '2k', size: '16x9' },
+      })
+    );
+
+    expect(result.status).toBe('succeeded');
+    expect(calls[0]?.body).toMatchObject({
+      aspectRatio: '1792x1024',
+      model: 'gpt-image-2-vip',
+      quality: 'high',
+      replyType: 'async',
+      resolution: '2k',
+    });
+  });
+
   it('can defer a transient provider terminal status until success', async () => {
     let resultPolls = 0;
     const fetchImpl: typeof fetch = async (input) => {
@@ -290,6 +339,7 @@ describe('GrsaiImageProviderAdapter', () => {
 function createExecutionInput(input: {
   batchSize?: 1 | 2 | 4;
   credentialSecret: string | null;
+  params?: ImageProviderExecutionInput['input']['params'];
 }): ImageProviderExecutionInput {
   const batchSize = input.batchSize ?? 1;
   return {
@@ -299,6 +349,7 @@ function createExecutionInput(input: {
       idempotencyKey: 'grsai-test',
       modelKey: 'grsai-gpt-image-2-vip',
       operationType: 'text_to_image',
+      params: input.params,
       prompt: 'generate a test image',
       projectId: 'project-1',
       ratio: '1:1',

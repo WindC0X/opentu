@@ -218,6 +218,12 @@ export class MengtuHomeApp {
               models: [
                 {
                   capabilities: {
+                    defaultParams: {
+                      quality: 'auto',
+                      ratio: '1:1',
+                      resolution: '1k',
+                      size: '1024x1024',
+                    },
                     maxBatchSize: 4,
                     maxReferenceImages: 5,
                     operationType: 'text_to_image',
@@ -227,7 +233,10 @@ export class MengtuHomeApp {
                       'inpaint',
                       'reference_generate',
                     ],
+                    qualityOptions: ['auto', 'high'],
+                    resolutionOptions: ['1k', '2k'],
                     supportedRatios: ['1:1', '16:9', '9:16'],
+                    supportedSizes: ['1024x1024'],
                     supportsBatch: true,
                     supportsMask: true,
                   },

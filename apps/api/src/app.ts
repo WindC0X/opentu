@@ -32,8 +32,11 @@ import type { AppEnv } from './http/types';
 import { ImageTaskService } from './image-tasks/service';
 import type {
   CreateImageTaskInput,
+  ImageTaskQuality,
   ImageTaskOperationType,
   ImageTaskReferenceAssetInput,
+  ImageTaskResolution,
+  ImageTaskSelectedParams,
   ImageTaskStatus,
 } from './image-tasks/types';
 import { ProjectService } from './projects/service';
@@ -927,6 +930,7 @@ function imageTaskQuoteBody(body: Record<string, unknown>): {
   maskAssetId?: string | null;
   modelKey: string;
   operationType: ImageTaskOperationType;
+  params?: ImageTaskSelectedParams;
   projectId?: string;
   referenceAssets?: ImageTaskReferenceAssetInput[];
   ratio: string;
@@ -939,6 +943,7 @@ function imageTaskQuoteBody(body: Record<string, unknown>): {
     modelKey:
       optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
     operationType: bodyOperationType(body),
+    params: bodySelectedParams(body),
     projectId: optionalBodyString(body, 'project_id', 'projectId'),
     referenceAssets: bodyReferenceAssets(body),
     ratio: optionalBodyString(body, 'ratio') ?? '1:1',
@@ -960,6 +965,7 @@ function imageTaskCreateBody(
     modelKey:
       optionalBodyString(body, 'model_key', 'modelKey') ?? 'mock-image-v1',
     operationType: bodyOperationType(body),
+    params: bodySelectedParams(body),
     prompt: requiredBodyString(body, 'prompt'),
     projectId: requiredBodyString(body, 'project_id', 'projectId'),
     promptOptimize:
@@ -1013,6 +1019,59 @@ function bodyReferenceAssets(
       role: bodyReferenceRole(item.role ?? item.referenceRole),
     };
   });
+}
+
+function bodySelectedParams(
+  body: Record<string, unknown>
+): ImageTaskSelectedParams | undefined {
+  const value = body.params;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isObject(value)) {
+    throw new AppError('BAD_REQUEST', 400, '参数格式不正确');
+  }
+  const params: ImageTaskSelectedParams = {};
+  const size = optionalBodyString(value, 'size');
+  const resolution = optionalSelectedResolution(value.resolution);
+  const quality = optionalSelectedQuality(value.quality);
+  if (size) {
+    params.size = size;
+  }
+  if (resolution) {
+    params.resolution = resolution;
+  }
+  if (quality) {
+    params.quality = quality;
+  }
+  return Object.keys(params).length > 0 ? params : undefined;
+}
+
+function optionalSelectedResolution(
+  value: unknown
+): ImageTaskResolution | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (value === '1k' || value === '2k' || value === '4k') {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, '参数格式不正确');
+}
+
+function optionalSelectedQuality(value: unknown): ImageTaskQuality | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (
+    value === 'auto' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high'
+  ) {
+    return value;
+  }
+  throw new AppError('BAD_REQUEST', 400, '参数格式不正确');
 }
 
 function bodyReferenceRole(

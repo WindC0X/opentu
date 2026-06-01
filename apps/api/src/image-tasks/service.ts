@@ -35,6 +35,7 @@ import type {
   ImageTaskQuote,
   ImageTaskReferenceAssetInput,
   ImageTaskRepository,
+  ImageTaskSelectedParams,
   ImageTaskStatus,
   ImageTaskView,
 } from './types';
@@ -53,6 +54,7 @@ interface QuoteImageTaskInput {
   maskAssetId?: string | null;
   modelKey: string;
   operationType: ImageTaskOperationType;
+  params?: ImageTaskSelectedParams;
   projectId?: string;
   ratio: string;
   referenceAssets?: ImageTaskReferenceAssetInput[];
@@ -143,28 +145,41 @@ export class ImageTaskService {
       model,
       quote,
     });
+    const recordedTask = await this.repository.updateTask(task.id, {
+      normalizedParams: buildNormalizedParams(normalized),
+      rawProviderParams: buildRawProviderParams(normalized),
+    });
 
     await this.repository.createOutboxEvent({
-      aggregateId: task.id,
+      aggregateId: recordedTask.id,
       aggregateType: 'image_task',
       eventType: 'image_task_created',
-      idempotencyKey: `image_task_created:${task.id}`,
+      idempotencyKey: `image_task_created:${recordedTask.id}`,
       payload: {
-        imageTaskId: task.id,
+        imageTaskId: recordedTask.id,
         projectId: project.id,
-        requestedModelKey: task.requestedModelKey,
+        requestedModelKey: recordedTask.requestedModelKey,
       },
       tenantId: this.tenantId,
     });
 
     if (this.autoRunWorker && normalized.operationType === 'prompt_optimize') {
-      await this.runPromptOptimizeWorker(auth, task, normalized, quote, model);
+      await this.runPromptOptimizeWorker(
+        auth,
+        recordedTask,
+        normalized,
+        quote,
+        model
+      );
     } else if (this.autoRunWorker) {
-      await this.runProviderWorker(auth, task, normalized, quote, model);
+      await this.runProviderWorker(auth, recordedTask, normalized, quote, model);
     }
 
-    const latest = await this.repository.findTaskById(this.tenantId, task.id);
-    return { task: await this.toTaskView(latest ?? task) };
+    const latest = await this.repository.findTaskById(
+      this.tenantId,
+      recordedTask.id
+    );
+    return { task: await this.toTaskView(latest ?? recordedTask) };
   }
 
   async getTask(
@@ -280,6 +295,7 @@ export class ImageTaskService {
       maskAssetId: readTaskMaskAssetId(task),
       modelKey: task.requestedModelKey,
       operationType: task.operationType,
+      params: readTaskSelectedParams(task),
       prompt: task.userPrompt,
       projectId: task.projectId,
       ratio: task.ratio,
@@ -581,6 +597,7 @@ export class ImageTaskService {
         maskAssetId: input.maskAssetId ?? null,
         modelKey: input.modelKey,
         operationType: input.operationType,
+        params: input.params ?? {},
         providerKey: model.providerKey,
         promptLength: input.prompt.length,
         referenceAssetCount: input.referenceAssets?.length ?? 0,
@@ -858,6 +875,7 @@ export class ImageTaskService {
       maskAssetId: cleanOptionalId(input.maskAssetId),
       modelKey: input.modelKey || MOCK_MODEL_KEY,
       operationType,
+      params: normalizeSelectedParams(input.params),
       ratio: input.ratio || '1:1',
       referenceAssets,
       sourceAssetId: cleanOptionalId(input.sourceAssetId),
@@ -882,6 +900,7 @@ export class ImageTaskService {
       maskAssetId: cleanOptionalId(input.maskAssetId),
       modelKey: input.modelKey || MOCK_MODEL_KEY,
       operationType: normalizeOperationType(input.operationType),
+      params: normalizeSelectedParams(input.params),
       prompt,
       ratio: input.ratio || '1:1',
       referenceAssets: normalizeReferenceAssets(input.referenceAssets ?? []),
@@ -954,6 +973,7 @@ export class ImageTaskService {
       maskAssetId: readTaskMaskAssetId(task),
       modelKey: task.requestedModelKey,
       operationType: task.operationType,
+      params: readTaskSelectedParams(task),
       prompt: task.userPrompt,
       projectId: task.projectId,
       ratio: task.ratio,
@@ -1038,6 +1058,39 @@ function normalizeOperationType(
     return value;
   }
   throw new AppError('MODEL_UNSUPPORTED_OPERATION', 400, '模型不支持当前操作');
+}
+
+function buildNormalizedParams(input: CreateImageTaskInput): Record<string, unknown> {
+  return {
+    maskAssetId: input.maskAssetId ?? null,
+    ratio: input.ratio,
+    referenceAssets: input.referenceAssets ?? [],
+    selectedParams: input.params ?? {},
+    sourceAssetId: input.sourceAssetId ?? null,
+  };
+}
+
+function buildRawProviderParams(input: CreateImageTaskInput): Record<string, unknown> {
+  return { ...(input.params ?? {}) };
+}
+
+function normalizeSelectedParams(
+  params: ImageTaskSelectedParams | undefined
+): ImageTaskSelectedParams | undefined {
+  if (!params) {
+    return undefined;
+  }
+  const normalized: ImageTaskSelectedParams = {};
+  if (typeof params.size === 'string' && params.size.trim()) {
+    normalized.size = params.size.trim();
+  }
+  if (params.resolution) {
+    normalized.resolution = params.resolution;
+  }
+  if (params.quality) {
+    normalized.quality = params.quality;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function cleanOptionalId(value: string | null | undefined): string | null {
@@ -1138,6 +1191,14 @@ function readTaskReferenceAssets(
       role: reference.role,
     }))
   );
+}
+
+function readTaskSelectedParams(task: ImageTask): ImageTaskSelectedParams | undefined {
+  const value = task.normalizedParams.selectedParams;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return normalizeSelectedParams(value as ImageTaskSelectedParams);
 }
 
 function isReferenceAssetInputLike(

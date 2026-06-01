@@ -191,13 +191,17 @@ export class GrsaiImageProviderAdapter implements ImageProviderAdapter {
   }
 
   private async buildRequestBody(input: ImageProviderExecutionInput) {
+    const selectedParams = input.input.params ?? {};
     return {
-      aspectRatio: resolveGrsaiAspectRatio(input.input.ratio),
+      aspectRatio: resolveGrsaiAspectRatio(
+        selectedParams.size ?? input.input.ratio
+      ),
       images: imageInputs(input),
       model: input.model.providerModelId,
       prompt: input.input.prompt,
-      quality: 'auto',
+      quality: selectedParams.quality ?? 'auto',
       replyType: 'async',
+      resolution: selectedParams.resolution,
     };
   }
 
@@ -273,10 +277,11 @@ function imageInputs(input: ImageProviderExecutionInput): string[] {
 }
 
 function resolveGrsaiAspectRatio(ratio: string): string {
-  if (ratio === '16:9') {
+  const normalized = ratio.replace('x', ':');
+  if (normalized === '16:9') {
     return '1792x1024';
   }
-  if (ratio === '9:16') {
+  if (normalized === '9:16') {
     return '1024x1792';
   }
   return '1024x1024';

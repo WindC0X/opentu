@@ -21,6 +21,14 @@ export type ImageTaskCanvasSyncStatus =
   | 'running'
   | 'succeeded'
   | 'failed';
+export type ImageTaskResolution = '1k' | '2k' | '4k';
+export type ImageTaskQuality = 'auto' | 'low' | 'medium' | 'high';
+
+export interface ImageTaskSelectedParams {
+  quality?: ImageTaskQuality;
+  resolution?: ImageTaskResolution;
+  size?: string;
+}
 
 export interface ImageTask {
   actualModelKey: string | null;
@@ -108,9 +116,18 @@ export interface ImageModelView {
     maxReferenceImages: number;
     operationType: ImageTaskOperationType;
     operationTypes: ImageTaskOperationType[];
+    qualityOptions: ImageTaskQuality[];
+    resolutionOptions: ImageTaskResolution[];
+    supportedSizes: string[];
     supportedRatios: string[];
     supportsBatch: boolean;
     supportsMask: boolean;
+    defaultParams: {
+      quality?: ImageTaskQuality;
+      ratio: string;
+      resolution?: ImageTaskResolution;
+      size?: string;
+    };
   };
   displayName: string;
   modelKey: string;
@@ -151,6 +168,7 @@ export interface CreateImageTaskInput {
   prompt: string;
   projectId: string;
   promptOptimize?: boolean;
+  params?: ImageTaskSelectedParams;
   ratio: string;
   referenceAssets?: ImageTaskReferenceAssetInput[];
   sourceAssetId?: string | null;

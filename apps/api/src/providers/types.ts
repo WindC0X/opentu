@@ -10,6 +10,7 @@ import type {
   ImageTask,
   ImageTaskOperationType,
   ImageTaskQuote,
+  ImageTaskSelectedParams,
 } from '../image-tasks/types';
 
 export interface ResolvedImageModel {
@@ -37,6 +38,7 @@ export interface ImageModelCatalog {
     maskAssetId?: string | null;
     modelKey: string;
     operationType: ImageTaskOperationType;
+    params?: ImageTaskSelectedParams;
     ratio: string;
     referenceAssets?: Array<{
       assetId: string;

@@ -21,9 +21,12 @@ import {
 } from './mock-provider';
 import type {
   ImageModelView,
+  ImageTaskQuality,
   ImageTaskOperationType,
   ImageTaskQuote,
   ImageTaskReferenceAssetInput,
+  ImageTaskResolution,
+  ImageTaskSelectedParams,
 } from '../image-tasks/types';
 
 interface AdminImageModelCatalogOptions {
@@ -40,6 +43,7 @@ export class MockImageModelCatalog implements ImageModelCatalog {
     maskAssetId?: string | null;
     modelKey: string;
     operationType: ImageTaskOperationType;
+    params?: ImageTaskSelectedParams;
     ratio: string;
     referenceAssets?: ImageTaskReferenceAssetInput[];
     sourceAssetId?: string | null;
@@ -54,7 +58,7 @@ export class MockImageModelCatalog implements ImageModelCatalog {
           operationType,
           supported: true,
           supportedRatios: modelView.capabilities.supportedRatios,
-          supportedSizes: [],
+          supportedSizes: modelView.capabilities.supportedSizes,
           supportLevel: 'native',
           supportsBatch: modelView.capabilities.supportsBatch,
           supportsMask: modelView.capabilities.supportsMask,
@@ -104,6 +108,7 @@ export class AdminImageModelCatalog implements ImageModelCatalog {
     maskAssetId?: string | null;
     modelKey: string;
     operationType: ImageTaskOperationType;
+    params?: ImageTaskSelectedParams;
     ratio: string;
     referenceAssets?: ImageTaskReferenceAssetInput[];
     sourceAssetId?: string | null;
@@ -208,8 +213,28 @@ export class AdminImageModelCatalog implements ImageModelCatalog {
       return null;
     }
     const primary = capabilities[0]!;
+    const parameterCapabilities = deriveParameterCapabilities(
+      {
+        modelFamily: model.modelFamily,
+        providerKey: provider.providerKey,
+        providerModelId: model.providerModelId,
+      },
+      capabilities
+    );
+    const supportedRatios = uniqueStrings(
+      capabilities.flatMap((capability) => capability.supportedRatios)
+    );
+    const supportedSizes = uniqueStrings(
+      capabilities.flatMap((capability) => capability.supportedSizes)
+    );
     return {
       capabilities: {
+        defaultParams: {
+          quality: parameterCapabilities.qualityOptions[0],
+          ratio: primary.supportedRatios[0] ?? supportedRatios[0] ?? '1:1',
+          resolution: parameterCapabilities.resolutionOptions[0],
+          size: supportedSizes[0],
+        },
         maxBatchSize: normalizeBatchSize(primary.maxBatchSize),
         maxReferenceImages: Math.max(
           0,
@@ -219,7 +244,10 @@ export class AdminImageModelCatalog implements ImageModelCatalog {
         operationTypes: capabilities.map(
           (capability) => capability.operationType as ImageTaskOperationType
         ),
-        supportedRatios: primary.supportedRatios,
+        qualityOptions: parameterCapabilities.qualityOptions,
+        resolutionOptions: parameterCapabilities.resolutionOptions,
+        supportedRatios: supportedRatios.length ? supportedRatios : ['1:1'],
+        supportedSizes,
         supportsBatch: capabilities.some(
           (capability) => capability.supportsBatch
         ),
@@ -245,6 +273,7 @@ function buildQuote(
     maskAssetId?: string | null;
     modelKey: string;
     operationType: ImageTaskOperationType;
+    params?: ImageTaskSelectedParams;
     ratio: string;
     referenceAssets?: ImageTaskReferenceAssetInput[];
     sourceAssetId?: string | null;
@@ -276,6 +305,7 @@ function validateResolvedCapability(
   input: {
     batchSize: 1 | 2 | 4;
     operationType: ImageTaskOperationType;
+    params?: ImageTaskSelectedParams;
     ratio: string;
     referenceAssets?: ImageTaskReferenceAssetInput[];
   }
@@ -291,12 +321,24 @@ function validateResolvedCapability(
       '模型不支持当前操作'
     );
   }
+  const parameterCapabilities = deriveParameterCapabilities(model, [
+    capability,
+  ]);
   validateModelCapability(
     {
       maxBatchSize: normalizeBatchSize(capability.maxBatchSize),
       maxReferenceImages: capability.maxReferenceImages,
       operationType: capability.operationType as ImageTaskOperationType,
       operationTypes: [capability.operationType as ImageTaskOperationType],
+      qualityOptions: parameterCapabilities.qualityOptions,
+      resolutionOptions: parameterCapabilities.resolutionOptions,
+      supportedSizes: capability.supportedSizes,
+      defaultParams: {
+        quality: parameterCapabilities.qualityOptions[0],
+        ratio: capability.supportedRatios[0] ?? '1:1',
+        resolution: parameterCapabilities.resolutionOptions[0],
+        size: capability.supportedSizes[0],
+      },
       supportedRatios: capability.supportedRatios,
       supportsBatch: capability.supportsBatch,
       supportsMask: capability.supportsMask,
@@ -310,6 +352,7 @@ function validateModelCapability(
   input: {
     batchSize: 1 | 2 | 4;
     operationType: ImageTaskOperationType;
+    params?: ImageTaskSelectedParams;
     ratio: string;
     referenceAssets?: ImageTaskReferenceAssetInput[];
   }
@@ -348,6 +391,100 @@ function validateModelCapability(
       '模型不支持当前参考图数量'
     );
   }
+  validateSelectedParams(capability, input);
+}
+
+function validateSelectedParams(
+  capability: ImageModelView['capabilities'],
+  input: {
+    params?: ImageTaskSelectedParams;
+    ratio: string;
+  }
+): void {
+  const params = input.params;
+  if (!params) {
+    return;
+  }
+  if (
+    params.size &&
+    !isSupportedSelectedSize(params.size, capability, input.ratio)
+  ) {
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前参数'
+    );
+  }
+  if (
+    params.resolution &&
+    !capability.resolutionOptions.includes(params.resolution)
+  ) {
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前参数'
+    );
+  }
+  if (params.quality && !capability.qualityOptions.includes(params.quality)) {
+    throw new AppError(
+      'MODEL_UNSUPPORTED_OPERATION',
+      400,
+      '模型不支持当前参数'
+    );
+  }
+}
+
+function isSupportedSelectedSize(
+  size: string,
+  capability: ImageModelView['capabilities'],
+  ratio: string
+): boolean {
+  if (capability.supportedSizes.includes(size)) {
+    return true;
+  }
+  const normalizedSize = normalizeRatioLikeValue(size);
+  const normalizedRatio = normalizeRatioLikeValue(ratio);
+  return (
+    normalizedSize === normalizedRatio &&
+    capability.supportedRatios.some(
+      (candidate) => normalizeRatioLikeValue(candidate) === normalizedSize
+    )
+  );
+}
+
+function normalizeRatioLikeValue(value: string): string {
+  return value.trim().toLowerCase().replace('x', ':');
+}
+
+function deriveParameterCapabilities(
+  model: Pick<
+    ModelConfigRecord | ResolvedImageModel,
+    'modelFamily' | 'providerKey' | 'providerModelId'
+  >,
+  capabilities: ModelCapabilityRecord[]
+): {
+  qualityOptions: ImageTaskQuality[];
+  resolutionOptions: ImageTaskResolution[];
+} {
+  const providerModelId = model.providerModelId.toLowerCase();
+  const modelFamily = model.modelFamily.toLowerCase();
+  const isGptImage2 =
+    providerModelId.includes('gpt-image-2') ||
+    (model.providerKey === 'grsai' && modelFamily.includes('gpt-image'));
+  const hasImageCapability = capabilities.some(
+    (capability) => capability.supported && isImageCapability(capability)
+  );
+  if (!hasImageCapability || !isGptImage2) {
+    return { qualityOptions: [], resolutionOptions: [] };
+  }
+  return {
+    qualityOptions: ['auto', 'low', 'medium', 'high'],
+    resolutionOptions: ['1k', '2k', '4k'],
+  };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim())));
 }
 
 function normalizeBatchSize(value: number): 1 | 2 | 4 {

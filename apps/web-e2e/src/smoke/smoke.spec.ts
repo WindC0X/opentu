@@ -33,6 +33,12 @@ async function installS07ImageTaskApiMocks(page: Page) {
             models: [
               {
                 capabilities: {
+                  defaultParams: {
+                    quality: 'auto',
+                    ratio: '1:1',
+                    resolution: '1k',
+                    size: '1024x1024',
+                  },
                   maxBatchSize: 4,
                   maxReferenceImages: 5,
                   operationType: 'text_to_image',
@@ -42,7 +48,10 @@ async function installS07ImageTaskApiMocks(page: Page) {
                     'inpaint',
                     'reference_generate',
                   ],
+                  qualityOptions: ['auto', 'high'],
+                  resolutionOptions: ['1k', '2k'],
                   supportedRatios: ['1:1', '16:9', '9:16'],
+                  supportedSizes: ['1024x1024'],
                   supportsBatch: true,
                   supportsMask: true,
                 },
@@ -637,12 +646,10 @@ test.describe('@smoke 核心功能验证', () => {
     await home.createProjectAndOpenCanvas('Smoke S18 平台画布');
     await expect(page.getByText('可用点数 200')).toBeVisible();
     await expect(page.getByRole('button', { name: '管理后台' })).toBeVisible();
-    await expect(page.getByTestId('platform-operation-mode-chips')).toContainText(
+    await expect(page.getByTestId('platform-operation-status')).toContainText(
       '文生图'
     );
-    await expect(page.getByTestId('platform-operation-mode-chips')).toContainText(
-      '图生图'
-    );
+    await expect(page.getByTestId('platform-operation-mode-chips')).toHaveCount(0);
     await expect(
       page.getByText('候选未配置').or(page.getByText('后台字段'))
     ).toHaveCount(0);

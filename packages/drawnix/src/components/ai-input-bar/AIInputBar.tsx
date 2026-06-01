@@ -459,6 +459,7 @@ function buildPlatformQuoteParams(
     maskImage: parsedParams.selection.maskImage,
     model: parsedParams.modelId,
     modelRef: parsedParams.modelRef,
+    params: parsedParams.extraParams,
     platformOperationType: operationType,
     prompt: parsedParams.prompt,
     referenceImages,
@@ -586,117 +587,22 @@ function getPlatformCountOptions(
   return [1, 2, 4].filter((count) => count <= maxBatchSize);
 }
 
-const PLATFORM_OPERATION_OPTIONS: PlatformImageOperationType[] = [
-  'text_to_image',
-  'image_to_image',
-  'inpaint',
-  'reference_generate',
-];
-
-function getPlatformOperationProductReason(
-  operationType: PlatformImageOperationType,
-  operationPreview: ReturnType<typeof getPlatformOperationPreview>,
-  capabilities: PlatformImageModelCapabilities | null
-) {
-  if (!capabilities) {
-    return '模型能力加载中';
-  }
-  if (!capabilities.operationTypes.includes(operationType)) {
-    return `当前模型不支持${formatPlatformOperationLabel(operationType)}`;
-  }
-  if (operationType === 'text_to_image') {
-    return operationPreview.referenceCount > 0
-      ? '清空选中图片后使用'
-      : '输入提示词后生成图片';
-  }
-  if (operationType === 'image_to_image') {
-    return operationPreview.referenceCount === 1 &&
-      operationPreview.operationType === 'image_to_image'
-      ? operationPreview.reason
-      : '选择一张图片后使用';
-  }
-  if (operationType === 'inpaint') {
-    if (!capabilities.supportsMask) {
-      return '当前模型不支持局部重绘';
-    }
-    return operationPreview.operationType === 'inpaint'
-      ? operationPreview.reason
-      : '选择带蒙版的图片后使用';
-  }
-  return operationPreview.referenceCount > 1 &&
-    operationPreview.operationType === 'reference_generate'
-    ? operationPreview.reason
-    : '选择多张参考图后使用';
-}
-
-function isPlatformOperationReady(
-  operationType: PlatformImageOperationType,
-  operationPreview: ReturnType<typeof getPlatformOperationPreview>,
-  capabilities: PlatformImageModelCapabilities | null
-) {
-  if (!capabilities?.operationTypes.includes(operationType)) {
-    return false;
-  }
-  if (operationType === 'text_to_image') {
-    return operationPreview.referenceCount === 0;
-  }
-  if (operationType === 'image_to_image') {
-    return (
-      operationPreview.operationType === 'image_to_image' &&
-      operationPreview.supported
-    );
-  }
-  if (operationType === 'inpaint') {
-    return (
-      capabilities.supportsMask &&
-      operationPreview.operationType === 'inpaint' &&
-      operationPreview.supported
-    );
-  }
-  return (
-    operationPreview.operationType === 'reference_generate' &&
-    operationPreview.supported
-  );
-}
-
-function PlatformOperationModeChips({
-  capabilities,
+function PlatformOperationStatus({
   operationPreview,
 }: {
-  capabilities: PlatformImageModelCapabilities | null;
   operationPreview: ReturnType<typeof getPlatformOperationPreview>;
 }) {
   return (
     <div
-      className="ai-input-bar__platform-operations"
-      data-testid="platform-operation-mode-chips"
-    >
-      {PLATFORM_OPERATION_OPTIONS.map((operationType) => {
-        const active = operationPreview.operationType === operationType;
-        const ready = isPlatformOperationReady(
-          operationType,
-          operationPreview,
-          capabilities
-        );
-        const reason = getPlatformOperationProductReason(
-          operationType,
-          operationPreview,
-          capabilities
-        );
-        return (
-          <span
-            className={classNames('ai-input-bar__platform-operation-chip', {
-              'ai-input-bar__platform-operation-chip--active':
-                active && operationPreview.supported,
-              'ai-input-bar__platform-operation-chip--disabled': !ready,
-            })}
-            key={operationType}
-            title={reason}
-          >
-            {formatPlatformOperationLabel(operationType)}
-          </span>
-        );
+      className={classNames('ai-input-bar__platform-operation-status', {
+        'ai-input-bar__platform-operation-status--unsupported':
+          !operationPreview.supported,
       })}
+      data-testid="platform-operation-status"
+      role="status"
+      title={operationPreview.reason}
+    >
+      <span>{formatPlatformOperationLabel(operationPreview.operationType)}</span>
     </div>
   );
 }
@@ -3493,6 +3399,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
               batchSize: normalizedPlatformSelectedCount,
               modelKey: parsedParams.modelId,
               operationType,
+              params: {
+                ...(parsedParams.extraParams ?? {}),
+                size: parsedParams.size,
+              },
               ratio: parsedParams.size,
             });
           } catch (error) {
@@ -3517,6 +3427,12 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 <div>预计消耗：{quote.amount} 点</div>
                 <div>数量：{quote.batchSize}</div>
                 <div>比例：{quote.ratio}</div>
+                {parsedParams.extraParams?.resolution ? (
+                  <div>分辨率：{parsedParams.extraParams.resolution}</div>
+                ) : null}
+                {parsedParams.extraParams?.quality ? (
+                  <div>画质：{parsedParams.extraParams.quality}</div>
+                ) : null}
               </div>
             ),
             title: '确认平台生成任务',
@@ -5202,8 +5118,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
               />
 
               {platformMode && (
-                <PlatformOperationModeChips
-                  capabilities={selectedPlatformCapabilities}
+                <PlatformOperationStatus
                   operationPreview={platformOperationPreview}
                 />
               )}

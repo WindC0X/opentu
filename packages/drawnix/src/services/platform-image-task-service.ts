@@ -21,6 +21,12 @@ const DEFAULT_PLATFORM_IMAGE_MODEL_KEY = 'mock-image-v1';
 const DEFAULT_PLATFORM_IMAGE_RATIO = '1:1';
 const MAX_PLATFORM_REFERENCE_IMAGES = 5;
 
+export interface PlatformImageTaskSelectedParams {
+  quality?: 'auto' | 'low' | 'medium' | 'high';
+  resolution?: '1k' | '2k' | '4k';
+  size?: string;
+}
+
 interface PlatformImageInputRef {
   assetId?: string;
   file?: Blob | File;
@@ -149,6 +155,7 @@ export function withPlatformImageTaskMetadata(
   if (!projectId || !isPlatformEligibleImageParams(params, type)) {
     return params;
   }
+  const ratio = normalizePlatformImageRatio(params.platformRatio || params.size);
 
   return {
     ...params,
@@ -159,9 +166,8 @@ export function withPlatformImageTaskMetadata(
       DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
     platformOperationType: resolvePlatformOperationType(params),
     platformProjectId: projectId,
-    platformRatio: normalizePlatformImageRatio(
-      params.platformRatio || params.size
-    ),
+    platformRatio: ratio,
+    platformSelectedParams: collectPlatformSelectedParams(params, ratio),
   };
 }
 
@@ -239,6 +245,7 @@ export async function quotePlatformImageTask(input: {
   maskAssetId?: string | null;
   modelKey?: string;
   operationType?: PlatformImageTaskOperationType;
+  params?: PlatformImageTaskSelectedParams;
   projectId?: string;
   ratio?: string;
   referenceAssets?: PlatformImageTaskReferenceAsset[];
@@ -257,6 +264,7 @@ export async function quotePlatformImageTask(input: {
         maskAssetId: input.maskAssetId ?? null,
         modelKey: input.modelKey || DEFAULT_PLATFORM_IMAGE_MODEL_KEY,
         operationType: input.operationType ?? 'text_to_image',
+        params: normalizePlatformSelectedParams(input.params),
         projectId,
         ratio: normalizePlatformImageRatio(input.ratio),
         referenceAssets: input.referenceAssets ?? [],
@@ -382,6 +390,7 @@ async function buildPlatformImageTaskCreatePayload(
   const params = task.params;
   const operationType =
     params.platformOperationType ?? resolvePlatformOperationType(params);
+  const ratio = normalizePlatformImageRatio(params.platformRatio || params.size);
   const imageInputs = collectPlatformImageInputs(params);
   let sourceAssetId = cleanString(params.platformSourceAssetId) ?? null;
   let maskAssetId = cleanString(params.platformMaskAssetId) ?? null;
@@ -440,7 +449,10 @@ async function buildPlatformImageTaskCreatePayload(
     prompt: params.prompt,
     projectId,
     promptOptimize: Boolean(params.platformPromptOptimize),
-    ratio: normalizePlatformImageRatio(params.platformRatio || params.size),
+    params:
+      normalizePlatformSelectedParams(params.platformSelectedParams) ??
+      collectPlatformSelectedParams(params, ratio),
+    ratio,
     referenceAssets,
     sourceAssetId,
   };
@@ -476,6 +488,69 @@ function normalizePlatformBatchSize(value?: number): 1 | 2 | 4 {
     return 2;
   }
   return 1;
+}
+
+function collectPlatformSelectedParams(
+  params: GenerationParams,
+  ratio: string
+): PlatformImageTaskSelectedParams | undefined {
+  const nestedParams = isRecord(params.params) ? params.params : {};
+  return normalizePlatformSelectedParams({
+    quality:
+      cleanPlatformQuality(params.platformQuality) ??
+      cleanPlatformQuality(params.quality) ??
+      cleanPlatformQuality(nestedParams.quality),
+    resolution:
+      cleanPlatformResolution(params.platformResolution) ??
+      cleanPlatformResolution(params.resolution) ??
+      cleanPlatformResolution(nestedParams.resolution),
+    size: cleanString(params.platformSize) ?? cleanString(params.size) ?? ratio,
+  });
+}
+
+function normalizePlatformSelectedParams(
+  value: unknown
+): PlatformImageTaskSelectedParams | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const params: PlatformImageTaskSelectedParams = {};
+  const size = cleanString(value.size);
+  const resolution = cleanPlatformResolution(value.resolution);
+  const quality = cleanPlatformQuality(value.quality);
+  if (size && size !== 'default' && size !== 'auto') {
+    params.size = size;
+  }
+  if (resolution) {
+    params.resolution = resolution;
+  }
+  if (quality) {
+    params.quality = quality;
+  }
+  return Object.keys(params).length > 0 ? params : undefined;
+}
+
+function cleanPlatformResolution(
+  value: unknown
+): PlatformImageTaskSelectedParams['resolution'] | undefined {
+  return value === '1k' || value === '2k' || value === '4k'
+    ? value
+    : undefined;
+}
+
+function cleanPlatformQuality(
+  value: unknown
+): PlatformImageTaskSelectedParams['quality'] | undefined {
+  return value === 'auto' ||
+    value === 'low' ||
+    value === 'medium' ||
+    value === 'high'
+    ? value
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function collectPlatformImageInputs(

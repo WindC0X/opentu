@@ -90,6 +90,7 @@ describe('platform image task service', () => {
         {
           generationMode: 'text_to_image',
           model: 'grsai-image-v1',
+          params: { quality: 'high', resolution: '2k' },
           prompt: '一只小猫',
           size: '16x9',
         },
@@ -103,6 +104,11 @@ describe('platform image task service', () => {
     expect(JSON.parse(String(requests[0]?.body))).toMatchObject({
       modelKey: 'grsai-image-v1',
       operationType: 'text_to_image',
+      params: {
+        quality: 'high',
+        resolution: '2k',
+        size: '16x9',
+      },
       projectId: 'project-1',
       ratio: '16:9',
     });
@@ -281,6 +287,7 @@ describe('platform image task service', () => {
       batchSize: 4,
       modelKey: 'grsai-image-v1',
       operationType: 'text_to_image',
+      params: { quality: 'high', resolution: '2k', size: '9x16' },
       projectId: 'project-1',
       ratio: '9:16',
     });
@@ -289,6 +296,7 @@ describe('platform image task service', () => {
       batchSize: 4,
       modelKey: 'grsai-image-v1',
       operationType: 'text_to_image',
+      params: { quality: 'high', resolution: '2k', size: '9x16' },
       projectId: 'project-1',
       ratio: '9:16',
     });
