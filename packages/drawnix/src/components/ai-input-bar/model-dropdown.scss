@@ -156,6 +156,31 @@ $green-health: #10b981;
     font-weight: 500;
   }
 
+  &__unavailable-marker {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba($orange-primary, 0.12);
+    color: $orange-dark;
+    font-size: 10px;
+    font-family: inherit;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  &__unavailable-notice {
+    margin: 8px 10px 0;
+    padding: 7px 9px;
+    border: 1px solid rgba($orange-primary, 0.24);
+    border-radius: 8px;
+    background: rgba($orange-primary, 0.08);
+    color: $orange-dark;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   &__chevron {
     margin-left: 2px;
     color: $gray-medium;
@@ -647,6 +672,17 @@ $green-health: #10b981;
       background: rgba(#2563eb, 0.18);
       border-color: rgba(#2563eb, 0.35);
       color: #93c5fd;
+    }
+
+    &__unavailable-marker {
+      background: rgba($orange-primary, 0.18);
+      color: #fbbf24;
+    }
+
+    &__unavailable-notice {
+      background: rgba($orange-primary, 0.14);
+      border-color: rgba($orange-primary, 0.32);
+      color: #fbbf24;
     }
 
     &__provider-action {

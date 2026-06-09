@@ -161,9 +161,12 @@ import {
 import { applyForcedSunoParams } from '../../utils/suno-model-aliases';
 import {
   clearPersistedModelSelection,
+  getAllUnavailableModelSelectionMarkers,
   getPersistedModelSelection,
   setPersistedModelSelection,
+  subscribeUnavailableModelSelectionMarkerChange,
   type PersistedGenerationType,
+  type UnavailableModelSelectionMarkerMap,
 } from '../../utils/ai-model-selection-storage';
 import {
   AI_INPUT_FOCUS_EVENT,
@@ -779,6 +782,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const videoModels = useSelectableModels('video');
     const audioModels = useSelectableModels('audio');
     const textModels = useSelectableModels('text');
+    const [unavailableModelMarkers, setUnavailableModelMarkers] =
+      useState<UnavailableModelSelectionMarkerMap>(() =>
+        getAllUnavailableModelSelectionMarkers()
+      );
 
     const chatDrawerControl = useChatDrawerControl();
     const workflowControl = useWorkflowControl();
@@ -822,6 +829,13 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     // 当前 WorkZone 元素 ID（用于在画布上显示工作流进度）
     const currentWorkZoneIdRef = useRef<string | null>(null);
     const initialPreferences = loadAIInputPreferences();
+
+    useEffect(() => {
+      setUnavailableModelMarkers(getAllUnavailableModelSelectionMarkers());
+      return subscribeUnavailableModelSelectionMarkerChange(
+        setUnavailableModelMarkers
+      );
+    }, []);
 
     const bindCurrentImageAnchorTask = useCallback(
       (
@@ -1107,6 +1121,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
     const [selectedSkillMediaTypes, setSelectedSkillMediaTypes] = useState<
       SkillMediaType[]
     >([]);
+    const currentUnavailableModelMarker =
+      unavailableModelMarkers[generationType] ||
+      (generationType === 'agent' ? unavailableModelMarkers.text : null) ||
+      null;
     const visibleImageModels = useMemo(() => {
       if (generationType !== 'image') {
         return imageModels;
@@ -4660,6 +4678,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                 }
                 isOpen={modelDropdownOpen}
                 onOpenChange={handleModelDropdownChange}
+                unavailableModelMarker={currentUnavailableModelMarker}
               />
 
               {generationType === 'agent' &&
@@ -4683,6 +4702,9 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                       language === 'zh'
                         ? '选择图片模型 (↑↓ Tab)'
                         : 'Select image model (↑↓ Tab)'
+                    }
+                    unavailableModelMarker={
+                      unavailableModelMarkers.image || null
                     }
                   />
                 )}
@@ -4709,6 +4731,9 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                         ? '选择视频模型 (↑↓ Tab)'
                         : 'Select video model (↑↓ Tab)'
                     }
+                    unavailableModelMarker={
+                      unavailableModelMarkers.video || null
+                    }
                   />
                 )}
 
@@ -4733,6 +4758,9 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                       language === 'zh'
                         ? '选择音频模型 (↑↓ Tab)'
                         : 'Select audio model (↑↓ Tab)'
+                    }
+                    unavailableModelMarker={
+                      unavailableModelMarkers.audio || null
                     }
                   />
                 )}

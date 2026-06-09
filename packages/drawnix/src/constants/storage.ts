@@ -41,6 +41,10 @@ export const AI_IMAGE_MODE_CACHE_KEY = 'ai-image-generation-mode';
 /** AI 输入栏模型选择记忆键（按类型保存最近一次手动选择） */
 export const AI_MODEL_SELECTION_CACHE_KEY = 'ai_model_selection_cache';
 
+/** AI 输入栏不可用模型标记键（非密钥，仅记录被 fallback 替换的模型信息） */
+export const AI_MODEL_UNAVAILABLE_SELECTION_MARKERS_KEY =
+  'ai_model_unavailable_selection_markers';
+
 // ====================================
 // 工具栏配置
 // ====================================
@@ -63,6 +67,7 @@ export const ALL_STORAGE_KEYS = [
   AI_VIDEO_GENERATION_HISTORY_KEY,
   AI_IMAGE_MODE_CACHE_KEY,
   AI_MODEL_SELECTION_CACHE_KEY,
+  AI_MODEL_UNAVAILABLE_SELECTION_MARKERS_KEY,
   TOOLBAR_CONFIG_KEY,
 ] as const;
 
