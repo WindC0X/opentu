@@ -60,6 +60,7 @@ import {
   type ModelRef,
   type ProviderProfile,
 } from '../../utils/settings-manager';
+import type { UnavailableModelSelectionMarker } from '../../utils/ai-model-selection-storage';
 
 const SETTINGS_PROVIDER_NAV_EVENT = 'aitu:settings:provider-nav';
 
@@ -185,6 +186,52 @@ export interface ModelDropdownProps {
   providerProfilesOverride?: ProviderProfile[];
   /** 是否显示供应商管理入口 */
   showProviderAction?: boolean;
+  /** 最近一次被 fallback 替换的不可用模型标记 */
+  unavailableModelMarker?: UnavailableModelSelectionMarker | null;
+}
+
+function getUnavailableMarkerModelId(
+  marker: UnavailableModelSelectionMarker
+): string {
+  return marker.original.modelId || 'unknown';
+}
+
+function getUnavailableMarkerFallbackId(
+  marker: UnavailableModelSelectionMarker
+): string | null {
+  return marker.fallback?.modelId || null;
+}
+
+function getUnavailableMarkerAriaLabel(
+  marker: UnavailableModelSelectionMarker,
+  language: 'zh' | 'en'
+): string {
+  const originalModelId = getUnavailableMarkerModelId(marker);
+  const fallbackModelId = getUnavailableMarkerFallbackId(marker);
+  if (language === 'zh') {
+    return fallbackModelId
+      ? `原模型 ${originalModelId} 不可用，已切换到 ${fallbackModelId}`
+      : `原模型 ${originalModelId} 不可用，已清除选择`;
+  }
+  return fallbackModelId
+    ? `Previous model ${originalModelId} is unavailable; switched to ${fallbackModelId}`
+    : `Previous model ${originalModelId} is unavailable; selection cleared`;
+}
+
+function getUnavailableMarkerNoticeText(
+  marker: UnavailableModelSelectionMarker,
+  language: 'zh' | 'en'
+): string {
+  const originalModelId = getUnavailableMarkerModelId(marker);
+  const fallbackModelId = getUnavailableMarkerFallbackId(marker);
+  if (language === 'zh') {
+    return fallbackModelId
+      ? `原模型 ${originalModelId} 当前不可用，已改用 ${fallbackModelId}。`
+      : `原模型 ${originalModelId} 当前不可用，已清除该选择。`;
+  }
+  return fallbackModelId
+    ? `Previous model ${originalModelId} is unavailable. Using ${fallbackModelId} instead.`
+    : `Previous model ${originalModelId} is unavailable. Selection was cleared.`;
 }
 
 /**
@@ -207,6 +254,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   onOpenChange,
   providerProfilesOverride,
   showProviderAction = true,
+  unavailableModelMarker = null,
 }) => {
   const { setAppState } = useDrawnix();
   const { value: isOpen, setValue: setIsOpen } = useControllableState({
@@ -352,6 +400,12 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   // 使用 shortCode 或默认简写
   const shortCode = currentModel?.shortCode || 'img';
   const isSearching = Boolean(searchQuery.trim());
+  const unavailableMarkerAriaLabel = unavailableModelMarker
+    ? getUnavailableMarkerAriaLabel(unavailableModelMarker, language)
+    : null;
+  const unavailableMarkerNoticeText = unavailableModelMarker
+    ? getUnavailableMarkerNoticeText(unavailableModelMarker, language)
+    : null;
 
   // 从 selectionKey 或 currentModel 推导当前选中模型所属的供应商 ID 和 vendor
   const selectedProviderHint = useMemo(() => {
@@ -806,6 +860,14 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
           ) : null}
           <span className="model-dropdown__at">#</span>
           <span className="model-dropdown__code">{shortCode}</span>
+          {unavailableMarkerAriaLabel ? (
+            <span
+              className="model-dropdown__unavailable-marker"
+              aria-label={unavailableMarkerAriaLabel}
+            >
+              {language === 'zh' ? '已切换' : 'Switched'}
+            </span>
+          ) : null}
           <ModelHealthBadge
             modelId={selectedModel}
             profileId={currentProfile?.id || currentModel?.sourceProfileId || null}
@@ -874,6 +936,14 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
             modelId={selectedModel}
             profileId={currentProfile?.id || currentModel?.sourceProfileId || null}
           />
+          {unavailableMarkerAriaLabel ? (
+            <span
+              className="model-dropdown__unavailable-marker"
+              aria-label={unavailableMarkerAriaLabel}
+            >
+              {language === 'zh' ? '已切换' : 'Switched'}
+            </span>
+          ) : null}
         </div>
         <ChevronDown
           size={16}
@@ -991,6 +1061,12 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
               </div>
             ) : header ? (
               <div className="model-dropdown__header">{header}</div>
+            ) : null}
+
+            {unavailableMarkerNoticeText ? (
+              <div className="model-dropdown__unavailable-notice" role="status">
+                {unavailableMarkerNoticeText}
+              </div>
             ) : null}
 
             <VendorTabPanel

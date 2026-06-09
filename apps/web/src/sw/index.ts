@@ -42,6 +42,7 @@ import {
   shouldUseOriginFirstPreload,
   shouldUseAppShellStrategy,
 } from './app-shell-routing';
+import { isCreativeAssetApiPath } from './creative-asset-pass-through';
 
 // fix: self redeclaration error and type casting
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -4242,6 +4243,10 @@ sw.addEventListener('fetch', (event: FetchEvent) => {
       status: 0,
       duration: 0,
     });
+    return;
+  }
+
+  if (url.origin === location.origin && isCreativeAssetApiPath(url.pathname)) {
     return;
   }
 

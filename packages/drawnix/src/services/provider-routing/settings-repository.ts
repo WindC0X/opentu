@@ -94,7 +94,8 @@ function inferAuthType(
     authType === 'bearer' ||
     authType === 'header' ||
     authType === 'query' ||
-    authType === 'custom'
+    authType === 'custom' ||
+    authType === 'session-broker'
   ) {
     return authType;
   }

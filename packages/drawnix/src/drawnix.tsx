@@ -135,6 +135,9 @@ import {
   requestOpenPPTEditor,
 } from './services/ppt/ppt-ui-events';
 import { syncEditedPPTSlideImage } from './utils/frame-insertion-utils';
+import { initializeCreativeDocumentCloudSync } from './services/creative-document-sync';
+import { initializeCreativeManagedSessionBroker } from './services/creative-session-broker';
+import { CreativeDocumentCloudSyncBadge } from './components/creative-document-sync-status/CreativeDocumentCloudSyncBadge';
 import type { MediaLibraryModalProps } from './types/asset.types';
 import { SelectionMode } from './types/asset.types';
 const DeferredAIInputBar = lazy(() =>
@@ -353,6 +356,12 @@ export const Drawnix: React.FC<DrawnixProps> = ({
   const enableGenerationRuntime = useCallback(() => {
     enableDeferredRuntime(TOOL_WINDOW_GROUPS);
   }, [enableDeferredRuntime]);
+
+  useEffect(() => {
+    void initializeCreativeManagedSessionBroker().finally(() => {
+      initializeCreativeDocumentCloudSync();
+    });
+  }, []);
 
   useEffect(() => {
     if (
@@ -1701,6 +1710,7 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
           />
           {/* ViewNavigation - 视图导航（缩放 + 小地图） */}
           <ViewNavigation />
+          <CreativeDocumentCloudSyncBadge />
         </Wrapper>
         <Suspense fallback={null}>
           <ChatDrawer ref={chatDrawerRef} />

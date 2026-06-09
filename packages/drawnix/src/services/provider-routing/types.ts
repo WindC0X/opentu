@@ -26,7 +26,12 @@ export type ProviderBindingConfidence = 'high' | 'medium' | 'low';
 
 export type ProviderBindingSource = 'discovered' | 'template' | 'manual';
 
-export type ProviderAuthStrategy = 'bearer' | 'header' | 'query' | 'custom';
+export type ProviderAuthStrategy =
+  | 'bearer'
+  | 'header'
+  | 'query'
+  | 'custom'
+  | 'session-broker';
 export type ProviderBaseUrlStrategy = 'preserve' | 'trim-v1';
 export type ProviderVideoDurationMode = 'request-param' | 'model-alias';
 export type ProviderVideoResultMode = 'inline-url' | 'download-content';

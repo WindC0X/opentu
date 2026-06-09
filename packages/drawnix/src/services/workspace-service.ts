@@ -964,6 +964,43 @@ class WorkspaceService {
     this.emit('boardUpdated', board);
   }
 
+  async upsertBoardFromCloud(
+    board: Board,
+    options: { suppressOutboundSync?: boolean } = {}
+  ): Promise<void> {
+    await this.ensureInitialized();
+
+    const now = Date.now();
+    const existing = this.loadedBoards.get(board.id) || this.boards.get(board.id);
+    const folderId = board.folderId ?? null;
+    const nextBoard: Board = {
+      ...board,
+      folderId,
+      order:
+        typeof board.order === 'number'
+          ? board.order
+          : existing?.order ?? this.getBoardsInFolder(folderId).length,
+      elements: Array.isArray(board.elements) ? board.elements : [],
+      createdAt:
+        typeof board.createdAt === 'number'
+          ? board.createdAt
+          : existing?.createdAt ?? now,
+      updatedAt: typeof board.updatedAt === 'number' ? board.updatedAt : now,
+    };
+
+    this.loadedBoards.set(nextBoard.id, nextBoard);
+    this.boards.set(nextBoard.id, nextBoard);
+    const { elements, ...metadata } = nextBoard;
+    this.boardMetadata.set(nextBoard.id, metadata);
+    await workspaceStorageService.saveBoard(nextBoard);
+
+    if (options.suppressOutboundSync) {
+      this.emit('treeChanged');
+      return;
+    }
+    this.emit(existing ? 'boardUpdated' : 'boardCreated', nextBoard);
+  }
+
   /**
    * Save data to the current board (convenience method)
    */

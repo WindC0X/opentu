@@ -12,7 +12,12 @@ export interface GeminiSettings {
 }
 
 export type ProviderType = 'openai-compatible' | 'gemini-compatible' | 'custom';
-export type ProviderAuthType = 'bearer' | 'header' | 'query' | 'custom';
+export type ProviderAuthType =
+  | 'bearer'
+  | 'header'
+  | 'query'
+  | 'custom'
+  | 'session-broker';
 export type ImageApiCompatibility =
   | 'auto'
   | 'openai-gpt-image'
@@ -111,5 +116,6 @@ export interface ResolvedInvocationRoute {
   providerType: ProviderType | null;
   baseUrl: string;
   apiKey: string;
+  authType: ProviderAuthType;
   source: 'preset' | 'legacy';
 }

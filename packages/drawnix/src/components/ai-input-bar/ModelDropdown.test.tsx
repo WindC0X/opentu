@@ -3,7 +3,22 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelVendor, type ModelConfig } from '../../constants/model-config';
+import { CREATIVE_MANAGED_PROFILE_ID } from '../../services/creative-mode';
+import {
+  getCreativeDefaultModel,
+  getCreativeDefaultVisibleModels,
+  getCreativeMoreModels,
+  stripCreativeServerUiPolicy,
+} from '../../services/creative-display-policy';
 import { ModelDropdown } from './ModelDropdown';
+
+vi.mock('tdesign-react', () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => children,
+  MessagePlugin: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 vi.mock('../../hooks/use-drawnix', () => ({
   useDrawnix: () => ({ setAppState: vi.fn() }),
@@ -179,5 +194,195 @@ describe('ModelDropdown', () => {
     expect(menu).toBeTruthy();
     expect(menu.style.width).toBe('680px');
     expect(menu.classList.contains('model-dropdown__menu--down')).toBe(true);
+  });
+
+  it('renders the full creative model pool through search while opentu owns visible defaults', () => {
+    const sanitizedPayload = stripCreativeServerUiPolicy({
+      defaultModelId: 'server-owned-default',
+      defaultVisible: ['server-owned-default'],
+      displayPolicy: {
+        defaultVisibleModels: ['server-owned-default'],
+      },
+      data: [
+        {
+          id: 'server-owned-default',
+          label: 'Server Owned Default',
+          shortLabel: 'Server Default',
+          type: 'text',
+          vendor: ModelVendor.OTHER,
+          sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+          sourceProfileName: 'New API Creative',
+          selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::server-owned-default`,
+          defaultVisible: true,
+        },
+        {
+          id: 'gpt-5.5',
+          label: 'GPT 5.5',
+          shortLabel: 'GPT 5.5',
+          shortCode: 'g55',
+          type: 'text',
+          vendor: ModelVendor.GPT,
+          sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+          sourceProfileName: 'New API Creative',
+          selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::gpt-5.5`,
+        },
+        {
+          id: 'deepseek-v3.2',
+          label: 'DeepSeek V3.2',
+          shortLabel: 'DeepSeek',
+          type: 'text',
+          vendor: ModelVendor.DEEPSEEK,
+          sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+          sourceProfileName: 'New API Creative',
+          selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::deepseek-v3.2`,
+        },
+        {
+          id: 'gemini-3.1-pro-preview',
+          label: 'Gemini 3.1 Pro Preview',
+          shortLabel: 'Gemini 3.1',
+          type: 'text',
+          vendor: ModelVendor.GEMINI,
+          sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+          sourceProfileName: 'New API Creative',
+          selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::gemini-3.1-pro-preview`,
+        },
+        {
+          id: 'long-tail-model',
+          label: 'Long Tail Model',
+          shortLabel: 'Long Tail',
+          type: 'text',
+          vendor: ModelVendor.OTHER,
+          sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+          sourceProfileName: 'New API Creative',
+          selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::long-tail-model`,
+        },
+      ],
+    }) as { data: ModelConfig[] };
+    const fullPool = sanitizedPayload.data;
+    const defaultModel = getCreativeDefaultModel('text', fullPool);
+    const onSelect = vi.fn();
+    const onSelectModel = vi.fn();
+
+    expect(JSON.stringify(sanitizedPayload)).not.toMatch(
+      /defaultModel|defaultVisible|displayPolicy/i
+    );
+    expect(defaultModel?.id).toBe('gpt-5.5');
+    expect(getCreativeDefaultVisibleModels('text', fullPool).map((model) => model.id)).toEqual([
+      'gpt-5.5',
+      'deepseek-v3.2',
+      'gemini-3.1-pro-preview',
+    ]);
+    expect(getCreativeMoreModels('text', fullPool).map((model) => model.id)).toEqual(
+      expect.arrayContaining(['server-owned-default', 'long-tail-model'])
+    );
+
+    const { container } = render(
+      <ModelDropdown
+        selectedModel={defaultModel?.id || ''}
+        selectedSelectionKey={defaultModel?.selectionKey}
+        models={fullPool}
+        onSelect={onSelect}
+        onSelectModel={onSelectModel}
+        showProviderAction={false}
+      />
+    );
+    const wrapper = container.querySelector('.model-dropdown') as HTMLElement;
+    mockRect(wrapper, { top: 120, left: 24, bottom: 152, width: 240 });
+
+    fireEvent.mouseDown(
+      container.querySelector('.model-dropdown__trigger--minimal') as HTMLElement
+    );
+
+    expect(container.textContent).toContain('#g55');
+    expect(document.body.textContent).not.toContain('Server Owned Default');
+
+    fireEvent.change(
+      document.body.querySelector('.model-dropdown__search-input') as HTMLInputElement,
+      { target: { value: 'server-owned-default' } }
+    );
+
+    const serverOption = screen.getByText('Server Default').closest(
+      '.model-dropdown__item'
+    ) as HTMLElement;
+    expect(serverOption?.textContent).toContain('#server-owned-default');
+
+    fireEvent.click(serverOption);
+
+    expect(onSelect).toHaveBeenCalledWith(
+      'server-owned-default',
+      expect.objectContaining({
+        profileId: CREATIVE_MANAGED_PROFILE_ID,
+        modelId: 'server-owned-default',
+      })
+    );
+    expect(onSelectModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'server-owned-default',
+        sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+      })
+    );
+  });
+
+  it('renders an accessible marker when a persisted model disappeared and was switched to fallback', () => {
+    const fallbackTextModel: ModelConfig = {
+      id: 'gpt-5.5',
+      label: 'GPT 5.5',
+      shortLabel: 'GPT 5.5',
+      shortCode: 'g55',
+      type: 'text',
+      vendor: ModelVendor.GPT,
+      sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+      sourceProfileName: 'New API Creative',
+      selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::gpt-5.5`,
+    };
+
+    const { container } = render(
+      <ModelDropdown
+        selectedModel={fallbackTextModel.id}
+        selectedSelectionKey={fallbackTextModel.selectionKey}
+        models={[fallbackTextModel]}
+        onSelect={vi.fn()}
+        language="en"
+        showProviderAction={false}
+        unavailableModelMarker={{
+          generationType: 'text',
+          reason: 'unavailable-in-model-pool',
+          updatedAt: 123456,
+          original: {
+            modelId: 'stale-server-model',
+            profileId: 'remote-profile',
+            providerIdHint: 'remote-profile',
+            vendorHint: 'OTHER',
+          },
+          fallback: {
+            modelId: 'gpt-5.5',
+            profileId: CREATIVE_MANAGED_PROFILE_ID,
+            providerIdHint: CREATIVE_MANAGED_PROFILE_ID,
+            vendorHint: 'GPT',
+          },
+        }}
+      />
+    );
+
+    const triggerMarker = screen.getByLabelText(
+      'Previous model stale-server-model is unavailable; switched to gpt-5.5'
+    );
+    expect(triggerMarker.classList.contains('model-dropdown__unavailable-marker')).toBe(
+      true
+    );
+    expect(triggerMarker.textContent).toBe('Switched');
+
+    const wrapper = container.querySelector('.model-dropdown') as HTMLElement;
+    mockRect(wrapper, { top: 120, left: 24, bottom: 152, width: 240 });
+    fireEvent.mouseDown(
+      container.querySelector('.model-dropdown__trigger--minimal') as HTMLElement
+    );
+
+    const menuNotice = screen.getByText(
+      'Previous model stale-server-model is unavailable. Using gpt-5.5 instead.'
+    );
+    expect(menuNotice.classList.contains('model-dropdown__unavailable-notice')).toBe(
+      true
+    );
   });
 });

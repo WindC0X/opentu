@@ -71,7 +71,8 @@ function inferAuthType(
     config.authType === 'bearer' ||
     config.authType === 'header' ||
     config.authType === 'query' ||
-    config.authType === 'custom'
+    config.authType === 'custom' ||
+    config.authType === 'session-broker'
   ) {
     return config.authType;
   }

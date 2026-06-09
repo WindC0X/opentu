@@ -5,6 +5,7 @@
  * Characters are extracted from completed Sora-2 video tasks.
  */
 
+import { isCreativeEmbeddedMode } from './creative-mode';
 import { geminiSettings } from '../utils/settings-manager';
 import { createLogger } from '@aitu/utils';
 import {
@@ -30,6 +31,12 @@ const HTTP_STATUS = {
  * Manages character creation with async polling
  */
 class CharacterAPIService {
+  private assertStandaloneDirectApiAllowed(): void {
+    if (isCreativeEmbeddedMode()) {
+      throw new Error('角色 API 暂不支持创意嵌入模式，请通过控制台网关能力使用');
+    }
+  }
+
   /**
    * Get base URL from settings (without /v1 suffix for this service)
    */
@@ -45,6 +52,7 @@ class CharacterAPIService {
    * @returns Character creation response with ID
    */
   async createCharacter(params: CreateCharacterParams): Promise<CharacterCreateResponse> {
+    this.assertStandaloneDirectApiAllowed();
     const settings = geminiSettings.get();
     const apiKey = settings.apiKey;
 
@@ -96,6 +104,7 @@ class CharacterAPIService {
    * @returns Character information
    */
   async queryCharacter(characterId: string): Promise<CharacterQueryResponse> {
+    this.assertStandaloneDirectApiAllowed();
     const settings = geminiSettings.get();
     const apiKey = settings.apiKey;
 

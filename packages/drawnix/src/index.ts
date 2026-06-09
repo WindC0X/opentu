@@ -34,6 +34,14 @@ export type { SWChannelEventHandlers } from './services/sw-channel/client';
 // Export model adapters (registry + types)
 export * from './services/model-adapters';
 export * from './services/provider-routing';
+export * from './services/creative-mode';
+export * from './services/creative-display-policy';
+export * from './services/creative-model-preference-sync';
+export * from './services/creative-session-broker';
+export * from './services/creative-document-sync';
+export * from './services/creative-document-assets';
+export * from './hooks/use-creative-document-sync-status';
+export * from './components/creative-document-sync-status/CreativeDocumentCloudSyncBadge';
 
 // Export initialization services (for main.tsx)
 export { initWebVitals } from './services/web-vitals-service';

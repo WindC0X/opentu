@@ -4,6 +4,7 @@ import type {
   ProviderTransportRequest,
   ResolvedProviderContext,
 } from './types';
+import { getCreativeSessionAuthHeaders } from '../creative-mode';
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '');
@@ -34,6 +35,26 @@ function joinUrl(baseUrl: string, path: string): string {
   return `${normalizedBase}${normalizedPath}`;
 }
 
+function splitPathQuery(path: string): {
+  path: string;
+  query: Record<string, string>;
+} {
+  const queryStart = path.indexOf('?');
+  if (queryStart < 0) {
+    return { path, query: {} };
+  }
+
+  const pathWithoutQuery = path.slice(0, queryStart) || '/';
+  const queryString = path.slice(queryStart + 1).split('#')[0] || '';
+  const params = new URLSearchParams(queryString);
+  const query: Record<string, string> = {};
+  params.forEach((value, key) => {
+    query[key] = value;
+  });
+
+  return { path: pathWithoutQuery, query };
+}
+
 function buildQueryString(
   query?: Record<string, string | number | boolean | null | undefined>
 ): string {
@@ -60,10 +81,52 @@ function mergeHeaders(
   };
 }
 
+function isSessionBrokerAuth(context: ResolvedProviderContext): boolean {
+  return context.authType === 'session-broker';
+}
+
+function isSensitiveAuthHeaderName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return (
+    normalized === 'authorization' ||
+    normalized === 'proxy-authorization' ||
+    normalized.endsWith('-authorization') ||
+    normalized === 'x-api-key' ||
+    normalized === 'api-key' ||
+    normalized === 'apikey' ||
+    normalized === 'openai-api-key' ||
+    normalized === 'anthropic-api-key' ||
+    normalized === 'x-goog-api-key' ||
+    normalized.includes('api-key') ||
+    normalized.includes('apikey')
+  );
+}
+
+function stripSessionBrokerAuthHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  return Object.entries(headers).reduce<Record<string, string>>(
+    (acc, [key, value]) => {
+      if (!isSensitiveAuthHeaderName(key)) {
+        acc[key] = value;
+      }
+      return acc;
+    },
+    {}
+  );
+}
+
 function applyAuthHeaders(
   context: ResolvedProviderContext,
   headers: Record<string, string>
 ): Record<string, string> {
+  if (isSessionBrokerAuth(context)) {
+    return {
+      ...stripSessionBrokerAuthHeaders(headers),
+      ...getCreativeSessionAuthHeaders(),
+    };
+  }
+
   if (!context.apiKey) {
     return headers;
   }
@@ -88,10 +151,46 @@ function applyAuthHeaders(
   }
 }
 
+function isSensitiveSessionBrokerQueryKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase().replace(/[-_]/g, '');
+  return (
+    normalized === 'apikey' ||
+    normalized === 'baseurl' ||
+    normalized === 'channelid' ||
+    normalized === 'provideroverride' ||
+    normalized === 'accesstoken' ||
+    normalized === 'refreshtoken' ||
+    normalized === 'idtoken' ||
+    normalized === 'internaltoken' ||
+    normalized === 'upstreamkey' ||
+    normalized === 'authorization' ||
+    normalized === 'token' ||
+    normalized === 'key' ||
+    normalized === 'provider'
+  );
+}
+
+function stripSessionBrokerAuthQuery(
+  query: Record<string, string | number | boolean | null | undefined>
+): Record<string, string | number | boolean | null | undefined> {
+  return Object.entries(query).reduce<
+    Record<string, string | number | boolean | null | undefined>
+  >((acc, [key, value]) => {
+    if (!isSensitiveSessionBrokerQueryKey(key)) {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
+}
+
 function applyAuthQuery(
   context: ResolvedProviderContext,
   query: Record<string, string | number | boolean | null | undefined>
 ): Record<string, string | number | boolean | null | undefined> {
+  if (isSessionBrokerAuth(context)) {
+    return stripSessionBrokerAuthQuery(query);
+  }
+
   if (!context.apiKey || context.authType !== 'query') {
     return query;
   }
@@ -160,14 +259,24 @@ export class ProviderTransport {
     context: ResolvedProviderContext,
     request: ProviderTransportRequest
   ): PreparedProviderTransportRequest {
+    if (isSessionBrokerAuth(context) && /^https?:\/\//i.test(request.path)) {
+      throw new Error(
+        'session-broker transport requires a relative path to keep relay calls same-origin'
+      );
+    }
+
+    const pathParts = splitPathQuery(request.path);
     const mergedHeaders = mergeHeaders(context.extraHeaders, request.headers);
     const authenticatedHeaders = applyAuthHeaders(context, mergedHeaders);
-    const query = applyAuthQuery(context, request.query || {});
+    const query = applyAuthQuery(context, {
+      ...pathParts.query,
+      ...(request.query || {}),
+    });
     const resolvedBaseUrl = applyBaseUrlStrategy(
       context.baseUrl,
       request.baseUrlStrategy
     );
-    const url = `${joinUrl(resolvedBaseUrl, request.path)}${buildQueryString(
+    const url = `${joinUrl(resolvedBaseUrl, pathParts.path)}${buildQueryString(
       query
     )}`;
 
@@ -179,7 +288,9 @@ export class ProviderTransport {
         headers: authenticatedHeaders,
         body: request.body,
         signal: request.signal,
-        credentials: request.credentials,
+        credentials: isSessionBrokerAuth(context)
+          ? 'same-origin'
+          : request.credentials,
       },
     };
   }

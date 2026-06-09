@@ -4,12 +4,49 @@
 
 import { GeminiConfig } from './types';
 import { geminiSettings } from '../settings-manager';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
+
+const CREATIVE_EMBEDDED_URL_AUTH_PARAM_NAMES = [
+  'settings',
+  'apiKey',
+  'api_key',
+  'key',
+  'baseUrl',
+  'base_url',
+  'auth',
+  'authType',
+  'auth_type',
+  'authMode',
+  'auth_mode',
+  'authorization',
+  'Authorization',
+  'providerAuth',
+  'provider_auth',
+  'providerAuthorization',
+  'provider_authorization',
+  'provider',
+  'providerOverride',
+  'provider_override',
+  'accessToken',
+  'access_token',
+  'refreshToken',
+  'refresh_token',
+  'idToken',
+  'id_token',
+  'internalToken',
+  'internal_token',
+  'upstreamKey',
+  'upstream_key',
+  'channelId',
+  'channel_id',
+];
 
 /**
  * DOM弹窗获取API Key
  */
 export function promptForApiKey(): Promise<string | null> {
   if (typeof window === 'undefined') return Promise.resolve(null);
+  if (isCreativeEmbeddedMode()) return Promise.resolve(null);
 
   return new Promise((resolve) => {
     // 创建弹窗遮罩
@@ -144,6 +181,10 @@ export async function validateAndEnsureConfig(
     throw new Error('Base URL 是必需的');
   }
 
+  if (config.authType === 'session-broker' || config.provider?.authType === 'session-broker') {
+    return config;
+  }
+
   // 检查 apiKey，优先从全局设置获取
   if (!config.apiKey) {
     // 首先尝试从全局设置获取
@@ -187,6 +228,7 @@ function isPlaceholder(value: string | null | undefined): boolean {
  */
 function getApiKeyFromUrl(): string | null {
   if (typeof window === 'undefined') return null;
+  if (isCreativeEmbeddedMode()) return null;
 
   const urlParams = new URLSearchParams(window.location.search);
   const apiKey = urlParams.get('apiKey');
@@ -208,6 +250,7 @@ function getApiKeyFromUrl(): string | null {
  */
 function getSettingsFromUrl(): { apiKey?: string; baseUrl?: string } | null {
   if (typeof window === 'undefined') return null;
+  if (isCreativeEmbeddedMode()) return null;
 
   const urlParams = new URLSearchParams(window.location.search);
   const settingsParam = urlParams.get('settings');
@@ -240,21 +283,23 @@ function getSettingsFromUrl(): { apiKey?: string; baseUrl?: string } | null {
 /**
  * 从URL中移除apiKey参数
  */
-function removeApiKeyFromUrl(): void {
+function removeApiKeyFromUrl(
+  options: { includeCreativeAuthParams?: boolean } = {}
+): void {
   if (typeof window === 'undefined') return;
 
   const url = new URL(window.location.href);
   let hasChanges = false;
+  const paramsToRemove = options.includeCreativeAuthParams
+    ? CREATIVE_EMBEDDED_URL_AUTH_PARAM_NAMES
+    : ['apiKey', 'settings'];
 
-  if (url.searchParams.has('apiKey')) {
-    url.searchParams.delete('apiKey');
-    hasChanges = true;
-  }
-
-  if (url.searchParams.has('settings')) {
-    url.searchParams.delete('settings');
-    hasChanges = true;
-  }
+  paramsToRemove.forEach((param) => {
+    if (url.searchParams.has(param)) {
+      url.searchParams.delete(param);
+      hasChanges = true;
+    }
+  });
 
   if (hasChanges) {
     window.history.replaceState({}, document.title, url.toString());
@@ -265,6 +310,11 @@ function removeApiKeyFromUrl(): void {
  * 初始化设置：从URL获取settings参数并处理
  */
 export function initializeSettings(): void {
+  if (isCreativeEmbeddedMode()) {
+    removeApiKeyFromUrl({ includeCreativeAuthParams: true });
+    return;
+  }
+
   // 处理settings参数
   const settings = getSettingsFromUrl();
   // 处理单独的apiKey参数
@@ -291,17 +341,21 @@ export function initializeSettings(): void {
 
 // Initialize settings from URL if present
 if (typeof window !== 'undefined') {
-  // 处理settings参数
-  const settings = getSettingsFromUrl();
-  // 处理单独的apiKey参数
-  const apiKey = getApiKeyFromUrl();
+  if (isCreativeEmbeddedMode()) {
+    removeApiKeyFromUrl({ includeCreativeAuthParams: true });
+  } else {
+    // 处理settings参数
+    const settings = getSettingsFromUrl();
+    // 处理单独的apiKey参数
+    const apiKey = getApiKeyFromUrl();
 
-  if (settings?.apiKey || settings?.baseUrl || apiKey) {
-    geminiSettings.update({
-      ...(settings?.apiKey && { apiKey: settings.apiKey }),
-      ...(settings?.baseUrl && { baseUrl: settings.baseUrl }),
-      ...(apiKey && { apiKey: apiKey }),
-    });
-    removeApiKeyFromUrl();
+    if (settings?.apiKey || settings?.baseUrl || apiKey) {
+      geminiSettings.update({
+        ...(settings?.apiKey && { apiKey: settings.apiKey }),
+        ...(settings?.baseUrl && { baseUrl: settings.baseUrl }),
+        ...(apiKey && { apiKey: apiKey }),
+      });
+      removeApiKeyFromUrl();
+    }
   }
 }

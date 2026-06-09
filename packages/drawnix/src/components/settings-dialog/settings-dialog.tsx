@@ -51,6 +51,7 @@ import {
   normalizeModelApiBaseUrl,
   runtimeModelDiscovery,
 } from '../../utils/runtime-model-discovery';
+import { CREATIVE_MANAGED_PROFILE_ID } from '../../services/creative-mode';
 import { compareModelsByDisplayPriority } from '../../utils/model-sort';
 import {
   createModelRef,
@@ -248,6 +249,9 @@ const AUTH_TYPE_META: Record<ProviderProfile['authType'], { label: string }> = {
   },
   custom: {
     label: '手动拼装',
+  },
+  'session-broker': {
+    label: '托管会话',
   },
 };
 
@@ -521,6 +525,7 @@ function inferAuthTypeForProviderType(
 
 function isManagedProviderProfile(profileId: string): boolean {
   return (
+    profileId === CREATIVE_MANAGED_PROFILE_ID ||
     profileId === LEGACY_DEFAULT_PROVIDER_PROFILE_ID ||
     profileId === TUZI_ORIGINAL_PROVIDER_PROFILE_ID ||
     profileId === TUZI_MIX_PROVIDER_PROFILE_ID ||
@@ -743,7 +748,11 @@ export const SettingsDialog = ({
     isCompactLayout &&
     (dialogWidth > 0 ? dialogWidth < 600 : viewportWidth < 600);
 
-  const canManageModels = !!selectedProfile && !!selectedProfile.apiKey.trim();
+  const isSelectedSessionBrokerProfile =
+    selectedProfile?.authType === 'session-broker';
+  const canManageModels =
+    !!selectedProfile &&
+    (isSelectedSessionBrokerProfile || !!selectedProfile.apiKey.trim());
   const currentDraftSignature = createSettingsDraftSignature({
     profiles: profilesDraft,
     presets: presetsDraft,
@@ -1428,6 +1437,17 @@ export const SettingsDialog = ({
   const handleFetchModels = async () => {
     if (!selectedProfile) {
       MessagePlugin.warning('请先选择供应商配置');
+      return;
+    }
+
+    if (selectedProfile.authType === 'session-broker') {
+      if (runtimeState.discoveredModels.length === 0) {
+        MessagePlugin.warning(
+          '托管会话模型由 opentu 自动同步，无需 API Key；请刷新页面重试。'
+        );
+        return;
+      }
+      setDiscoveryDialogOpen(true);
       return;
     }
 
@@ -2243,6 +2263,7 @@ export const SettingsDialog = ({
                 type="text"
                 className="settings-dialog__input"
                 value={selectedProfile.baseUrl}
+                disabled={isSelectedSessionBrokerProfile}
                 onChange={(event) =>
                   updateProfile(selectedProfile.id, (profile) => ({
                     ...profile,
@@ -2251,12 +2272,20 @@ export const SettingsDialog = ({
                 }
                 placeholder={TUZI_PROVIDER_DEFAULT_BASE_URL}
               />
+              {isSelectedSessionBrokerProfile ? (
+                <span className="settings-dialog__field-hint">
+                  托管会话固定通过 opentu /creative 中继访问，不会向浏览器暴露上游
+                  Base URL。
+                </span>
+              ) : null}
             </div>
 
             <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
               <div className="settings-dialog__label-with-tooltip settings-dialog__label-with-tooltip--left">
                 <label className="settings-dialog__label settings-dialog__label--stacked">
-                  API Key
+                  {isSelectedSessionBrokerProfile
+                    ? 'API Key（托管会话无需填写）'
+                    : 'API Key'}
                 </label>
                 <HoverTip
                   content={
@@ -2328,7 +2357,12 @@ export const SettingsDialog = ({
                   <input
                     type={isApiKeyVisible ? 'text' : 'password'}
                     className="settings-dialog__input settings-dialog__secret-input"
-                    value={selectedProfile.apiKey}
+                    value={
+                      isSelectedSessionBrokerProfile
+                        ? ''
+                        : selectedProfile.apiKey
+                    }
+                    disabled={isSelectedSessionBrokerProfile}
                     onChange={(event) =>
                       updateProfile(selectedProfile.id, (profile) => ({
                         ...profile,
@@ -2347,6 +2381,7 @@ export const SettingsDialog = ({
                       aria-label={
                         isApiKeyVisible ? '隐藏 API Key' : '查看 API Key'
                       }
+                      disabled={isSelectedSessionBrokerProfile}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setIsApiKeyVisible((visible) => !visible)}
                     >
@@ -2376,10 +2411,16 @@ export const SettingsDialog = ({
                       同步中
                     </>
                   ) : (
-                    '获取模型'
+                    isSelectedSessionBrokerProfile ? '查看模型池' : '获取模型'
                   )}
                 </button>
               </div>
+              {isSelectedSessionBrokerProfile ? (
+                <span className="settings-dialog__field-hint">
+                  全新浏览器打开 /creative 时使用托管会话，不需要在浏览器内配置
+                  API Key；完整模型池可在“查看模型池”中检索。
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -2446,8 +2487,11 @@ export const SettingsDialog = ({
     const providerDraftState = selectedProfile
       ? getProviderDraftState(selectedProfile, initialProfiles)
       : 'saved';
+    const isSessionBrokerProvider =
+      selectedProfile?.authType === 'session-broker';
     const canLaunchBenchmark =
-      !!selectedProfile?.apiKey.trim() &&
+      !!selectedProfile &&
+      (isSessionBrokerProvider || !!selectedProfile.apiKey.trim()) &&
       providerDraftState === 'saved' &&
       runtimeState.status !== 'loading';
     const isDefaultProvider =
@@ -2485,7 +2529,12 @@ export const SettingsDialog = ({
       Boolean(modelSearch);
     const shouldShowErrorState =
       runtimeState.status === 'error' && displayModels.length === 0;
-    const shouldShowHintState = !canManageModels && displayModels.length === 0;
+    const shouldShowHintState =
+      (!canManageModels || isSessionBrokerProvider) &&
+      displayModels.length === 0;
+    const modelActionUnavailableHint = isSessionBrokerProvider
+      ? '托管会话无需 API Key；请等待 opentu 模型池同步完成'
+      : '请先保存供应商配置并确保 API Key 可用';
 
     return (
       <div className="settings-dialog__section">
@@ -2572,7 +2621,7 @@ export const SettingsDialog = ({
                       content={
                         canLaunchBenchmark
                           ? '测试当前供应商这一组模型'
-                          : '请先保存供应商配置并确保 API Key 可用'
+                          : modelActionUnavailableHint
                       }
                       showArrow={false}
                     >
@@ -2668,7 +2717,7 @@ export const SettingsDialog = ({
                                 content={
                                   canLaunchBenchmark
                                     ? '测试'
-                                    : '请先保存供应商配置并确保 API Key 可用'
+                                    : modelActionUnavailableHint
                                 }
                                 showArrow={false}
                               >
@@ -2732,7 +2781,9 @@ export const SettingsDialog = ({
           </div>
         ) : shouldShowHintState ? (
           <div className="settings-dialog__model-empty">
-            填写 API Key 后即可获取模型，获取完成后可在这里检索和浏览。
+            {isSessionBrokerProvider
+              ? '托管会话模型由 opentu 自动同步，无需 API Key；同步完成后可在这里检索和浏览。'
+              : '填写 API Key 后即可获取模型，获取完成后可在这里检索和浏览。'}
           </div>
         ) : (
           <div className="settings-dialog__model-empty">还没有已添加的模型</div>

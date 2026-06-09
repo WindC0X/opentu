@@ -32,6 +32,10 @@ import { taskQueueService } from '../services/task-queue';
 import { TaskType } from '../types/task.types';
 import { geminiSettings } from '../utils/settings-manager';
 import { insertImageFromUrlAndSelect } from '../data/image';
+import {
+  CREATIVE_RELAY_BASE_URL,
+  isCreativeEmbeddedMode,
+} from '../services/creative-mode';
 
 const MAX_GENERATE_IMAGE_DEDUPE_KEYS = 500;
 const generateImageRequestDedupeKeys = new Map<string, number>();
@@ -70,8 +74,10 @@ function setupCommunicationHandlers(
       boardId: (board as any).id || 'default-board',
       theme: 'light', // TODO: 从应用状态获取实际主题
       config: {
-        apiKey: settings.apiKey,
-        baseUrl: settings.baseUrl,
+        apiKey: isCreativeEmbeddedMode() ? '' : settings.apiKey,
+        baseUrl: isCreativeEmbeddedMode()
+          ? CREATIVE_RELAY_BASE_URL
+          : settings.baseUrl,
         imageModel: settings.imageModelName || 'gemini-2.5-flash-image-vip',
       },
     });

@@ -7,6 +7,10 @@
 import { CryptoUtils } from './crypto-utils';
 import { DRAWNIX_SETTINGS_KEY } from '../constants/storage';
 import { configIndexedDBWriter } from './config-indexeddb-writer';
+import {
+  CREATIVE_MANAGED_PROFILE_ID,
+  isCreativeEmbeddedMode,
+} from '../services/creative-mode';
 import type { GeminiConfig } from './gemini-api/types';
 import type { VideoAPIConfig } from './config-indexeddb-writer';
 import type { ProviderPricingCache } from './model-pricing-types';
@@ -184,6 +188,40 @@ const SENSITIVE_FIELDS = new Set([
 ]);
 
 const SENSITIVE_FIELD_PATTERNS = [/^providerProfiles\.\d+\.apiKey$/];
+const CREATIVE_EMBEDDED_URL_AUTH_PARAM_NAMES = [
+  'settings',
+  'apiKey',
+  'api_key',
+  'key',
+  'baseUrl',
+  'base_url',
+  'auth',
+  'authType',
+  'auth_type',
+  'authMode',
+  'auth_mode',
+  'authorization',
+  'Authorization',
+  'providerAuth',
+  'provider_auth',
+  'providerAuthorization',
+  'provider_authorization',
+  'provider',
+  'providerOverride',
+  'provider_override',
+  'accessToken',
+  'access_token',
+  'refreshToken',
+  'refresh_token',
+  'idToken',
+  'id_token',
+  'internalToken',
+  'internal_token',
+  'upstreamKey',
+  'upstream_key',
+  'channelId',
+  'channel_id',
+];
 
 // ====================================
 // 设置管理器类
@@ -316,6 +354,9 @@ class SettingsManager {
     baseUrl: string,
     providerType?: ProviderType | null
   ): ProviderAuthType {
+    if (baseUrl.trim().startsWith('/creative/')) {
+      return 'session-broker';
+    }
     return 'bearer';
   }
 
@@ -343,7 +384,8 @@ class SettingsManager {
       authType === 'header' ||
       authType === 'query' ||
       authType === 'custom' ||
-      authType === 'bearer'
+      authType === 'bearer' ||
+      authType === 'session-broker'
     ) {
       return authType;
     }
@@ -1292,6 +1334,21 @@ class SettingsManager {
     if (typeof window === 'undefined') return;
 
     try {
+      if (isCreativeEmbeddedMode(window.location)) {
+        const url = new URL(window.location.href);
+        let hasChanges = false;
+        CREATIVE_EMBEDDED_URL_AUTH_PARAM_NAMES.forEach((param) => {
+          if (url.searchParams.has(param)) {
+            url.searchParams.delete(param);
+            hasChanges = true;
+          }
+        });
+        if (hasChanges) {
+          window.history.replaceState({}, document.title, url.toString());
+        }
+        return;
+      }
+
       const urlParams = new URLSearchParams(window.location.search);
 
       // 处理settings参数
@@ -1362,18 +1419,27 @@ class SettingsManager {
     try {
       const imageRoute = this.resolveInvocationRoute('image');
       const videoRoute = this.resolveInvocationRoute('video');
+      const isEmbeddedCreative = isCreativeEmbeddedMode();
+      const getPersistableBaseUrl = (route: ResolvedInvocationRoute): string => {
+        if (!isEmbeddedCreative) {
+          return route.baseUrl;
+        }
+        return route.authType === 'session-broker' ? route.baseUrl : '';
+      };
+      const getPersistableApiKey = (route: ResolvedInvocationRoute): string =>
+        isEmbeddedCreative ? '' : route.apiKey;
 
       // 构建 GeminiConfig（与 SW 期望的格式一致）
       const geminiConfig: GeminiConfig = {
-        apiKey: imageRoute.apiKey,
-        baseUrl: imageRoute.baseUrl,
+        apiKey: getPersistableApiKey(imageRoute),
+        baseUrl: getPersistableBaseUrl(imageRoute),
         modelName: imageRoute.modelId,
       };
 
       // 构建 VideoAPIConfig（与 SW 期望的格式一致）
       const videoConfig: VideoAPIConfig = {
-        apiKey: videoRoute.apiKey,
-        baseUrl: videoRoute.baseUrl,
+        apiKey: getPersistableApiKey(videoRoute),
+        baseUrl: getPersistableBaseUrl(videoRoute),
         model: videoRoute.modelId,
       };
 
@@ -1719,6 +1785,55 @@ class SettingsManager {
     );
   }
 
+  private resolveCreativeEmbeddedManagedRoute(
+    routeType: ModelType,
+    requestedModelRef?: ModelRef | null,
+    presetModelRef?: ModelRef | null
+  ): ResolvedInvocationRoute | null {
+    if (!isCreativeEmbeddedMode()) {
+      return null;
+    }
+
+    const profile = this.getProviderProfileById(CREATIVE_MANAGED_PROFILE_ID);
+    if (
+      !profile ||
+      profile.enabled === false ||
+      profile.authType !== 'session-broker' ||
+      !profile.baseUrl?.trim()
+    ) {
+      return null;
+    }
+
+    const profileModels = this.getSelectedModelsForProfile(profile.id, routeType);
+    const availableModelIds = new Set(profileModels.map((model) => model.id));
+    const requestedModelId = requestedModelRef?.modelId || null;
+    const presetModelId =
+      presetModelRef?.profileId === profile.id ? presetModelRef.modelId : null;
+    const modelId =
+      (requestedModelId && availableModelIds.has(requestedModelId)
+        ? requestedModelId
+        : null) ||
+      (presetModelId && availableModelIds.has(presetModelId)
+        ? presetModelId
+        : null) ||
+      profileModels[0]?.id ||
+      requestedModelId ||
+      presetModelRef?.modelId ||
+      this.getLegacyModelId(routeType);
+
+    return {
+      routeType,
+      modelId,
+      profileId: profile.id,
+      profileName: profile.name,
+      providerType: profile.providerType,
+      baseUrl: profile.baseUrl.trim(),
+      apiKey: '',
+      authType: 'session-broker',
+      source: 'preset',
+    };
+  }
+
   public getActiveInvocationPreset(): InvocationPreset | null {
     const preset = this.getActiveInvocationPresetInternal();
     return preset ? this.cloneValue(preset) : null;
@@ -1806,6 +1921,15 @@ class SettingsManager {
           );
     const normalizedRequestedModelId = requestedModelRef?.modelId || null;
     const normalizedPresetModelId = presetModelRef?.modelId || null;
+    const creativeEmbeddedManagedRoute =
+      this.resolveCreativeEmbeddedManagedRoute(
+        routeType,
+        requestedModelRef,
+        presetModelRef
+      );
+    if (creativeEmbeddedManagedRoute) {
+      return creativeEmbeddedManagedRoute;
+    }
     const requestedStaticModel = normalizedRequestedModelId
       ? getModelConfig(normalizedRequestedModelId)
       : null;
@@ -1841,6 +1965,7 @@ class SettingsManager {
       providerType: profile?.providerType || null,
       baseUrl: normalizedProfileBaseUrl || normalizedLegacyBaseUrl,
       apiKey: normalizedProfileApiKey || normalizedLegacyApiKey,
+      authType: profile?.authType || 'bearer',
       source: profile ? 'preset' : 'legacy',
     };
   }
@@ -1850,6 +1975,9 @@ class SettingsManager {
     requestedModelId?: string | ModelRef | null
   ): boolean {
     const route = this.resolveInvocationRoute(routeType, requestedModelId);
+    if (route.authType === 'session-broker') {
+      return Boolean(route.baseUrl);
+    }
     return Boolean(route.baseUrl && route.apiKey);
   }
 }
