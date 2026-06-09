@@ -24,6 +24,7 @@ import {
   updateViewportOffset,
 } from '@plait/core';
 import { ErrorFallbackUI, safeModeReload, goToDebug } from './ErrorBoundary';
+import { ReturnButton } from '../components/ReturnButton';
 import { collectAndDownloadErrorLog } from '../utils/error-log-exporter';
 
 // 节流保存 viewport 的间隔（毫秒）
@@ -914,6 +915,7 @@ export function App() {
 
   return (
     <div style={{ height: '100vh' }}>
+      <ReturnButton />
       <Drawnix
         value={value.children}
         viewport={value.viewport}
