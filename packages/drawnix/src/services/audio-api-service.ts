@@ -104,8 +104,10 @@ interface ClipIdentifierMemory {
   ordered: string[];
 }
 
-function inferAuthType(): ProviderAuthStrategy {
-  return 'bearer';
+function inferAuthType(
+  route: ReturnType<typeof resolveInvocationRoute>
+): ProviderAuthStrategy {
+  return route.authType || 'bearer';
 }
 
 function resolveAudioProviderContext(
@@ -123,7 +125,7 @@ function resolveAudioProviderContext(
     providerType: route.providerType || 'custom',
     baseUrl: route.baseUrl,
     apiKey: route.apiKey,
-    authType: inferAuthType(),
+    authType: inferAuthType(route),
   };
 }
 

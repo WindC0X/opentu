@@ -77,7 +77,7 @@ import {
 function inferAuthTypeFromRoute(
   route: ReturnType<typeof resolveInvocationRoute>
 ): ProviderAuthStrategy {
-  return 'bearer';
+  return route.authType || 'bearer';
 }
 
 function buildProviderContext(config: {
