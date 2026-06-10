@@ -51,6 +51,8 @@ export interface ImageGenerationParams {
   quality?: 'auto' | 'low' | 'medium' | 'high' | '1k' | '2k' | '4k';
   /** 生成数量 (1-10) */
   count?: number;
+  /** Stable request id for backend idempotency, scoped to one local image task. */
+  idempotencyKey?: string;
   /** 额外参数（如 seedream_quality），透传给 adapter */
   params?: Record<string, unknown>;
   /** 素材库轻量元数据 */

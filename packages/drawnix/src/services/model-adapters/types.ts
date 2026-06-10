@@ -47,6 +47,8 @@ export interface ImageGenerationRequest {
   prompt: string;
   model?: string;
   modelRef?: ModelRef | null;
+  /** Stable request id for backend idempotency, scoped to one local image task. */
+  idempotencyKey?: string;
   size?: string;
   generationMode?: 'text_to_image' | 'image_to_image' | 'image_edit';
   referenceImages?: string[];

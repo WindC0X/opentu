@@ -101,6 +101,7 @@ export async function executeImageViaAdapter(
     background?: ImageBackground;
     outputFormat?: ImageOutputFormat;
     outputCompression?: number;
+    idempotencyKey?: string;
     params?: Record<string, unknown>;
     assetMetadata?: GenerationParams['assetMetadata'];
     preferredRequestSchema?: string | readonly string[];
@@ -137,6 +138,7 @@ export async function executeImageViaAdapter(
     }
 
     options?.onProgress?.({ progress: 10, phase: 'submitting' });
+    const idempotencyKey = `opentu-image-${taskId}`;
 
     const result = await adapter.generateImage(
       getAdapterContextFromSettings('image', params.modelRef || params.model, {
@@ -158,11 +160,13 @@ export async function executeImageViaAdapter(
         background: params.background,
         outputFormat: params.outputFormat,
         outputCompression: params.outputCompression,
+        idempotencyKey,
         params: {
           resolution: params.resolution,
           quality: params.quality,
           n: params.count,
           ...params.params,
+          idempotencyKey,
         },
       }
     );

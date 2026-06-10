@@ -26,12 +26,80 @@ const DEFAULT_POLL_MAX_ATTEMPTS = Math.ceil(
   IMAGE_GENERATION_TIMEOUT_MS / DEFAULT_POLL_INTERVAL_MS
 );
 
+const CREATIVE_MJ_UNSUPPORTED_MESSAGE =
+  '当前 new-api 后端暂不支持嵌入式 MJ 图片生成';
+
+const isSessionBrokerContext = (context: AdapterContext): boolean =>
+  context.authType === 'session-broker' ||
+  context.provider?.authType === 'session-broker';
+
+const requireMJProviderApiKey = (context: AdapterContext): void => {
+  if (!context.apiKey && !isSessionBrokerContext(context)) {
+    throw new Error('API Key 未配置，请先配置 API Key');
+  }
+};
+
 const normalizeBaseUrl = (context: AdapterContext): string => {
   if (!context.baseUrl) {
     throw new Error('Missing baseUrl for MJ adapter');
   }
   const trimmed = context.baseUrl.replace(/\/$/, '');
+  if (isSessionBrokerContext(context)) {
+    return trimmed;
+  }
   return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
+};
+
+const isCreativeMJUnsupportedStatus = (status: number): boolean =>
+  status === 404 || status === 405 || status === 501;
+
+const createCreativeMJUnsupportedError = (status: number): Error => {
+  const error = new Error(`${CREATIVE_MJ_UNSUPPORTED_MESSAGE} (${status})`);
+  (error as any).code = 'unsupported-backend';
+  (error as any).unsupportedBackend = true;
+  (error as any).unsupportedCreativeMJ = true;
+  (error as any).httpStatus = status;
+  return error;
+};
+
+const createMJIdempotencyKey = (preferredKey?: string): string => {
+  const trimmedPreferredKey = preferredKey?.trim();
+  if (trimmedPreferredKey) {
+    return trimmedPreferredKey;
+  }
+
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return `opentu-image-${randomUUID()}`;
+  }
+  return `opentu-image-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+const resolveMJIdempotencySource = (
+  request: ImageGenerationRequest
+): string | undefined => {
+  if (typeof request.idempotencyKey === 'string') {
+    return request.idempotencyKey;
+  }
+  if (typeof request.params?.idempotencyKey === 'string') {
+    return request.params.idempotencyKey;
+  }
+  return undefined;
+};
+
+const sessionBrokerMJSubmitHeaders = (
+  context: AdapterContext,
+  request: ImageGenerationRequest
+): Record<string, string> => {
+  if (!isSessionBrokerContext(context)) {
+    return {};
+  }
+
+  return {
+    'Idempotency-Key': createMJIdempotencyKey(
+      resolveMJIdempotencySource(request)
+    ),
+  };
 };
 
 const stripDataUrlPrefix = (value: string): string => {
@@ -53,6 +121,7 @@ const isFailureStatus = (status?: string): boolean => {
 
 const submitMJImagine = async (
   context: AdapterContext,
+  request: ImageGenerationRequest,
   body: Record<string, unknown>
 ): Promise<MJSubmitResponse> => {
   const baseUrl = normalizeBaseUrl(context);
@@ -63,6 +132,7 @@ const submitMJImagine = async (
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...sessionBrokerMJSubmitHeaders(context, request),
       },
       body: JSON.stringify(body),
     },
@@ -70,6 +140,13 @@ const submitMJImagine = async (
   );
 
   if (!response.ok) {
+    if (
+      isSessionBrokerContext(context) &&
+      isCreativeMJUnsupportedStatus(response.status)
+    ) {
+      throw createCreativeMJUnsupportedError(response.status);
+    }
+
     const errorText = await response.text();
     throw new Error(`MJ submit failed: ${response.status} - ${errorText}`);
   }
@@ -92,6 +169,13 @@ const queryMJTask = async (
   );
 
   if (!response.ok) {
+    if (
+      isSessionBrokerContext(context) &&
+      isCreativeMJUnsupportedStatus(response.status)
+    ) {
+      throw createCreativeMJUnsupportedError(response.status);
+    }
+
     const errorText = await response.text();
     throw new Error(`MJ query failed: ${response.status} - ${errorText}`);
   }
@@ -110,19 +194,30 @@ export const mjImageAdapter: ImageModelAdapter = {
   supportedModels: ['mj-imagine'],
   defaultModel: 'mj-imagine',
   async generateImage(context, request: ImageGenerationRequest) {
+    requireMJProviderApiKey(context);
+
     const base64Array = (request.referenceImages || []).map((img) =>
       stripDataUrlPrefix(img)
     );
 
-    const submitResponse = await submitMJImagine(context, {
-      botType: 'MID_JOURNEY',
-      prompt: request.prompt,
-      base64Array,
-    });
+    const submitResponse = await submitMJImagine(
+      context,
+      request,
+      {
+        botType: 'MID_JOURNEY',
+        prompt: request.prompt,
+        base64Array,
+      }
+    );
 
     const taskId = submitResponse.result?.toString();
     if (!taskId) {
       throw new Error('MJ submit missing task id');
+    }
+
+    const handleSubmitted = request.params?.onSubmitted;
+    if (typeof handleSubmitted === 'function') {
+      handleSubmitted(taskId);
     }
 
     for (let attempt = 0; attempt < DEFAULT_POLL_MAX_ATTEMPTS; attempt += 1) {

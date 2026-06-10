@@ -142,6 +142,14 @@ function isSensitiveSessionBrokerRoutingHeaderName(name: string): boolean {
     normalized === 'xmodelid' ||
     normalized === 'modeloverride' ||
     normalized === 'xmodeloverride' ||
+    normalized === 'selectedkey' ||
+    normalized === 'xselectedkey' ||
+    normalized === 'notifyhook' ||
+    normalized === 'xnotifyhook' ||
+    normalized === 'notifyurl' ||
+    normalized === 'xnotifyurl' ||
+    normalized === 'callbackurl' ||
+    normalized === 'xcallbackurl' ||
     normalized === 'endpoint' ||
     normalized === 'xendpoint' ||
     normalized === 'url' ||
@@ -246,6 +254,14 @@ function isSensitiveSessionBrokerQueryKey(
     normalized === 'key' ||
     normalized === 'provider' ||
     normalized === 'xprovider' ||
+    normalized === 'selectedkey' ||
+    normalized === 'xselectedkey' ||
+    normalized === 'notifyhook' ||
+    normalized === 'xnotifyhook' ||
+    normalized === 'notifyurl' ||
+    normalized === 'xnotifyurl' ||
+    normalized === 'callbackurl' ||
+    normalized === 'xcallbackurl' ||
     normalized === 'endpoint' ||
     normalized === 'xendpoint' ||
     normalized === 'url' ||
@@ -303,7 +319,7 @@ function applyAuthQuery(
 }
 
 function isServerSelectedModelRelayPath(path: string): boolean {
-  return /(^|\/)(videos?|suno)(\/|$)/i.test(path);
+  return /(^|\/)(videos?|suno|mj)(\/|$)/i.test(path);
 }
 
 const SESSION_BROKER_BASE_URL = '/creative/relay/v1';

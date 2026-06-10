@@ -89,6 +89,10 @@ function logImageAdapterSelection(
     | undefined;
 }
 
+function createImageIdempotencyKey(taskId: string): string {
+  return `opentu-image-${taskId}`;
+}
+
 function readParamValue(params: GenerationParams, keys: string[]): unknown {
   const rawParams = params as Record<string, unknown>;
   const nestedParams =
@@ -457,11 +461,13 @@ class GenerationAPIService {
         invocationOptions
       );
       logImageAdapterSelection(taskId, adapter, requestedModel, adapterContext);
+      const idempotencyKey = createImageIdempotencyKey(taskId);
 
       const result = await adapter.generateImage(adapterContext, {
         prompt: params.prompt,
         model: requestedModel,
         modelRef: requestedModelRef || null,
+        idempotencyKey,
         size,
         generationMode: resolveImageGenerationMode(params, shouldUseEditSchema),
         referenceImages:
@@ -491,6 +497,7 @@ class GenerationAPIService {
           quality: (params as any).quality,
           response_format: (params as any).response_format,
           ...(params as any).params,
+          idempotencyKey,
           onProgress: (progress: number) => {
             taskQueueService.updateTaskProgress(taskId, progress);
             taskQueueService.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
@@ -524,6 +531,16 @@ class GenerationAPIService {
       }
       if (error.httpStatus) {
         (wrappedError as any).httpStatus = error.httpStatus;
+      }
+      if (error.code) {
+        (wrappedError as any).code = error.code;
+      }
+      if (error.unsupportedBackend) {
+        (wrappedError as any).unsupportedBackend = error.unsupportedBackend;
+      }
+      if (error.unsupportedCreativeMJ) {
+        (wrappedError as any).unsupportedCreativeMJ =
+          error.unsupportedCreativeMJ;
       }
       if (error.fullResponse) {
         (wrappedError as any).fullResponse = error.fullResponse;

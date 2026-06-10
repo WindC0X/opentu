@@ -274,6 +274,77 @@ describe('Media Executor Module', () => {
       );
     }, 15000);
 
+    it('passes image adapter idempotency through fallback adapter routes from the local task id', async () => {
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+      }));
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          completeTask: vi.fn(async () => undefined),
+          failTask: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../unified-cache-service', () => ({
+        unifiedCacheService: {
+          getImageForAI: vi.fn(),
+          isCached: vi.fn(async () => false),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../../utils/api-auth-error-event', () => ({
+        isAuthError: vi.fn(() => false),
+        dispatchApiAuthError: vi.fn(),
+      }));
+      vi.doMock('../model-adapters', async (importOriginal) => {
+        const actual = await importOriginal<
+          typeof import('../model-adapters')
+        >();
+
+        return {
+          ...actual,
+          getAdapterContextFromSettings: vi.fn(() => ({
+            baseUrl: '/creative/relay/v1',
+            apiKey: '',
+            authType: 'session-broker',
+          })),
+        };
+      });
+
+      const { executeImageViaAdapter } = await import(
+        '../media-executor/fallback-adapter-routes'
+      );
+      let receivedIdempotencyKey: string | undefined;
+      let receivedNestedIdempotencyKey: unknown;
+      const adapter: ImageModelAdapter = {
+        id: 'mj-image-adapter',
+        label: 'MJ Image',
+        kind: 'image',
+        async generateImage(_context, request) {
+          receivedIdempotencyKey = (
+            request as typeof request & { idempotencyKey?: string }
+          ).idempotencyKey;
+          receivedNestedIdempotencyKey = request.params?.idempotencyKey;
+          return {
+            url: 'https://example.com/mj.jpg',
+            format: 'jpg',
+          };
+        },
+      };
+
+      await executeImageViaAdapter('task-1', adapter, {
+        prompt: 'A cat',
+        model: 'mj-imagine',
+        params: {
+          idempotencyKey: 'caller-must-not-override-local-task-id',
+        },
+      });
+
+      expect(receivedIdempotencyKey).toBe('opentu-image-task-1');
+      expect(receivedNestedIdempotencyKey).toBe('opentu-image-task-1');
+    }, 15000);
+
     it('passes video adapter progress through fallback adapter routes', async () => {
       const updateRemoteId = vi.fn(async () => undefined);
       const completeTask = vi.fn(async () => undefined);

@@ -272,6 +272,51 @@ describe('ProviderTransport session-broker auth', () => {
     );
   });
 
+  it('strips server-selected model and MJ selected-key/notifyHook material on session-broker MJ relay paths', () => {
+    const transport = new ProviderTransport();
+    const context: ResolvedProviderContext = {
+      profileId: 'new-api-creative',
+      profileName: 'Creative',
+      providerType: 'openai-compatible',
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+      extraHeaders: {
+        'X-Model': 'extra-model-leak',
+        'X-Selected-Key': 'extra-selected-key-leak',
+        'X-Notify-Hook': 'extra-notify-hook-leak',
+        'X-Safe-Trace': 'trace-ok',
+      },
+    };
+
+    const prepared = transport.prepareRequest(context, {
+      path: '/mj/task/task-1/fetch?model=path-model-leak&selectedKey=path-selected-key-leak&notifyHook=path-notify-hook-leak&provider=path-provider-leak&safe=1',
+      query: {
+        modelOverride: 'query-model-override-leak',
+        selected_key: 'query-selected-key-leak',
+        notify_hook: 'query-notify-hook-leak',
+        safe2: '2',
+      },
+      headers: {
+        Model: 'request-model-leak',
+        SelectedKey: 'request-selected-key-leak',
+        NotifyHook: 'request-notify-hook-leak',
+        'Idempotency-Key': 'opentu-image-local-task',
+      },
+    });
+
+    expect(prepared.url).toBe(
+      '/creative/relay/v1/mj/task/task-1/fetch?safe=1&safe2=2'
+    );
+    expect(prepared.headers).toMatchObject({
+      'X-Safe-Trace': 'trace-ok',
+      'Idempotency-Key': 'opentu-image-local-task',
+    });
+    expect(JSON.stringify(prepared)).not.toMatch(
+      /model-leak|model-override-leak|selected-key-leak|notify-hook-leak|provider-leak/i
+    );
+  });
+
   it('rejects absolute upstream request paths for session-broker relay calls', () => {
     const transport = new ProviderTransport();
     const context: ResolvedProviderContext = {
