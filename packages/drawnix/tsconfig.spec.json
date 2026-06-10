@@ -2,8 +2,12 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "../../dist/out-tsc",
-    "module": "commonjs",
-    "types": ["node"]
+    "module": "esnext",
+    "types": [
+      "node",
+      "vitest/globals",
+      "vite/client"
+    ]
   },
   "include": [
     "src/**/*.test.ts",
