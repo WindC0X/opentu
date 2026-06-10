@@ -1,8 +1,152 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  InvocationPlan,
+  ProviderModelBinding,
+  ResolvedProviderContext,
+} from '../provider-routing/types';
+
+const loggerMocks = vi.hoisted(() => ({
+  startLLMApiLog: vi.fn(() => 'audio-log-1'),
+  completeLLMApiLog: vi.fn(),
+  failLLMApiLog: vi.fn(),
+  updateLLMApiLogMetadata: vi.fn(),
+}));
+
+vi.mock('../media-executor/llm-api-logger', () => ({
+  startLLMApiLog: loggerMocks.startLLMApiLog,
+  completeLLMApiLog: loggerMocks.completeLLMApiLog,
+  failLLMApiLog: loggerMocks.failLLMApiLog,
+  updateLLMApiLogMetadata: loggerMocks.updateLLMApiLogMetadata,
+}));
+
+type FetchMock = ReturnType<typeof vi.fn<typeof fetch>>;
+type FetchCall = Parameters<typeof fetch>;
+
+function getFetchCall(fetcher: FetchMock, index = 0): FetchCall {
+  const call = fetcher.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected fetch call #${index + 1}`);
+  }
+  return call;
+}
+
+function createAudioBinding(
+  overrides: Partial<ProviderModelBinding> = {}
+): ProviderModelBinding {
+  return {
+    id: 'new-api-creative:suno_music:audio',
+    profileId: 'new-api-creative',
+    modelId: 'suno_music',
+    operation: 'audio',
+    protocol: 'tuzi.suno.music',
+    requestSchema: 'tuzi.suno.music.submit',
+    responseSchema: 'tuzi.suno.task',
+    submitPath: '/suno/submit/music',
+    pollPathTemplate: '/suno/fetch/{taskId}',
+    priority: 100,
+    confidence: 'high',
+    source: 'template',
+    metadata: {
+      audio: {
+        action: 'music',
+        defaultAction: 'music',
+        submitPathByAction: {
+          music: '/suno/submit/music',
+          lyrics: '/suno/submit/lyrics',
+        },
+      },
+    },
+    ...overrides,
+  };
+}
+
+function createSessionBrokerAudioPlan(
+  binding: ProviderModelBinding = createAudioBinding()
+): InvocationPlan {
+  const provider: ResolvedProviderContext = {
+    profileId: 'new-api-creative',
+    profileName: 'Creative',
+    providerType: 'openai-compatible',
+    baseUrl: '/creative/relay/v1',
+    apiKey: '',
+    authType: 'session-broker',
+    extraHeaders: {
+      Authorization: 'Bearer audio-header-leak',
+      'X-API-Key': 'audio-api-key-header-leak',
+      'X-Provider': 'audio-provider-header-leak',
+      'X-Channel-Id': 'audio-channel-header-leak',
+      'X-Base-URL': 'audio-base-url-header-leak',
+      'X-Model': 'audio-model-header-leak',
+      'X-Safe-Trace': 'trace-ok',
+    },
+  };
+
+  return {
+    provider,
+    modelRef: {
+      profileId: 'new-api-creative',
+      modelId: 'suno_music',
+    },
+    binding,
+  };
+}
+
+function mockResolveInvocationRoute(route: Record<string, unknown>): void {
+  vi.doMock('../../utils/settings-manager', () => {
+    const readOnlySettings = <T,>(value: T) => ({
+      get: () => value,
+      update: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    });
+
+    return {
+      DEFAULT_PROVIDER_IMAGE_API_COMPATIBILITY: 'openai',
+      LEGACY_DEFAULT_PROVIDER_IMAGE_API_COMPATIBILITY: 'openai',
+      LEGACY_DEFAULT_PROVIDER_PROFILE_ID: 'legacy-default',
+      TUZI_DEFAULT_PROVIDER_NAME: 'Tuzi',
+      TUZI_PROVIDER_DEFAULT_BASE_URL: 'https://api.tu-zi.com/v1',
+      createModelRef: (
+        profileId?: string | null,
+        modelId?: string | null
+      ) => {
+        const normalizedModelId = modelId?.trim();
+        if (!normalizedModelId) {
+          return null;
+        }
+        return {
+          profileId: profileId?.trim() || null,
+          modelId: normalizedModelId,
+        };
+      },
+      geminiSettings: readOnlySettings({
+        apiKey: '',
+        baseUrl: 'https://api.tu-zi.com/v1',
+        textModelName: 'gpt-4o-mini',
+        imageModelName: 'gpt-image-1',
+        videoModelName: 'veo3',
+        audioModelName: 'suno_music',
+      }),
+      providerCatalogsSettings: readOnlySettings([]),
+      providerProfilesSettings: readOnlySettings([]),
+      providerPricingCacheSettings: readOnlySettings({ providers: {} }),
+      resolveInvocationRoute: () => route,
+    };
+  });
+}
 
 describe('audio-api-service', () => {
   beforeEach(() => {
     vi.resetModules();
+    loggerMocks.startLLMApiLog.mockClear();
+    loggerMocks.completeLLMApiLog.mockClear();
+    loggerMocks.failLLMApiLog.mockClear();
+    loggerMocks.updateLLMApiLogMetadata.mockClear();
+  });
+
+  afterEach(async () => {
+    const creativeMode = await import('../creative-mode');
+    creativeMode.clearCreativeSessionAuthMaterial();
+    vi.unstubAllGlobals();
   });
 
   it('polls Suno tasks when submit returns the task id as data string', async () => {
@@ -51,26 +195,29 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
-
-    const { audioAPIService, extractAudioGenerationResult } = await import('../audio-api-service');
-
-    const result = await audioAPIService.generateAudioWithPolling({
-      model: 'suno_music',
-      prompt: 'write a heavy metal song',
-    }, {
-      interval: 1,
-      maxAttempts: 2,
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
     });
+
+    const { audioAPIService, extractAudioGenerationResult } = await import(
+      '../audio-api-service'
+    );
+
+    const result = await audioAPIService.generateAudioWithPolling(
+      {
+        model: 'suno_music',
+        prompt: 'write a heavy metal song',
+      },
+      {
+        interval: 1,
+        maxAttempts: 2,
+      }
+    );
 
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock.mock.calls[0]?.[1]).toMatchObject({
@@ -111,16 +258,14 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
 
     const { audioAPIService } = await import('../audio-api-service');
 
@@ -186,18 +331,18 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
 
-    const { audioAPIService, extractAudioGenerationResult } = await import('../audio-api-service');
+    const { audioAPIService, extractAudioGenerationResult } = await import(
+      '../audio-api-service'
+    );
 
     const result = await audioAPIService.resumePolling(taskId, {
       interval: 1,
@@ -260,16 +405,14 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
 
     const { audioAPIService } = await import('../audio-api-service');
 
@@ -294,7 +437,9 @@ describe('audio-api-service', () => {
       path: '/suno/submit/music',
       method: 'POST',
     });
-    expect(JSON.parse(sendMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+    expect(
+      JSON.parse(sendMock.mock.calls[0]?.[1]?.body as string)
+    ).toMatchObject({
       prompt: '继续完善副歌',
       continue_clip_id: 'clip-continue-1',
       task_id: 'task-continue-1',
@@ -388,18 +533,18 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
 
-    const { audioAPIService, extractAudioGenerationResult } = await import('../audio-api-service');
+    const { audioAPIService, extractAudioGenerationResult } = await import(
+      '../audio-api-service'
+    );
 
     const result = await audioAPIService.generateAudioWithPolling(
       {
@@ -468,18 +613,18 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
 
-    const { audioAPIService, extractAudioGenerationResult } = await import('../audio-api-service');
+    const { audioAPIService, extractAudioGenerationResult } = await import(
+      '../audio-api-service'
+    );
 
     const result = await audioAPIService.generateAudioWithPolling(
       {
@@ -569,18 +714,18 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
 
-    const { audioAPIService, extractAudioGenerationResult } = await import('../audio-api-service');
+    const { audioAPIService, extractAudioGenerationResult } = await import(
+      '../audio-api-service'
+    );
 
     const result = await audioAPIService.generateAudioWithPolling(
       {
@@ -653,18 +798,18 @@ describe('audio-api-service', () => {
       };
     });
 
-    vi.doMock('../../utils/settings-manager', () => ({
-      resolveInvocationRoute: () => ({
-        profileId: 'runtime',
-        profileName: 'Runtime',
-        providerType: 'custom',
-        baseUrl: 'https://api.tu-zi.com/v1',
-        apiKey: 'test-key',
-        authType: 'bearer',
-      }),
-    }));
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
 
-    const { audioAPIService, extractAudioGenerationResult } = await import('../audio-api-service');
+    const { audioAPIService, extractAudioGenerationResult } = await import(
+      '../audio-api-service'
+    );
 
     const result = await audioAPIService.generateAudioWithPolling(
       {
@@ -687,5 +832,384 @@ describe('audio-api-service', () => {
     expect(extracted.resultKind).toBe('lyrics');
     expect(extracted.lyricsTitle).toBe('别名歌词');
     expect(extracted.lyricsText).toContain('测试歌词');
+  });
+
+  it('allows empty apiKey for session-broker Suno music and sends canonical idempotent same-origin requests without credential leakage', async () => {
+    const taskId = 'creative-suno-task-1';
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'success', data: taskId }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            task_id: taskId,
+            action: 'MUSIC',
+            status: 'SUCCESS',
+            data: [
+              {
+                clip_id: 'creative-clip-1',
+                batch_index: 0,
+                status: 'complete',
+                audio_url: 'https://cdn1.suno.ai/creative-clip-1.mp3',
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({
+              baseUrlStrategy: 'trim-v1',
+              submitPath:
+                '/v1/suno/submit/music?apiKey=submit-query-leak&provider=submit-provider-leak',
+              pollPathTemplate:
+                '/v1/suno/fetch/{taskId}?apiKey=poll-query-leak&provider=poll-provider-leak&model=poll-model-leak',
+              metadata: {
+                audio: {
+                  action: 'music',
+                  defaultAction: 'music',
+                  submitPathByAction: {
+                    music:
+                      '/v1/suno/submit/music?apiKey=submit-query-leak&provider=submit-provider-leak',
+                    lyrics:
+                      '/v1/suno/submit/lyrics?apiKey=lyrics-query-leak&provider=lyrics-provider-leak',
+                  },
+                },
+              },
+            })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    const result = await audioAPIService.generateAudioWithPolling(
+      {
+        model: 'suno_music',
+        modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+        prompt: 'prompt-secret-must-not-enter-idempotency',
+        taskId: 'local-audio-task-1',
+      },
+      {
+        interval: 1,
+        maxAttempts: 2,
+      }
+    );
+
+    expect(result.taskId).toBe(taskId);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const [submitInput, submitInit] = getFetchCall(fetchMock, 0);
+    expect(String(submitInput)).toBe('/creative/relay/v1/suno/submit/music');
+    expect(submitInit?.method).toBe('POST');
+    expect(submitInit?.credentials).toBe('same-origin');
+    const submitHeaders = submitInit?.headers as Record<string, string>;
+    expect(submitHeaders['Content-Type']).toBe('application/json');
+    expect(submitHeaders['X-Creative-CSRF']).toBe('csrf-audio');
+    expect(submitHeaders['X-Creative-Nonce']).toBe('nonce-audio');
+    expect(submitHeaders['Idempotency-Key']).toBe(
+      'opentu-audio-local-audio-task-1'
+    );
+    expect(submitHeaders['Idempotency-Key']).not.toContain('prompt-secret');
+    expect(submitHeaders['X-Safe-Trace']).toBe('trace-ok');
+    expect(
+      Object.keys(submitHeaders).map((key) => key.toLowerCase())
+    ).not.toContain('authorization');
+    expect(
+      Object.keys(submitHeaders).map((key) => key.toLowerCase())
+    ).not.toContain('x-api-key');
+    expect(JSON.stringify(submitHeaders)).not.toMatch(
+      /audio-header-leak|audio-api-key|audio-provider|audio-channel|audio-base-url|audio-model/i
+    );
+
+    const submitBody = JSON.parse(submitInit?.body as string);
+    expect(submitBody).toMatchObject({
+      prompt: 'prompt-secret-must-not-enter-idempotency',
+      mv: 'chirp-v3-5',
+    });
+    expect(JSON.stringify(submitBody)).not.toMatch(
+      /apiKey|baseUrl|provider|channel|audio-header-leak|audio-api-key/i
+    );
+
+    const [pollInput, pollInit] = getFetchCall(fetchMock, 1);
+    expect(String(pollInput)).toBe(`/creative/relay/v1/suno/fetch/${taskId}`);
+    expect(pollInit?.method).toBe('GET');
+    expect(pollInit?.credentials).toBe('same-origin');
+    expect(`${submitInput} ${pollInput}`).not.toMatch(
+      /v1\/v1|submit-query-leak|poll-query-leak|provider|channel|baseUrl|apiKey|model-leak/i
+    );
+  });
+
+  it('uses the canonical session-broker Suno lyrics submit path with an empty apiKey', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ code: 'success', data: 'creative-lyrics-task-1' }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    const result = await audioAPIService.submitAudioGeneration({
+      model: 'suno_lyrics',
+      modelRef: { profileId: 'new-api-creative', modelId: 'suno_lyrics' },
+      prompt: '写一首歌词',
+      taskId: 'local-lyrics-task-1',
+    });
+
+    expect(result.taskId).toBe('creative-lyrics-task-1');
+    const [input, init] = getFetchCall(fetchMock);
+    expect(String(input)).toBe('/creative/relay/v1/suno/submit/lyrics');
+    expect(init?.credentials).toBe('same-origin');
+    expect((init?.headers as Record<string, string>)['Idempotency-Key']).toBe(
+      'opentu-audio-local-lyrics-task-1'
+    );
+  });
+
+  it('uses a nested stable idempotency key from adapter task params for session-broker Suno submits', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ code: 'success', data: 'creative-nested-idem-task' }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    await audioAPIService.submitAudioGeneration({
+      model: 'suno_music',
+      modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+      prompt: 'write a song',
+      params: {
+        idempotencyKey: 'opentu-audio-task-from-adapter',
+      },
+    });
+
+    const [, init] = getFetchCall(fetchMock);
+    expect((init?.headers as Record<string, string>)['Idempotency-Key']).toBe(
+      'opentu-audio-task-from-adapter'
+    );
+  });
+
+  it('still rejects direct Suno providers without an API key before fetch', async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal('fetch', fetchMock);
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () => null,
+      };
+    });
+
+    mockResolveInvocationRoute({
+      profileId: 'standalone',
+      profileName: 'Standalone',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: '',
+      authType: 'bearer',
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    await expect(
+      audioAPIService.submitAudioGeneration({
+        model: 'suno_music',
+        prompt: 'write a song',
+      })
+    ).rejects.toThrow('API Key 未配置');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces unsupported session-broker Suno polling as a sanitized unsupported-backend error without retrying or leaking credentials', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ code: 'success', data: 'unsupported-task-1' }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      .mockResolvedValue(
+        new Response(
+          'unsupported Authorization Bearer secret apiKey upstream credential leak',
+          { status: 501 }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    let caught: unknown;
+    try {
+      await audioAPIService.generateAudioWithPolling(
+        {
+          model: 'suno_music',
+          modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+          prompt: 'write a song',
+          taskId: 'local-unsupported-task',
+        },
+        { interval: 1, maxAttempts: 2 }
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: 'unsupported-backend',
+      httpStatus: 501,
+    });
+    expect((caught as Error).message).toMatch(/暂不支持嵌入式 Suno/);
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|apiKey|upstream|credential|secret/i
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [submitInput] = getFetchCall(fetchMock, 0);
+    const [pollInput] = getFetchCall(fetchMock, 1);
+    expect(String(submitInput)).toBe('/creative/relay/v1/suno/submit/music');
+    expect(String(pollInput)).toBe(
+      '/creative/relay/v1/suno/fetch/unsupported-task-1'
+    );
+    expect(`${submitInput} ${pollInput}`).not.toMatch(
+      /Authorization|apiKey|upstream|credential|provider|channel|baseUrl/i
+    );
+  });
+
+  it('sanitizes unsupported session-broker Suno submit responses without exposing backend bodies', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          'unsupported Authorization Bearer secret apiKey upstream credential leak',
+          { status: 404 }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    let caught: unknown;
+    try {
+      await audioAPIService.submitAudioGeneration({
+        model: 'suno_music',
+        modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+        prompt: 'write a song',
+        taskId: 'local-submit-unsupported',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: 'unsupported-backend',
+      httpStatus: 404,
+    });
+    expect((caught as Error).message).toMatch(/暂不支持嵌入式 Suno/);
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|apiKey|upstream|credential|secret/i
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

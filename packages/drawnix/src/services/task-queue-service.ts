@@ -680,6 +680,7 @@ class TaskQueueService {
             infillEndS: task.params.infillEndS,
             params: {
               ...(task.params as any).params,
+              idempotencyKey: `opentu-audio-${task.id}`,
               signal,
               onProgress: (progress: number) => {
                 this.updateTaskProgress(task.id, progress);
@@ -2480,7 +2481,7 @@ class TaskQueueService {
 
     // 异步批量归档到 IndexedDB（fire-and-forget）
     if (archiveIds.length > 0) {
-      taskStorageWriter.archiveTasks(archiveIds).catch((err) => {});
+      taskStorageWriter.archiveTasks(archiveIds).catch(() => undefined);
       taskStorageReader.invalidateCache();
     }
   }

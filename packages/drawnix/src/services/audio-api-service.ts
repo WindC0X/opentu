@@ -45,6 +45,7 @@ export interface AudioGenerationParams {
   infillEndS?: number;
   params?: Record<string, unknown>;
   taskId?: string;
+  idempotencyKey?: string;
 }
 
 export type SunoAction = 'music' | 'lyrics';
@@ -142,12 +143,76 @@ function resolveAudioPlanContext(routeModel?: string | ModelRef | null): {
   };
 }
 
+function isSessionBrokerProviderContext(
+  providerContext: ResolvedProviderContext
+): boolean {
+  return providerContext.authType === 'session-broker';
+}
+
+function requireAudioProviderApiKey(
+  providerContext: ResolvedProviderContext,
+  message: string
+): void {
+  if (
+    !providerContext.apiKey &&
+    !isSessionBrokerProviderContext(providerContext)
+  ) {
+    throw new Error(message);
+  }
+}
+
+function createAudioIdempotencyKey(localTaskId?: string): string {
+  const trimmedLocalTaskId = localTaskId?.trim();
+  if (trimmedLocalTaskId) {
+    return trimmedLocalTaskId.startsWith('opentu-audio-')
+      ? trimmedLocalTaskId
+      : `opentu-audio-${trimmedLocalTaskId}`;
+  }
+
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return `opentu-audio-${randomUUID()}`;
+  }
+  return `opentu-audio-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function resolveAudioIdempotencySource(
+  params: AudioGenerationParams
+): string | undefined {
+  if (typeof params.idempotencyKey === 'string') {
+    return params.idempotencyKey;
+  }
+  if (typeof params.params?.idempotencyKey === 'string') {
+    return params.params.idempotencyKey;
+  }
+  return params.taskId;
+}
+
+function sessionBrokerAudioSubmitHeaders(
+  providerContext: ResolvedProviderContext,
+  params: AudioGenerationParams
+): Record<string, string> {
+  if (!isSessionBrokerProviderContext(providerContext)) {
+    return {};
+  }
+
+  return {
+    'Idempotency-Key': createAudioIdempotencyKey(
+      resolveAudioIdempotencySource(params)
+    ),
+  };
+}
+
 function inferAudioBaseUrlStrategy(
   providerContext: ResolvedProviderContext,
   binding?: NonNullable<
     ReturnType<typeof resolveInvocationPlanFromRoute>
   >['binding'] | null
 ): ProviderBaseUrlStrategy | undefined {
+  if (isSessionBrokerProviderContext(providerContext)) {
+    return undefined;
+  }
+
   if (binding?.baseUrlStrategy) {
     return binding.baseUrlStrategy;
   }
@@ -161,6 +226,26 @@ function inferAudioBaseUrlStrategy(
   }
 
   return undefined;
+}
+
+const CREATIVE_SUNO_UNSUPPORTED_MESSAGE =
+  '当前 new-api 后端暂不支持嵌入式 Suno 音频生成';
+
+function isCreativeSunoUnsupportedStatus(status: number): boolean {
+  return status === 404 || status === 405 || status === 501;
+}
+
+function createCreativeSunoUnsupportedError(status: number): Error {
+  const error = new Error(`${CREATIVE_SUNO_UNSUPPORTED_MESSAGE} (${status})`);
+  (error as any).code = 'unsupported-backend';
+  (error as any).unsupportedBackend = true;
+  (error as any).unsupportedCreativeAudio = true;
+  (error as any).httpStatus = status;
+  return error;
+}
+
+function isCreativeSunoUnsupportedError(error: unknown): boolean {
+  return Boolean((error as any)?.unsupportedCreativeAudio);
 }
 
 function replaceTaskIdTemplate(pathTemplate: string, taskId: string): string {
@@ -770,11 +855,16 @@ function buildSubmitBody(params: AudioGenerationParams): string {
 
 function resolveSubmitPath(
   params: AudioGenerationParams,
+  providerContext: ResolvedProviderContext,
   binding?: NonNullable<
     ReturnType<typeof resolveInvocationPlanFromRoute>
   >['binding'] | null
 ): string {
   const action = resolveRequestedAction(params);
+  if (isSessionBrokerProviderContext(providerContext)) {
+    return `/suno/submit/${action}`;
+  }
+
   const submitPathByAction = binding?.metadata?.audio?.submitPathByAction;
   if (submitPathByAction?.[action]) {
     return submitPathByAction[action];
@@ -788,6 +878,23 @@ function resolveSubmitPath(
   }
 
   return binding?.submitPath || '/suno/submit/music';
+}
+
+function resolveAudioTaskPath(
+  providerContext: ResolvedProviderContext,
+  taskId: string,
+  binding?: NonNullable<
+    ReturnType<typeof resolveInvocationPlanFromRoute>
+  >['binding'] | null
+): string {
+  const normalizedTaskId = taskId.trim();
+  if (isSessionBrokerProviderContext(providerContext)) {
+    return `/suno/fetch/${encodeURIComponent(normalizedTaskId)}`;
+  }
+
+  return binding?.pollPathTemplate
+    ? replaceTaskIdTemplate(binding.pollPathTemplate, normalizedTaskId)
+    : `/suno/fetch/${normalizedTaskId}`;
 }
 
 export function extractAudioGenerationResult(
@@ -863,12 +970,13 @@ class AudioAPIService {
     );
     const baseUrlStrategy = inferAudioBaseUrlStrategy(providerContext, binding);
 
-    if (!providerContext.apiKey) {
-      throw new Error('API Key 未配置，请先配置 API Key');
-    }
+    requireAudioProviderApiKey(
+      providerContext,
+      'API Key 未配置，请先配置 API Key'
+    );
 
     const action = resolveRequestedAction(params);
-    const submitPath = resolveSubmitPath(params, binding);
+    const submitPath = resolveSubmitPath(params, providerContext, binding);
     const body = buildSubmitBody(params);
     const startTime = Date.now();
 
@@ -886,7 +994,10 @@ class AudioAPIService {
         path: submitPath,
         baseUrlStrategy,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...sessionBrokerAudioSubmitHeaders(providerContext, params),
+        },
         body,
       });
     } catch (error: any) {
@@ -898,8 +1009,20 @@ class AudioAPIService {
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
       const duration = Date.now() - startTime;
+      if (
+        isSessionBrokerProviderContext(providerContext) &&
+        isCreativeSunoUnsupportedStatus(response.status)
+      ) {
+        failLLMApiLog(logId, {
+          httpStatus: response.status,
+          duration,
+          errorMessage: `unsupported creative Suno relay status ${response.status}`,
+        });
+        throw createCreativeSunoUnsupportedError(response.status);
+      }
+
+      const errorText = await response.text();
       failLLMApiLog(logId, {
         httpStatus: response.status,
         duration,
@@ -943,13 +1066,9 @@ class AudioAPIService {
     const { providerContext, binding } = resolveAudioPlanContext(routeModel);
     const baseUrlStrategy = inferAudioBaseUrlStrategy(providerContext, binding);
 
-    if (!providerContext.apiKey) {
-      throw new Error('API Key 未配置');
-    }
+    requireAudioProviderApiKey(providerContext, 'API Key 未配置');
 
-    const path = binding?.pollPathTemplate
-      ? replaceTaskIdTemplate(binding.pollPathTemplate, taskId)
-      : `/suno/fetch/${taskId}`;
+    const path = resolveAudioTaskPath(providerContext, taskId, binding);
 
     const response = await providerTransport.send(providerContext, {
       path,
@@ -958,6 +1077,13 @@ class AudioAPIService {
     });
 
     if (!response.ok) {
+      if (
+        isSessionBrokerProviderContext(providerContext) &&
+        isCreativeSunoUnsupportedStatus(response.status)
+      ) {
+        throw createCreativeSunoUnsupportedError(response.status);
+      }
+
       const errorText = await response.text();
       const error = new Error(
         `Suno 任务查询失败: ${response.status} - ${errorText}`
@@ -1081,6 +1207,10 @@ class AudioAPIService {
           throw new Error(result.failReason || 'Suno 生成失败');
         }
       } catch (error) {
+        if (isCreativeSunoUnsupportedError(error)) {
+          throw error;
+        }
+
         consecutiveErrors += 1;
         if (consecutiveErrors >= maxConsecutiveErrors) {
           throw error;

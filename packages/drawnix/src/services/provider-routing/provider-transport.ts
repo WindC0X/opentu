@@ -302,8 +302,8 @@ function applyAuthQuery(
   };
 }
 
-function isVideoRelayPath(path: string): boolean {
-  return /(^|\/)videos?(\/|$)/i.test(path);
+function isServerSelectedModelRelayPath(path: string): boolean {
+  return /(^|\/)(videos?|suno)(\/|$)/i.test(path);
 }
 
 const SESSION_BROKER_BASE_URL = '/creative/relay/v1';
@@ -398,7 +398,7 @@ export class ProviderTransport {
         ...pathParts.query,
         ...(request.query || {}),
       },
-      { stripModel: isVideoRelayPath(pathParts.path) }
+      { stripModel: isServerSelectedModelRelayPath(pathParts.path) }
     );
     const resolvedBaseUrl = applyBaseUrlStrategy(
       context.baseUrl,

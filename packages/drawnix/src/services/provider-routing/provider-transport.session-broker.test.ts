@@ -230,6 +230,48 @@ describe('ProviderTransport session-broker auth', () => {
     );
   });
 
+  it('strips server-selected model query overrides on session-broker Suno relay paths', () => {
+    const transport = new ProviderTransport();
+    const context: ResolvedProviderContext = {
+      profileId: 'new-api-creative',
+      profileName: 'Creative',
+      providerType: 'openai-compatible',
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+      extraHeaders: {
+        'X-Model': 'extra-model-leak',
+        'X-Model-Override': 'extra-model-override-leak',
+        'X-Safe-Trace': 'trace-ok',
+      },
+    };
+
+    const prepared = transport.prepareRequest(context, {
+      path: '/suno/fetch/task-1?model=path-model-leak&modelId=path-model-id-leak&provider=path-provider-leak&safe=1',
+      query: {
+        modelOverride: 'query-model-override-leak',
+        x_model: 'query-x-model-leak',
+        safe2: '2',
+      },
+      headers: {
+        Model: 'request-model-leak',
+        ModelId: 'request-model-id-leak',
+        'Idempotency-Key': 'opentu-audio-local-task',
+      },
+    });
+
+    expect(prepared.url).toBe(
+      '/creative/relay/v1/suno/fetch/task-1?safe=1&safe2=2'
+    );
+    expect(prepared.headers).toMatchObject({
+      'X-Safe-Trace': 'trace-ok',
+      'Idempotency-Key': 'opentu-audio-local-task',
+    });
+    expect(JSON.stringify(prepared)).not.toMatch(
+      /model-leak|model-id-leak|model-override-leak|x-model-leak|provider-leak/i
+    );
+  });
+
   it('rejects absolute upstream request paths for session-broker relay calls', () => {
     const transport = new ProviderTransport();
     const context: ResolvedProviderContext = {

@@ -728,6 +728,7 @@ class GenerationAPIService {
           infillEndS: params.infillEndS,
           params: {
             ...(params as any).params,
+            idempotencyKey: `opentu-audio-${taskId}`,
             signal,
             onProgress: (progress: number) => {
               taskQueueService.updateTaskProgress(taskId, progress);
