@@ -1,5 +1,6 @@
-import { createTestingBoard } from '@plait/core';
+import { createTestingBoard, type Point } from '@plait/core';
 import { describe, expect, it } from 'vitest';
+import type { PlaitFrame } from '../../types/frame.types';
 import {
   getPPTFrameSnapshotElements,
   resolvePPTFramePreviewUrl,
@@ -9,15 +10,22 @@ function createBoard(children: any[] = []) {
   return createTestingBoard([], children) as any;
 }
 
-function createFrame(id: string, overrides: Record<string, unknown> = {}) {
+function makePoints(
+  start: Point = [0, 0],
+  end: Point = [1920, 1080]
+): [Point, Point] {
+  return [start, end];
+}
+
+function createFrame(
+  id: string,
+  overrides: Partial<PlaitFrame> = {}
+): PlaitFrame {
   return {
     id,
     type: 'frame',
     name: id,
-    points: [
-      [0, 0],
-      [1920, 1080],
-    ],
+    points: makePoints(),
     children: [],
     ...overrides,
   };
@@ -29,10 +37,7 @@ describe('frame-preview-snapshot', () => {
     const board = createBoard([
       frame,
       createFrame('frame-2', {
-        points: [
-          [2200, 0],
-          [4120, 1080],
-        ],
+        points: makePoints([2200, 0], [4120, 1080]),
       }),
       {
         id: 'text-1',

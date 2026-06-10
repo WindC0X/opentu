@@ -1,19 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaskStatus, TaskType } from '../types/task.types';
+import type { PromptMetadata } from './prompt-storage-service';
 import type { PromptHistoryTaskSummary } from './task-storage-reader';
 
 const mocks = vi.hoisted(() => ({
   getPromptHistoryTaskSummaries: vi.fn(),
   getHistory: vi.fn((): any[] => []),
   addHistory: vi.fn(),
-  isContentPinned: vi.fn(() => false),
+  isContentPinned: vi.fn((_content: string): boolean => false),
   isContentDeleted: vi.fn(() => false),
   setContentPinned: vi.fn(() => true),
   deleteContents: vi.fn(),
   getHistoryOverride: vi.fn((): any => undefined),
   setHistoryOverride: vi.fn(() => true),
   resolveContent: vi.fn((content: string) => content.trim()),
-  resolveMetadata: vi.fn((content: string) => ({
+  resolveMetadata: vi.fn((content: string): PromptMetadata => ({
     sourceContent: content.trim(),
     content: content.trim(),
     title: undefined,
@@ -94,7 +95,7 @@ describe('prompt-history-service', () => {
     mocks.getHistoryOverride.mockReturnValue(undefined);
     mocks.setHistoryOverride.mockReturnValue(true);
     mocks.resolveContent.mockImplementation((content: string) => content.trim());
-    mocks.resolveMetadata.mockImplementation((content: string) => ({
+    mocks.resolveMetadata.mockImplementation((content: string): PromptMetadata => ({
       sourceContent: content.trim(),
       content: content.trim(),
       title: undefined,

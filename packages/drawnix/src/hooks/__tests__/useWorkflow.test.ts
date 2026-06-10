@@ -16,8 +16,17 @@ const createMockWorkflow = (overrides: Partial<WorkflowDefinition> = {}): Workfl
   ],
   metadata: {
     prompt: 'test',
+    userInstruction: 'test',
+    rawInput: 'test',
     modelId: 'test-model',
+    isModelExplicit: false,
     count: 2,
+    selection: {
+      texts: [],
+      images: [],
+      videos: [],
+      graphics: [],
+    },
   },
   createdAt: Date.now(),
   ...overrides,

@@ -91,6 +91,7 @@ describe('resolvePromptItemsByGenerationType', () => {
       imageHistory: [
         {
           id: 'task-image-1',
+          type: 'image',
           prompt: '任务图片历史',
           timestamp: 300,
           imageUrl: '/image-task.png',
@@ -101,6 +102,7 @@ describe('resolvePromptItemsByGenerationType', () => {
       videoHistory: [
         {
           id: 'task-video-1',
+          type: 'video',
           prompt: '任务视频历史',
           timestamp: 400,
           imageUrl: '/video-thumb.png',
@@ -195,6 +197,7 @@ describe('resolvePromptItemsByGenerationType', () => {
       imageHistory: [
         {
           id: 'task-image-real-preview',
+          type: 'image',
           prompt: duplicatedPrompt,
           timestamp: 300,
           imageUrl: '/real-kitten-result.png',
@@ -225,6 +228,7 @@ describe('resolvePromptItemsByGenerationType', () => {
       imageHistory: [
         {
           id: 'task-image-edited',
+          type: 'image',
           prompt: '原始图片提示词',
           timestamp: 300,
           imageUrl: '/edited-preview.png',
@@ -292,6 +296,7 @@ describe('resolvePromptItemsByGenerationType', () => {
       imageHistory: [
         {
           id: 'task-image-1',
+          type: 'image',
           prompt: '任务图片历史',
           timestamp: 300,
           imageUrl: '/image-task.png',
@@ -302,6 +307,7 @@ describe('resolvePromptItemsByGenerationType', () => {
       videoHistory: [
         {
           id: 'task-video-1',
+          type: 'video',
           prompt: '任务视频历史',
           timestamp: 400,
           imageUrl: '/video-thumb.png',

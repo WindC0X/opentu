@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import type { VideoShot } from '../../../services/video-analysis-service';
 import { updateActiveVersionShotsInRecord } from './versioned-shots';
 
 describe('versioned-shots', () => {
   it('updates edited shots and active version shots together', () => {
-    const updatedShots = [
+    const updatedShots: VideoShot[] = [
       {
         id: 'shot_1',
         startTime: 0,
@@ -16,7 +17,7 @@ describe('versioned-shots', () => {
 
     const record = {
       activeVersionId: 'v2',
-      editedShots: [],
+      editedShots: [] as VideoShot[],
       scriptVersions: [
         {
           id: 'v1',
@@ -26,7 +27,7 @@ describe('versioned-shots', () => {
               startTime: 0,
               endTime: 3,
               description: 'old',
-              type: 'opening',
+              type: 'opening' as const,
               label: '开场',
             },
           ],
@@ -39,7 +40,7 @@ describe('versioned-shots', () => {
               startTime: 0,
               endTime: 3,
               description: 'old',
-              type: 'opening',
+              type: 'opening' as const,
               label: '开场',
             },
           ],
@@ -55,7 +56,7 @@ describe('versioned-shots', () => {
   });
 
   it('only updates edited shots when no active version exists', () => {
-    const updatedShots = [
+    const updatedShots: VideoShot[] = [
       {
         id: 'shot_1',
         startTime: 0,
@@ -68,7 +69,7 @@ describe('versioned-shots', () => {
 
     const patch = updateActiveVersionShotsInRecord(
       {
-        editedShots: [],
+        editedShots: [] as VideoShot[],
         storyboardVersions: undefined,
       },
       'storyboardVersions',

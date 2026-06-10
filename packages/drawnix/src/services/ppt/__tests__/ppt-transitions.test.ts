@@ -4,6 +4,7 @@ import {
   injectPPTSlideTransitions,
   normalizePPTSlideTransition,
 } from '../ppt-transitions';
+import type { PPTSlideTransition } from '../ppt.types';
 
 const slideXml = [
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
@@ -21,14 +22,21 @@ const transitionCases = [
   ['uncover', '<p:pull'],
 ] as const;
 
+function malformedTransition(
+  value: Record<string, unknown>
+): Partial<PPTSlideTransition> {
+  return value as unknown as Partial<PPTSlideTransition>;
+}
+
 describe('ppt-transitions', () => {
   describe('normalizePPTSlideTransition', () => {
     it('treats missing or invalid transition metadata as none', () => {
       expect(normalizePPTSlideTransition(undefined).type).toBe('none');
       expect(normalizePPTSlideTransition(null).type).toBe('none');
-      expect(normalizePPTSlideTransition({ type: 'invalid' }).type).toBe(
-        'none'
-      );
+      expect(
+        normalizePPTSlideTransition(malformedTransition({ type: 'invalid' }))
+          .type
+      ).toBe('none');
       expect(normalizePPTSlideTransition({ type: 'fade' }).type).toBe('fade');
     });
   });
@@ -48,7 +56,9 @@ describe('ppt-transitions', () => {
 
     it('returns empty XML for invalid or none transitions', () => {
       expect(buildPPTSlideTransitionXml({ type: 'none' })).toBe('');
-      expect(buildPPTSlideTransitionXml({ type: 'invalid' } as any)).toBe('');
+      expect(
+        buildPPTSlideTransitionXml(malformedTransition({ type: 'invalid' }))
+      ).toBe('');
     });
   });
 
@@ -74,7 +84,10 @@ describe('ppt-transitions', () => {
         slideXml
       );
       expect(
-        injectPPTSlideTransitions(slideXml, { type: 'invalid' } as any)
+        injectPPTSlideTransitions(
+          slideXml,
+          malformedTransition({ type: 'invalid' })
+        )
       ).toBe(slideXml);
     });
 

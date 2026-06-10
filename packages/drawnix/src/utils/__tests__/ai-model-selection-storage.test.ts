@@ -24,13 +24,13 @@ describe('ai-model-selection-storage', () => {
       modelId: 'gemini-image',
       modelRef: { profileId: 'provider-a', modelId: 'gemini-image' },
       providerIdHint: 'provider-a',
-      vendorHint: 'GEMINI',
+      vendorHint: ModelVendor.GEMINI,
     });
     setPersistedModelSelection('video', {
       modelId: 'veo3',
       modelRef: { profileId: 'provider-b', modelId: 'veo3' },
       providerIdHint: 'provider-b',
-      vendorHint: 'GOOGLE',
+      vendorHint: ModelVendor.GOOGLE,
     });
 
     expect(getPersistedModelSelection('image')).toMatchObject({
@@ -50,7 +50,7 @@ describe('ai-model-selection-storage', () => {
       modelId: 'deepseek-v3.2',
       modelRef: { profileId: 'provider-c', modelId: 'deepseek-v3.2' },
       providerIdHint: 'provider-c',
-      vendorHint: 'DEEPSEEK',
+      vendorHint: ModelVendor.DEEPSEEK,
     });
 
     expect(getPersistedModelSelection('text')).toMatchObject({
@@ -69,13 +69,13 @@ describe('ai-model-selection-storage', () => {
       modelId: 'deepseek-v3.2',
       modelRef: { profileId: 'provider-text', modelId: 'deepseek-v3.2' },
       providerIdHint: 'provider-text',
-      vendorHint: 'DEEPSEEK',
+      vendorHint: ModelVendor.DEEPSEEK,
     });
     setPersistedModelSelection('agent', {
       modelId: 'gemini-2.5-pro',
       modelRef: { profileId: 'provider-agent', modelId: 'gemini-2.5-pro' },
       providerIdHint: 'provider-agent',
-      vendorHint: 'GEMINI',
+      vendorHint: ModelVendor.GEMINI,
     });
 
     expect(getPersistedModelSelection('agent')).toMatchObject({
@@ -114,12 +114,12 @@ describe('ai-model-selection-storage', () => {
     setPersistedModelSelection('image', {
       modelId: 'flux',
       modelRef: { profileId: null, modelId: 'flux' },
-      vendorHint: 'OTHER',
+      vendorHint: ModelVendor.OTHER,
     });
     setPersistedModelSelection('video', {
       modelId: 'kling-video',
       modelRef: { profileId: 'provider-k', modelId: 'kling-video' },
-      vendorHint: 'KLING',
+      vendorHint: ModelVendor.KLING,
     });
 
     clearPersistedModelSelection('image');
@@ -215,7 +215,7 @@ describe('ai-model-selection-storage', () => {
       modelId: 'gpt-image-2-vip',
       modelRef: { profileId: 'new-api-creative', modelId: 'gpt-image-2-vip' },
       providerIdHint: 'new-api-creative',
-      vendorHint: 'GPT',
+      vendorHint: ModelVendor.GPT,
     });
 
     expect(getUnavailableModelSelectionMarker('image')).toBeNull();

@@ -116,7 +116,11 @@ describe('music-analysis-service', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.data?.analysis.sunoTitle).toBe('星河');
+    expect(result.data).toMatchObject({
+      analysis: {
+        sunoTitle: '星河',
+      },
+    });
   });
 
   it('fails gracefully when Gemini response contains no valid JSON', async () => {

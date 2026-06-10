@@ -6,6 +6,20 @@ import {
   syncGeneratedClipsForRecord,
 } from './audio-task-sync';
 
+type GeneratedClip = {
+  clipId: string;
+  audioUrl: string;
+  imageUrl?: string;
+  title?: string;
+  duration?: number | null;
+  taskId: string;
+};
+
+interface TestRecord {
+  id: string;
+  generatedClips?: GeneratedClip[];
+}
+
 function createTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 'task_1',
@@ -114,13 +128,13 @@ describe('audio-task-sync', () => {
   });
 
   it('updates records with merged generated clips', async () => {
-    const loadRecords = vi.fn(async () => [
+    const loadRecords = vi.fn<() => Promise<TestRecord[]>>(async () => [
       {
         id: 'record_1',
         generatedClips: [],
       },
     ]);
-    const updateRecord = vi.fn(async (_id: string, patch: { generatedClips?: unknown[] }) => [
+    const updateRecord = vi.fn<(id: string, patch: Partial<TestRecord>) => Promise<TestRecord[]>>(async (_id, patch) => [
       {
         id: 'record_1',
         generatedClips: patch.generatedClips,
@@ -179,7 +193,7 @@ describe('audio-task-sync', () => {
   });
 
   it('returns current record when merged clips are unchanged', async () => {
-    const loadRecords = vi.fn(async () => [
+    const loadRecords = vi.fn<() => Promise<TestRecord[]>>(async () => [
       {
         id: 'record_1',
         generatedClips: [
@@ -191,7 +205,7 @@ describe('audio-task-sync', () => {
         ],
       },
     ]);
-    const updateRecord = vi.fn();
+    const updateRecord = vi.fn<(id: string, patch: Partial<TestRecord>) => Promise<TestRecord[]>>();
 
     const result = await syncGeneratedClipsForRecord(createTask({
       id: 'task_keep',

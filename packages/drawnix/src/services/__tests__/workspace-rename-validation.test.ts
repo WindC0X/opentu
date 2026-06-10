@@ -114,12 +114,15 @@ describe('Workspace Rename Validation', () => {
       });
 
       const board1 = await workspaceService.createBoard({
+        name: WORKSPACE_DEFAULTS.DEFAULT_BOARD_NAME,
         folderId: folder.id,
       });
       const board2 = await workspaceService.createBoard({
+        name: WORKSPACE_DEFAULTS.DEFAULT_BOARD_NAME,
         folderId: folder.id,
       });
       const board3 = await workspaceService.createBoard({
+        name: WORKSPACE_DEFAULTS.DEFAULT_BOARD_NAME,
         folderId: folder.id,
       });
 
@@ -157,9 +160,15 @@ describe('Workspace Rename Validation', () => {
 
   describe('Folder Rename Validation', () => {
     it('默认文件夹名称应该自动添加序号避免重名', async () => {
-      const folder1 = await workspaceService.createFolder({});
-      const folder2 = await workspaceService.createFolder({});
-      const folder3 = await workspaceService.createFolder({});
+      const folder1 = await workspaceService.createFolder({
+        name: WORKSPACE_DEFAULTS.DEFAULT_FOLDER_NAME,
+      });
+      const folder2 = await workspaceService.createFolder({
+        name: WORKSPACE_DEFAULTS.DEFAULT_FOLDER_NAME,
+      });
+      const folder3 = await workspaceService.createFolder({
+        name: WORKSPACE_DEFAULTS.DEFAULT_FOLDER_NAME,
+      });
 
       expect(folder1.name).toBe(WORKSPACE_DEFAULTS.DEFAULT_FOLDER_NAME);
       expect(folder2.name).toBe(

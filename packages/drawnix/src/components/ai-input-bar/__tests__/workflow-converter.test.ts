@@ -35,7 +35,16 @@ vi.hoisted(() => {
   Object.defineProperty(globalThis, 'indexedDB', {
     value: {
       open: () => {
-        const request = {
+        type MockIndexedDbRequest = {
+          result: ReturnType<typeof createDatabase>;
+          error: null;
+          onsuccess: ((event: Event) => void) | null;
+          onerror: ((event: Event) => void) | null;
+          onupgradeneeded: ((event: { target: MockIndexedDbRequest }) => void) | null;
+          onblocked: ((event: Event) => void) | null;
+          transaction: null;
+        };
+        const request: MockIndexedDbRequest = {
           result: createDatabase(),
           error: null,
           onsuccess: null,
@@ -69,13 +78,11 @@ const createMockParams = (overrides: Partial<ParsedGenerationParams> = {}): Pars
   duration: undefined,
   parseResult: {
     cleanText: 'test prompt',
-    triggers: [],
-    modelTrigger: null,
-    countTrigger: null,
-    sizeTrigger: null,
-    durationTrigger: null,
-    aspectRatioTrigger: null,
-    originalText: 'test prompt',
+    selectedAudioModel: null,
+    selectedImageModel: null,
+    selectedVideoModel: null,
+    selectedParams: [],
+    selectedCount: null,
   },
   hasExtraContent: false,
   selection: {
@@ -86,6 +93,33 @@ const createMockParams = (overrides: Partial<ParsedGenerationParams> = {}): Pars
   },
   ...overrides,
 });
+
+const createWorkflowMetadata = (
+  overrides: Partial<WorkflowDefinition['metadata']> = {}
+): WorkflowDefinition['metadata'] => {
+  const params = createMockParams();
+  const metadata: WorkflowDefinition['metadata'] = {
+    prompt: params.prompt,
+    userInstruction: params.userInstruction,
+    rawInput: params.rawInput,
+    modelId: params.modelId,
+    isModelExplicit: params.isModelExplicit,
+    count: params.count,
+    selection: params.selection,
+  };
+
+  if (params.size !== undefined) {
+    metadata.size = params.size;
+  }
+  if (params.duration !== undefined) {
+    metadata.duration = params.duration;
+  }
+
+  return {
+    ...metadata,
+    ...overrides,
+  };
+};
 
 const knowledgeContextRefs = [
   {
@@ -743,6 +777,7 @@ describe('workflow-converter', () => {
         { id: 'step-2', mcp: 'test2', args: {}, description: 'Step 2', status: 'pending' },
         { id: 'step-3', mcp: 'test3', args: {}, description: 'Step 3', status: 'pending' },
       ],
+      metadata: createWorkflowMetadata(),
       createdAt: Date.now(),
     });
 
@@ -813,6 +848,7 @@ describe('workflow-converter', () => {
       scenarioType: 'agent_flow',
       generationType: 'image',
       steps: [{ id: 'step-1', mcp: 'analyze', args: {}, description: 'Analyze', status: 'completed' }],
+      metadata: createWorkflowMetadata(),
       createdAt: Date.now(),
     });
 
@@ -879,6 +915,7 @@ describe('workflow-converter', () => {
         description: `Step ${i + 1}`,
         status,
       })),
+      metadata: createWorkflowMetadata(),
       createdAt: Date.now(),
     });
 

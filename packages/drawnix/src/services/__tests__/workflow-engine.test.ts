@@ -108,12 +108,12 @@ describe('WorkflowEngine Module', () => {
         updatedAt: Date.now(),
         completedAt: Date.now(),
         error: 'Some error',
-        context: { key: 'value' },
+        context: { userInput: 'value' },
       };
 
       expect(workflow.completedAt).toBeDefined();
       expect(workflow.error).toBe('Some error');
-      expect(workflow.context).toEqual({ key: 'value' });
+      expect(workflow.context).toEqual({ userInput: 'value' });
     });
   });
 

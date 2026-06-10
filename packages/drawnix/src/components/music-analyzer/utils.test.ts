@@ -38,6 +38,9 @@ describe('music-analyzer utils', () => {
         hook: '副歌上扬',
         lyricRewriteBrief: '强化副歌',
         titleSuggestions: ['燃夜'],
+        sunoTitle: '燃夜',
+        sunoStyleTags: ['edm'],
+        sunoLyricsDraft: '[Intro]\n燃夜开始',
       },
       userPrompt: '改成更适合短视频传播的版本',
     });

@@ -427,6 +427,8 @@ describe('useImageGenerationAnchorSync', () => {
       updatedAt: 3,
       result: {
         url: 'https://example.com/generated.png',
+        format: 'png',
+        size: 0,
       },
     });
     taskState.tasks = [completedTask];
@@ -493,6 +495,8 @@ describe('useImageGenerationAnchorSync', () => {
         insertedToCanvas: true,
         result: {
           url: 'https://example.com/generated.png',
+          format: 'png',
+          size: 0,
         },
       }),
     ];

@@ -12,13 +12,18 @@ import {
   AI_MODEL_SELECTION_CACHE_KEY,
   AI_MODEL_UNAVAILABLE_SELECTION_MARKERS_KEY,
 } from '../constants/storage';
+import type { ProviderCatalog, ProviderProfile } from '../utils/settings-manager';
 
 const mocks = vi.hoisted(() => ({
   waitForInitialization: vi.fn(async () => undefined),
-  providerProfilesGet: vi.fn(() => []),
-  providerProfilesUpdate: vi.fn(async () => undefined),
-  providerCatalogsGet: vi.fn(() => []),
-  providerCatalogsUpdate: vi.fn(async () => undefined),
+  providerProfilesGet: vi.fn<() => ProviderProfile[]>(() => []),
+  providerProfilesUpdate: vi.fn<
+    (profiles: ProviderProfile[]) => Promise<void>
+  >(async () => undefined),
+  providerCatalogsGet: vi.fn<() => ProviderCatalog[]>(() => []),
+  providerCatalogsUpdate: vi.fn<
+    (catalogs: ProviderCatalog[]) => Promise<void>
+  >(async () => undefined),
   hasInvocationRouteCredentials: vi.fn(() => true),
   updateActiveInvocationRouteModel: vi.fn(async () => undefined),
   initializeCreativeModelPreferenceSync: vi.fn(async () => undefined),
@@ -60,6 +65,34 @@ function jsonResponse(payload: unknown): Response {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function getFirstProviderProfilesUpdate(): ProviderProfile[] {
+  const call = mocks.providerProfilesUpdate.mock.calls[0];
+  if (!call) {
+    throw new Error('providerProfilesUpdate was not called');
+  }
+  return call[0];
+}
+
+function getFirstProviderCatalogsUpdate(): ProviderCatalog[] {
+  const call = mocks.providerCatalogsUpdate.mock.calls[0];
+  if (!call) {
+    throw new Error('providerCatalogsUpdate was not called');
+  }
+  return call[0];
+}
+
+function getCreativeManagedCatalog(
+  catalogs: ProviderCatalog[]
+): ProviderCatalog {
+  const creativeCatalog = catalogs.find(
+    (catalog) => catalog.profileId === CREATIVE_MANAGED_PROFILE_ID
+  );
+  if (!creativeCatalog) {
+    throw new Error('Creative managed provider catalog was not found');
+  }
+  return creativeCatalog;
 }
 
 function createBootstrapFetcher(bootstrapPayload: unknown): typeof fetch {
@@ -204,13 +237,14 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
         authType: 'session-broker',
       }),
     ]);
-    expect(JSON.stringify(mocks.providerProfilesUpdate.mock.calls[0][0])).not.toMatch(
+    expect(JSON.stringify(getFirstProviderProfilesUpdate())).not.toMatch(
       /server-must-not-win|https:\/\/leak\.example|Authorization|providerOverride|Bearer/i
     );
 
-    const [catalogs] = mocks.providerCatalogsUpdate.mock.calls[0];
+    const catalogs = getFirstProviderCatalogsUpdate();
+    const creativeCatalog = getCreativeManagedCatalog(catalogs);
     expect(catalogs).toHaveLength(1);
-    expect(catalogs[0]).toMatchObject({
+    expect(creativeCatalog).toMatchObject({
       profileId: CREATIVE_MANAGED_PROFILE_ID,
       sourceBaseUrl: '/creative/api/models',
     });
@@ -222,11 +256,13 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
       'suno_music',
       'server-must-not-win',
     ];
-    expect(catalogs[0].selectedModelIds).toHaveLength(expectedFullPoolIds.length);
-    expect(catalogs[0].selectedModelIds).toEqual(
+    expect(creativeCatalog.selectedModelIds).toHaveLength(
+      expectedFullPoolIds.length
+    );
+    expect(creativeCatalog.selectedModelIds).toEqual(
       expect.arrayContaining(expectedFullPoolIds)
     );
-    expect(catalogs[0].discoveredModels.map((model: { id: string }) => model.id)).toEqual(
+    expect(creativeCatalog.discoveredModels.map((model) => model.id)).toEqual(
       expect.arrayContaining(expectedFullPoolIds)
     );
     expect(JSON.stringify(catalogs)).not.toMatch(
@@ -373,11 +409,8 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
 
     expect(result.status).toBe('ready');
     expect(result.models).toHaveLength(30);
-    const [catalogs] = mocks.providerCatalogsUpdate.mock.calls[0];
-    const creativeCatalog = catalogs.find(
-      (catalog: { profileId: string }) =>
-        catalog.profileId === CREATIVE_MANAGED_PROFILE_ID
-    );
+    const catalogs = getFirstProviderCatalogsUpdate();
+    const creativeCatalog = getCreativeManagedCatalog(catalogs);
     expect(creativeCatalog.discoveredModels).toHaveLength(30);
     expect(creativeCatalog.selectedModelIds).toHaveLength(30);
     expect(creativeCatalog.selectedModelIds).toEqual(

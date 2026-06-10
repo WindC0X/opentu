@@ -31,6 +31,7 @@ describe('video-analyzer utils', () => {
         productExposureRatio: 0,
         shotCount: 1,
         firstProductAppearance: 0,
+        suggestion: '保持画面风格与产品展示约束稳定',
         shots: [{
           id: 'shot_1',
           startTime: 0,

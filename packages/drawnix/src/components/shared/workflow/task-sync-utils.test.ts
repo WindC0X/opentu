@@ -24,6 +24,7 @@ describe('task-sync-utils', () => {
   it('reads allowed task action only when matched', () => {
     const task = createTask({
       params: {
+        prompt: '',
         workflowAction: 'rewrite',
       },
     });
@@ -35,6 +36,7 @@ describe('task-sync-utils', () => {
   it('reads trimmed string params and chat response', () => {
     const task = createTask({
       params: {
+        prompt: '',
         recordId: ' record_1 ',
       },
       result: {

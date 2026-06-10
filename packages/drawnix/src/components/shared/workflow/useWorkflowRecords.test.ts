@@ -36,7 +36,7 @@ describe('useWorkflowRecords', () => {
   it('loads records and counts starred records', async () => {
     const loadRecords = vi.fn(async () => [firstRecord, starredRecord]);
 
-    const { result } = renderHook(() => useWorkflowRecords({ loadRecords }));
+    const { result } = renderHook(() => useWorkflowRecords<TestRecord>({ loadRecords }));
     await flushEffects();
 
     expect(loadRecords).toHaveBeenCalledTimes(1);
@@ -46,7 +46,7 @@ describe('useWorkflowRecords', () => {
 
   it('selects, updates, and restarts the current record', async () => {
     const loadRecords = vi.fn(async () => [firstRecord]);
-    const { result } = renderHook(() => useWorkflowRecords({ loadRecords }));
+    const { result } = renderHook(() => useWorkflowRecords<TestRecord>({ loadRecords }));
     await flushEffects();
 
     act(() => {
@@ -68,7 +68,7 @@ describe('useWorkflowRecords', () => {
 
   it('toggles starred history state', async () => {
     const loadRecords = vi.fn(async () => [firstRecord]);
-    const { result } = renderHook(() => useWorkflowRecords({ loadRecords }));
+    const { result } = renderHook(() => useWorkflowRecords<TestRecord>({ loadRecords }));
     await flushEffects();
 
     act(() => {
@@ -80,7 +80,7 @@ describe('useWorkflowRecords', () => {
 
   it('applies synced records to matching current record only', async () => {
     const loadRecords = vi.fn(async () => [firstRecord]);
-    const { result } = renderHook(() => useWorkflowRecords({ loadRecords }));
+    const { result } = renderHook(() => useWorkflowRecords<TestRecord>({ loadRecords }));
     await flushEffects();
 
     act(() => {
@@ -111,7 +111,7 @@ describe('useWorkflowRecords', () => {
 
   it('can select synced record when no current record is active', async () => {
     const loadRecords = vi.fn(async () => []);
-    const { result } = renderHook(() => useWorkflowRecords({ loadRecords }));
+    const { result } = renderHook(() => useWorkflowRecords<TestRecord>({ loadRecords }));
     await flushEffects();
 
     act(() => {
@@ -128,7 +128,7 @@ describe('useWorkflowRecords', () => {
   it('falls back to an empty list for invalid load results and load failures', async () => {
     const invalidLoad = vi.fn(async () => null as unknown as TestRecord[]);
     const invalidView = renderHook(() =>
-      useWorkflowRecords({ loadRecords: invalidLoad })
+      useWorkflowRecords<TestRecord>({ loadRecords: invalidLoad })
     );
     await flushEffects();
     expect(invalidView.result.current.records).toEqual([]);
@@ -138,7 +138,7 @@ describe('useWorkflowRecords', () => {
       throw new Error('load failed');
     });
     const failingView = renderHook(() =>
-      useWorkflowRecords({ loadRecords: failingLoad })
+      useWorkflowRecords<TestRecord>({ loadRecords: failingLoad })
     );
     await flushEffects();
     expect(failingView.result.current.records).toEqual([]);

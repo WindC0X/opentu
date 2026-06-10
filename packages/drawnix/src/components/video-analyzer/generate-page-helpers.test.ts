@@ -27,6 +27,11 @@ describe('video-analyzer generate helpers', () => {
       model: 'gemini',
       analysis: {
         totalDuration: 3,
+        productExposureDuration: 3,
+        productExposureRatio: 100,
+        shotCount: 1,
+        firstProductAppearance: 0,
+        suggestion: '',
         aspect_ratio: '9x16',
         shots,
         video_style: '纪实',
@@ -86,6 +91,11 @@ describe('video-analyzer generate helpers', () => {
         }],
         analysis: {
           totalDuration: 3,
+          productExposureDuration: 3,
+          productExposureRatio: 100,
+          shotCount: 1,
+          firstProductAppearance: 0,
+          suggestion: '',
           shots,
           characters: [{
             id: 'char_1',

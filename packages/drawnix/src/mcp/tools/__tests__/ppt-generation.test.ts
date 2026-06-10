@@ -1,5 +1,6 @@
-import { createTestingBoard } from '@plait/core';
+import { createTestingBoard, type Point } from '@plait/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PlaitFrame } from '../../../types/frame.types';
 import { setBoard } from '../shared';
 
 const mocks = vi.hoisted(() => ({
@@ -88,15 +89,26 @@ vi.mock('../../../utils/settings-manager', () => ({
 
 import { pptGenerationTool } from '../ppt-generation';
 
-function createFrame(id: string, overrides: Record<string, unknown> = {}) {
+type TestFrame = PlaitFrame & {
+  pptMeta?: unknown;
+};
+
+function makePoints(
+  start: Point = [0, 0],
+  end: Point = [1920, 1080]
+): [Point, Point] {
+  return [start, end];
+}
+
+function createFrame(
+  id: string,
+  overrides: Partial<TestFrame> = {}
+): TestFrame {
   return {
     id,
     type: 'frame',
     name: id,
-    points: [
-      [0, 0],
-      [1920, 1080],
-    ],
+    points: makePoints(),
     children: [],
     ...overrides,
   };

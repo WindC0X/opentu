@@ -528,7 +528,7 @@ describe('CanvasAudioPlaybackService', () => {
   it('publishes live spectrum and pulse data when audio analysis is available', async () => {
     const audio = new MockAudioElement();
     const audioContext = new MockAudioContext();
-    let frameCallback: FrameRequestCallback | null = null;
+    let frameCallback: FrameRequestCallback | undefined;
 
     const service = new CanvasAudioPlaybackService(
       () => audio as unknown as HTMLAudioElement,
@@ -574,7 +574,7 @@ describe('CanvasAudioPlaybackService', () => {
   it('clears reactive analysis state when playback is stopped', async () => {
     const audio = new MockAudioElement();
     const audioContext = new MockAudioContext();
-    let frameCallback: FrameRequestCallback | null = null;
+    let frameCallback: FrameRequestCallback | undefined;
 
     const service = new CanvasAudioPlaybackService(
       () => audio as unknown as HTMLAudioElement,
@@ -611,7 +611,7 @@ describe('CanvasAudioPlaybackService', () => {
     const audio = new MockAudioElement();
     const speechSynthesis = new MockSpeechSynthesis();
     let currentNow = 0;
-    let progressTick: (() => void) | null = null;
+    let progressTick: (() => void) | undefined;
     const readingSource = createReadingPlaybackSource({
       elementId: 'kb-note:1',
       title: '测试笔记',

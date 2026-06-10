@@ -48,7 +48,7 @@ describe('PromptListItem', () => {
 
   it.each([
     {
-      modelType: 'image',
+      modelType: 'image' as const,
       content: '默认图片提示词',
       previewExamples: [
         {
@@ -59,7 +59,7 @@ describe('PromptListItem', () => {
       ],
     },
     {
-      modelType: 'video',
+      modelType: 'video' as const,
       content: '默认视频提示词',
       previewExamples: [
         {
@@ -72,7 +72,7 @@ describe('PromptListItem', () => {
       ],
     },
     {
-      modelType: 'audio',
+      modelType: 'audio' as const,
       content: '默认音频提示词',
       previewExamples: [
         {
@@ -83,7 +83,7 @@ describe('PromptListItem', () => {
       ],
     },
     {
-      modelType: 'text',
+      modelType: 'text' as const,
       content: '默认文本提示词',
       previewExamples: [
         {
@@ -94,7 +94,7 @@ describe('PromptListItem', () => {
       ],
     },
     {
-      modelType: 'agent',
+      modelType: 'agent' as const,
       content: '默认 Agent 提示词',
       previewExamples: [
         {

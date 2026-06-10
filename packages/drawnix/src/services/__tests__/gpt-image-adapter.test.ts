@@ -11,6 +11,17 @@ const tinyPngDataUrl =
 const tinyPngBase64Only =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
+type FetchMock = ReturnType<typeof vi.fn<typeof fetch>>;
+type FetchCall = Parameters<typeof fetch>;
+
+function getFetchCall(fetcher: FetchMock, index = 0): FetchCall {
+  const call = fetcher.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected fetch call #${index + 1}`);
+  }
+  return call;
+}
+
 describe('gpt-image-adapter', () => {
   it('builds official GPT Image generation JSON with url response_format by default', () => {
     const body = buildGPTImageGenerationBody({
@@ -303,7 +314,7 @@ describe('gpt-image-adapter', () => {
   });
 
   it('sends official GPT Image requests through provider transport', async () => {
-    const fetcher = vi.fn(async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => {
       return new Response(
         JSON.stringify({
           data: [
@@ -351,7 +362,7 @@ describe('gpt-image-adapter', () => {
     );
 
     expect(fetcher).toHaveBeenCalledTimes(1);
-    const [url, init] = fetcher.mock.calls[0];
+    const [url, init] = getFetchCall(fetcher);
     expect(url).toBe('https://api.openai.com/v1/images/generations');
     expect(init?.headers).toMatchObject({
       Authorization: 'Bearer secret-key',
@@ -366,7 +377,7 @@ describe('gpt-image-adapter', () => {
   });
 
   it('sends official GPT Image edit requests to the edits endpoint', async () => {
-    const fetcher = vi.fn(async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => {
       return new Response(
         JSON.stringify({
           output_format: 'png',
@@ -415,7 +426,7 @@ describe('gpt-image-adapter', () => {
     );
 
     expect(fetcher).toHaveBeenCalledTimes(1);
-    const [url, init] = fetcher.mock.calls[0];
+    const [url, init] = getFetchCall(fetcher);
     expect(url).toBe('https://api.openai.com/v1/images/edits');
     expect(init?.headers).toMatchObject({
       Authorization: 'Bearer secret-key',
@@ -435,7 +446,7 @@ describe('gpt-image-adapter', () => {
   });
 
   it('keeps edit mode on the edits endpoint even with a generation binding fallback', async () => {
-    const fetcher = vi.fn(async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => {
       return new Response(
         JSON.stringify({
           data: [
@@ -479,7 +490,7 @@ describe('gpt-image-adapter', () => {
       }
     );
 
-    const [url] = fetcher.mock.calls[0];
+    const [url] = getFetchCall(fetcher);
     expect(url).toBe('https://api.openai.com/v1/images/edits');
   });
 });

@@ -46,6 +46,8 @@ describe('audioPlaylistService', () => {
       id: 'favorites',
       name: '收藏',
       isSystem: true,
+      createdAt: expect.any(Number),
+      updatedAt: expect.any(Number),
     });
   });
 

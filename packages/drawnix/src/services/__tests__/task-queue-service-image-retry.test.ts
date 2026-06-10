@@ -5,6 +5,7 @@ import {
   TaskType,
 } from '../../types/task.types';
 import type { Task } from '../../types/task.types';
+import type { PollingOptions, PollingResult } from '../media-executor';
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -35,15 +36,23 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
     generateImage: vi.fn(async (_params?: any, _options?: any) => undefined),
   };
 
-  const waitForTaskCompletion = vi.fn(async (taskId: string, options?: any) => {
+  let waitForTaskCompletionCallCount = 0;
+  const waitForTaskCompletion = vi.fn(
+    async (
+      taskId: string,
+      options?: PollingOptions
+    ): Promise<PollingResult> => {
     const currentTask = storedTasks.get(taskId);
     if (!currentTask) {
       return { success: false, error: 'missing-task' };
     }
 
-    const callIndex = waitForTaskCompletion.mock.calls.length - 1;
-    const nextStatus =
-      statusSequence[callIndex] || statusSequence[statusSequence.length - 1];
+    const callIndex = waitForTaskCompletionCallCount;
+    waitForTaskCompletionCallCount += 1;
+    const nextStatus: TaskStatus =
+      statusSequence[callIndex] ??
+      statusSequence[statusSequence.length - 1] ??
+      TaskStatus.FAILED;
     const now = Date.now();
     const updatedTask =
       nextStatus === TaskStatus.COMPLETED
@@ -80,7 +89,8 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
           task: clone(updatedTask),
           error: updatedTask.error?.message || 'failed',
         };
-  });
+    }
+  );
 
   vi.doMock('../media-executor/task-storage-writer', () => ({
     taskStorageWriter: {

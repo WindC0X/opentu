@@ -167,6 +167,7 @@ describe('PromptInput', () => {
     >
   ) => {
     const { PromptInput } = await import('./PromptInput');
+    const { presetPrompts = [], ...restProps } = props;
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -177,9 +178,10 @@ describe('PromptInput', () => {
         <PromptInput
           prompt=""
           onPromptChange={vi.fn()}
+          presetPrompts={presetPrompts}
           language="zh"
           type="image"
-          {...props}
+          {...restProps}
         />
       );
     });
