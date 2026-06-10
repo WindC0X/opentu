@@ -75,6 +75,8 @@ export interface VideoGenerationRequest {
   size?: string;
   duration?: number;
   referenceImages?: string[];
+  /** Stable request id for backend idempotency, scoped to one user action. */
+  idempotencyKey?: string;
   params?: Record<string, unknown>;
 }
 

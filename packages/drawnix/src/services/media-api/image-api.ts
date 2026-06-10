@@ -28,6 +28,13 @@ import { IMAGE_GENERATION_TIMEOUT_MS } from '../../constants/TASK_CONSTANTS';
 // 重新导出工具函数，方便外部使用
 export { isAsyncImageModel, aspectRatioToSize };
 
+async function toFormDataBlob(response: Response): Promise<Blob> {
+  const arrayBuffer = await response.arrayBuffer();
+  return new Blob([arrayBuffer], {
+    type: response.headers.get('Content-Type') || 'application/octet-stream',
+  });
+}
+
 function getDefaultImagePollingMaxAttempts(interval: number): number {
   return Math.ceil(IMAGE_GENERATION_TIMEOUT_MS / Math.max(interval, 1));
 }
@@ -202,6 +209,7 @@ export async function generateImageAsync(
   } = options;
   const maxPollingAttempts =
     maxAttempts ?? getDefaultImagePollingMaxAttempts(interval);
+
   const fetchFn = config.fetchImpl || fetch;
   const baseUrl = normalizeApiBase(config.baseUrl);
   const providerContext = buildProviderContextFromApiConfig(config, baseUrl);
@@ -224,7 +232,7 @@ export async function generateImageAsync(
         // 尝试 fetch 图片（支持 base64 和 URL）
         const response = await fetchFn(refImage, { signal });
         if (response.ok) {
-          const blob = await response.blob();
+          const blob = await toFormDataBlob(response);
           formData.append('input_reference', blob, `reference-${i}.png`);
         }
       } catch (e) {
@@ -236,7 +244,7 @@ export async function generateImageAsync(
     try {
       const response = await fetchFn(params.maskImage, { signal });
       if (response.ok) {
-        formData.append('mask', await response.blob(), 'mask.png');
+        formData.append('mask', await toFormDataBlob(response), 'mask.png');
       }
     } catch (e) {
       console.warn('[ImageAPI] Failed to fetch mask image:', e);
@@ -356,6 +364,7 @@ export async function resumeAsyncImagePolling(
   const { onProgress, signal, interval = 5000, maxAttempts } = options;
   const maxPollingAttempts =
     maxAttempts ?? getDefaultImagePollingMaxAttempts(interval);
+
   const fetchFn = config.fetchImpl || fetch;
   const baseUrl = normalizeApiBase(config.baseUrl);
   const providerContext = buildProviderContextFromApiConfig(config, baseUrl);

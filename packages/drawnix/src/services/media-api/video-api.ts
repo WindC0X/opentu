@@ -30,6 +30,141 @@ import { prepareVideoReferenceImageBlob } from '../video-reference-image-utils';
 const DURATION_IN_MODEL_PREFIX = 'sora-2-';
 const durationEncodedInModel = (model?: string | null) =>
   Boolean(model && model.startsWith(DURATION_IN_MODEL_PREFIX));
+const CREATIVE_VIDEO_UNSUPPORTED_MESSAGE =
+  '当前 new-api 后端暂不支持嵌入式视频生成';
+
+function isSessionBrokerConfig(config: VideoApiConfig): boolean {
+  return (
+    config.provider?.authType === 'session-broker' ||
+    config.authType === 'session-broker'
+  );
+}
+
+function requireDirectVideoApiKey(config: VideoApiConfig): void {
+  if (isSessionBrokerConfig(config)) {
+    return;
+  }
+  const apiKey = config.provider?.apiKey ?? config.apiKey;
+  if (!apiKey?.trim()) {
+    throw new Error('API Key 未配置，请先配置 API Key');
+  }
+}
+
+function resolveVideoApiBase(config: VideoApiConfig): string {
+  if (isSessionBrokerConfig(config)) {
+    return (config.provider?.baseUrl || config.baseUrl).replace(/\/+$/, '');
+  }
+  return normalizeApiBase(config.baseUrl);
+}
+
+function resolveSubmitPath(config: VideoApiConfig): string {
+  return isSessionBrokerConfig(config) ? '/videos' : '/v1/videos';
+}
+
+function resolveStatusPath(videoId: string, config: VideoApiConfig): string {
+  if (isSessionBrokerConfig(config)) {
+    return `/videos/${encodeURIComponent(videoId)}`;
+  }
+  return resolveVideoPollPath(videoId, config.binding, config.params);
+}
+
+function resolveIdempotencyKey(
+  params: VideoGenerationParams
+): string | undefined {
+  const explicit = params.idempotencyKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const fromParams = params.params?.idempotencyKey;
+  return typeof fromParams === 'string' && fromParams.trim()
+    ? fromParams.trim()
+    : undefined;
+}
+
+function resolveSubmitHeaders(
+  params: VideoGenerationParams,
+  config: VideoApiConfig
+): Record<string, string> | undefined {
+  if (!isSessionBrokerConfig(config)) {
+    return undefined;
+  }
+  const idempotencyKey = resolveIdempotencyKey(params);
+  if (idempotencyKey) {
+    return { 'Idempotency-Key': idempotencyKey };
+  }
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  return {
+    'Idempotency-Key': randomUUID
+      ? `video-${randomUUID()}`
+      : `video-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  };
+}
+
+function isUnsupportedCreativeVideoStatus(status: number): boolean {
+  return status === 404 || status === 405 || status === 501;
+}
+
+class CreativeVideoUnsupportedError extends Error {
+  constructor(status: number) {
+    super(`${CREATIVE_VIDEO_UNSUPPORTED_MESSAGE} (${status})`);
+    this.name = 'CreativeVideoUnsupportedError';
+    (this as any).httpStatus = status;
+    (this as any).unsupportedCreativeVideo = true;
+  }
+}
+
+function getVideoContentExtensionFromMimeType(mimeType?: string): string {
+  const normalized = mimeType?.toLowerCase() || '';
+  if (normalized.includes('quicktime')) return 'mov';
+  if (normalized.includes('webm')) return 'webm';
+  if (normalized.includes('ogg')) return 'ogv';
+  return 'mp4';
+}
+
+async function downloadSessionBrokerVideoContentToLocalUrl(
+  remoteId: string,
+  config: VideoApiConfig
+): Promise<string> {
+  const baseUrl = resolveVideoApiBase(config);
+  const providerContext = buildProviderContextFromApiConfig(config, baseUrl);
+  const response = await providerTransport.send(providerContext, {
+    path: `/videos/${encodeURIComponent(remoteId)}/content`,
+    method: 'GET',
+    headers: {
+      Accept: 'video/*,application/octet-stream',
+    },
+    fetcher: config.fetchImpl,
+  });
+
+  if (!response.ok) {
+    if (isUnsupportedCreativeVideoStatus(response.status)) {
+      throw new CreativeVideoUnsupportedError(response.status);
+    }
+    const errorText = await response.text().catch(() => '');
+    throw new Error(
+      `视频内容下载失败: ${response.status}${
+        errorText ? ` - ${errorText}` : ''
+      }`
+    );
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) {
+    throw new Error('视频内容下载为空');
+  }
+  const format = getVideoContentExtensionFromMimeType(blob.type);
+  const localUrl = `/__aitu_cache__/video/${remoteId}.${format}`;
+  try {
+    const { unifiedCacheService } = await import('../unified-cache-service');
+    await unifiedCacheService.cacheMediaFromBlob(localUrl, blob, 'video', {
+      taskId: remoteId,
+      model: config.defaultModel,
+    });
+    return localUrl;
+  } catch {
+    return URL.createObjectURL(blob);
+  }
+}
 
 /**
  * 视频生成业务失败错误
@@ -55,8 +190,9 @@ export async function submitVideoGeneration(
   config: VideoApiConfig,
   signal?: AbortSignal
 ): Promise<string> {
+  requireDirectVideoApiKey(config);
   const fetchFn = config.fetchImpl || fetch;
-  const baseUrl = normalizeApiBase(config.baseUrl);
+  const baseUrl = resolveVideoApiBase(config);
   const providerContext = buildProviderContextFromApiConfig(config, baseUrl);
   const model = params.model || config.defaultModel || 'veo3';
   // seconds can come from duration (number/string) or explicit seconds
@@ -73,10 +209,7 @@ export async function submitVideoGeneration(
   formData.append('model', submission.model);
   formData.append('prompt', params.prompt);
 
-  if (
-    submission.duration &&
-    !durationEncodedInModel(submission.model)
-  ) {
+  if (submission.duration && !durationEncodedInModel(submission.model)) {
     formData.append(submission.durationField, String(submission.duration));
   }
 
@@ -104,9 +237,12 @@ export async function submitVideoGeneration(
   }
 
   const response = await providerTransport.send(providerContext, {
-    path: '/v1/videos',
-    baseUrlStrategy: config.binding?.baseUrlStrategy,
+    path: resolveSubmitPath(config),
+    baseUrlStrategy: isSessionBrokerConfig(config)
+      ? undefined
+      : config.binding?.baseUrlStrategy,
     method: 'POST',
+    headers: resolveSubmitHeaders(params, config),
     body: formData,
     signal,
     fetcher: fetchFn,
@@ -114,13 +250,17 @@ export async function submitVideoGeneration(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Video submission failed: ${response.status} - ${errorText}`);
+    throw new Error(
+      `Video submission failed: ${response.status} - ${errorText}`
+    );
   }
 
   const data = await response.json();
 
   if (data.status === 'failed') {
-    throw new VideoGenerationFailedError(parseErrorMessage(data.error) || '视频生成失败');
+    throw new VideoGenerationFailedError(
+      parseErrorMessage(data.error) || '视频生成失败'
+    );
   }
 
   if (!data.id) {
@@ -143,19 +283,28 @@ export async function queryVideoStatus(
   config: VideoApiConfig,
   signal?: AbortSignal
 ): Promise<VideoStatusResponse> {
+  requireDirectVideoApiKey(config);
   const fetchFn = config.fetchImpl || fetch;
-  const baseUrl = normalizeApiBase(config.baseUrl);
+  const baseUrl = resolveVideoApiBase(config);
   const providerContext = buildProviderContextFromApiConfig(config, baseUrl);
 
   const response = await providerTransport.send(providerContext, {
-    path: resolveVideoPollPath(videoId, config.binding, config.params),
-    baseUrlStrategy: config.binding?.baseUrlStrategy,
+    path: resolveStatusPath(videoId, config),
+    baseUrlStrategy: isSessionBrokerConfig(config)
+      ? undefined
+      : config.binding?.baseUrlStrategy,
     method: 'GET',
     signal,
     fetcher: fetchFn,
   });
 
   if (!response.ok) {
+    if (
+      isSessionBrokerConfig(config) &&
+      isUnsupportedCreativeVideoStatus(response.status)
+    ) {
+      throw new CreativeVideoUnsupportedError(response.status);
+    }
     throw new Error(`Video status query failed: ${response.status}`);
   }
 
@@ -175,13 +324,10 @@ export async function pollVideoUntilComplete(
   config: VideoApiConfig,
   options: PollingOptions = {}
 ): Promise<VideoStatusResponse> {
-  const {
-    onProgress,
-    signal,
-    interval = 5000,
-  } = options;
+  requireDirectVideoApiKey(config);
+  const { onProgress, signal, interval = 5000 } = options;
   const fetchFn = config.fetchImpl || fetch;
-  const baseUrl = normalizeApiBase(config.baseUrl);
+  const baseUrl = resolveVideoApiBase(config);
   const providerContext = buildProviderContextFromApiConfig(config, baseUrl);
 
   let attempts = 0;
@@ -195,13 +341,21 @@ export async function pollVideoUntilComplete(
 
     try {
       const response = await providerTransport.send(providerContext, {
-        path: resolveVideoPollPath(videoId, config.binding, config.params),
-        baseUrlStrategy: config.binding?.baseUrlStrategy,
+        path: resolveStatusPath(videoId, config),
+        baseUrlStrategy: isSessionBrokerConfig(config)
+          ? undefined
+          : config.binding?.baseUrlStrategy,
         signal,
         fetcher: fetchFn,
       });
 
       if (!response.ok) {
+        if (
+          isSessionBrokerConfig(config) &&
+          isUnsupportedCreativeVideoStatus(response.status)
+        ) {
+          throw new CreativeVideoUnsupportedError(response.status);
+        }
         // 轮询接口临时错误，增加间隔继续重试
         consecutiveErrors++;
         console.warn(
@@ -215,7 +369,10 @@ export async function pollVideoUntilComplete(
         }
 
         // 指数退避
-        const backoffInterval = Math.min(interval * Math.pow(1.5, consecutiveErrors), 60000);
+        const backoffInterval = Math.min(
+          interval * Math.pow(1.5, consecutiveErrors),
+          60000
+        );
         await sleep(backoffInterval, signal);
         attempts++;
         continue;
@@ -225,7 +382,8 @@ export async function pollVideoUntilComplete(
       consecutiveErrors = 0;
 
       const data: VideoStatusResponse = await response.json();
-      const status = data.status?.toLowerCase() as VideoStatusResponse['status'];
+      const status =
+        data.status?.toLowerCase() as VideoStatusResponse['status'];
 
       // 更新进度
       const progress = data.progress ?? Math.min(10 + attempts * 2, 90);
@@ -239,7 +397,9 @@ export async function pollVideoUntilComplete(
 
       // 检查失败状态 - 业务失败不应重试
       if (status === 'failed' || status === 'error') {
-        throw new VideoGenerationFailedError(parseErrorMessage(data.error) || '视频生成失败');
+        throw new VideoGenerationFailedError(
+          parseErrorMessage(data.error) || '视频生成失败'
+        );
       }
 
       // 等待下一次轮询
@@ -247,7 +407,10 @@ export async function pollVideoUntilComplete(
       attempts++;
     } catch (err) {
       // 业务失败错误直接抛出
-      if (err instanceof VideoGenerationFailedError) {
+      if (
+        err instanceof VideoGenerationFailedError ||
+        err instanceof CreativeVideoUnsupportedError
+      ) {
         throw err;
       }
 
@@ -267,7 +430,10 @@ export async function pollVideoUntilComplete(
         throw err;
       }
 
-      const backoffInterval = Math.min(interval * Math.pow(1.5, consecutiveErrors), 60000);
+      const backoffInterval = Math.min(
+        interval * Math.pow(1.5, consecutiveErrors),
+        60000
+      );
       await sleep(backoffInterval, signal);
       attempts++;
     }
@@ -298,24 +464,25 @@ export async function generateVideo(
 
   // 轮询等待完成
   const result = await pollVideoUntilComplete(remoteId, config, options);
-  const videoUrl =
-    extractInlineVideoUrl(result as Record<string, any>) ||
-    (shouldDownloadVideoContent(
-      result.model || params.model,
-      config.binding,
-      result as Record<string, any>
-    )
-      ? await downloadVideoContentToLocalUrl({
-          videoId: remoteId,
-          provider: buildProviderContextFromApiConfig(
-            config,
-            normalizeApiBase(config.baseUrl)
-          ),
-          binding: config.binding,
-          modelId: result.model || params.model,
-          cacheKey: remoteId,
-        })
-      : undefined);
+  const videoUrl = isSessionBrokerConfig(config)
+    ? await downloadSessionBrokerVideoContentToLocalUrl(remoteId, config)
+    : extractInlineVideoUrl(result as Record<string, any>) ||
+      (shouldDownloadVideoContent(
+        result.model || params.model,
+        config.binding,
+        result as Record<string, any>
+      )
+        ? await downloadVideoContentToLocalUrl({
+            videoId: remoteId,
+            provider: buildProviderContextFromApiConfig(
+              config,
+              resolveVideoApiBase(config)
+            ),
+            binding: config.binding,
+            modelId: result.model || params.model,
+            cacheKey: remoteId,
+          })
+        : undefined);
   if (!videoUrl) {
     throw new Error('No video URL in completed response');
   }
@@ -344,24 +511,25 @@ export async function resumeVideoPolling(
   options: PollingOptions = {}
 ): Promise<VideoGenerationResult> {
   const result = await pollVideoUntilComplete(remoteId, config, options);
-  const videoUrl =
-    extractInlineVideoUrl(result as Record<string, any>) ||
-    (shouldDownloadVideoContent(
-      result.model || config.defaultModel,
-      config.binding,
-      result as Record<string, any>
-    )
-      ? await downloadVideoContentToLocalUrl({
-          videoId: remoteId,
-          provider: buildProviderContextFromApiConfig(
-            config,
-            normalizeApiBase(config.baseUrl)
-          ),
-          binding: config.binding,
-          modelId: result.model || config.defaultModel,
-          cacheKey: remoteId,
-        })
-      : undefined);
+  const videoUrl = isSessionBrokerConfig(config)
+    ? await downloadSessionBrokerVideoContentToLocalUrl(remoteId, config)
+    : extractInlineVideoUrl(result as Record<string, any>) ||
+      (shouldDownloadVideoContent(
+        result.model || config.defaultModel,
+        config.binding,
+        result as Record<string, any>
+      )
+        ? await downloadVideoContentToLocalUrl({
+            videoId: remoteId,
+            provider: buildProviderContextFromApiConfig(
+              config,
+              resolveVideoApiBase(config)
+            ),
+            binding: config.binding,
+            modelId: result.model || config.defaultModel,
+            cacheKey: remoteId,
+          })
+        : undefined);
   if (!videoUrl) {
     throw new Error('No video URL in completed response');
   }

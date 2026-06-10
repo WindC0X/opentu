@@ -638,7 +638,9 @@ class GenerationAPIService {
             durationValue !== undefined ? Number(durationValue) : undefined,
           referenceImages:
             referenceImages.length > 0 ? referenceImages : undefined,
+          idempotencyKey: `opentu-video-${taskId}`,
           params: {
+            idempotencyKey: `opentu-video-${taskId}`,
             ...(params as any).params,
             onProgress: (progress: number) => {
               taskQueueService.updateTaskProgress(taskId, progress);

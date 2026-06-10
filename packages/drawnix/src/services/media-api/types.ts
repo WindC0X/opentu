@@ -82,6 +82,8 @@ export interface VideoGenerationParams {
   referenceImages?: string[];
   /** 额外参数（如 sora_mode） */
   params?: Record<string, unknown>;
+  /** Stable request id for backend idempotency, scoped to one user action. */
+  idempotencyKey?: string;
 }
 
 /**
@@ -118,7 +120,13 @@ export interface VideoGenerationResult {
 export interface VideoStatusResponse {
   id: string;
   model?: string;
-  status: 'queued' | 'in_progress' | 'completed' | 'failed' | 'succeeded' | 'error';
+  status:
+    | 'queued'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'succeeded'
+    | 'error';
   progress?: number;
   video_url?: string;
   url?: string;

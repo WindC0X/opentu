@@ -102,12 +102,68 @@ function isSensitiveAuthHeaderName(name: string): boolean {
   );
 }
 
+function normalizeSessionBrokerMaterialKey(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[-_\s]/g, '');
+}
+
+function isSensitiveSessionBrokerRoutingHeaderName(name: string): boolean {
+  const normalized = normalizeSessionBrokerMaterialKey(name);
+  if (
+    normalized.startsWith('upstream') ||
+    normalized.replace(/^x/, '').startsWith('upstream')
+  ) {
+    return true;
+  }
+  return (
+    normalized === 'provider' ||
+    normalized === 'xprovider' ||
+    normalized === 'providerid' ||
+    normalized === 'xproviderid' ||
+    normalized === 'providername' ||
+    normalized === 'xprovidername' ||
+    normalized === 'provideroverride' ||
+    normalized === 'xprovideroverride' ||
+    normalized === 'channel' ||
+    normalized === 'xchannel' ||
+    normalized === 'channelid' ||
+    normalized === 'xchannelid' ||
+    normalized === 'group' ||
+    normalized === 'xgroup' ||
+    normalized === 'groupid' ||
+    normalized === 'xgroupid' ||
+    normalized === 'baseurl' ||
+    normalized === 'xbaseurl' ||
+    normalized === 'model' ||
+    normalized === 'xmodel' ||
+    normalized === 'modelid' ||
+    normalized === 'xmodelid' ||
+    normalized === 'modeloverride' ||
+    normalized === 'xmodeloverride' ||
+    normalized === 'endpoint' ||
+    normalized === 'xendpoint' ||
+    normalized === 'url' ||
+    normalized === 'xurl' ||
+    normalized === 'proxy' ||
+    normalized === 'xproxy'
+  );
+}
+
+function isSensitiveSessionBrokerHeaderName(name: string): boolean {
+  return (
+    isSensitiveAuthHeaderName(name) ||
+    isSensitiveSessionBrokerRoutingHeaderName(name)
+  );
+}
+
 function stripSessionBrokerAuthHeaders(
   headers: Record<string, string>
 ): Record<string, string> {
   return Object.entries(headers).reduce<Record<string, string>>(
     (acc, [key, value]) => {
-      if (!isSensitiveAuthHeaderName(key)) {
+      if (!isSensitiveSessionBrokerHeaderName(key)) {
         acc[key] = value;
       }
       return acc;
@@ -151,13 +207,35 @@ function applyAuthHeaders(
   }
 }
 
-function isSensitiveSessionBrokerQueryKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase().replace(/[-_]/g, '');
+function isSensitiveSessionBrokerQueryKey(
+  key: string,
+  options: { stripModel?: boolean } = {}
+): boolean {
+  const normalized = normalizeSessionBrokerMaterialKey(key);
+  if (
+    normalized.startsWith('upstream') ||
+    normalized.replace(/^x/, '').startsWith('upstream')
+  ) {
+    return true;
+  }
   return (
     normalized === 'apikey' ||
     normalized === 'baseurl' ||
+    normalized === 'xbaseurl' ||
+    normalized === 'channel' ||
+    normalized === 'xchannel' ||
     normalized === 'channelid' ||
+    normalized === 'xchannelid' ||
+    normalized === 'group' ||
+    normalized === 'xgroup' ||
+    normalized === 'groupid' ||
+    normalized === 'xgroupid' ||
     normalized === 'provideroverride' ||
+    normalized === 'xprovideroverride' ||
+    normalized === 'providerid' ||
+    normalized === 'xproviderid' ||
+    normalized === 'providername' ||
+    normalized === 'xprovidername' ||
     normalized === 'accesstoken' ||
     normalized === 'refreshtoken' ||
     normalized === 'idtoken' ||
@@ -166,17 +244,32 @@ function isSensitiveSessionBrokerQueryKey(key: string): boolean {
     normalized === 'authorization' ||
     normalized === 'token' ||
     normalized === 'key' ||
-    normalized === 'provider'
+    normalized === 'provider' ||
+    normalized === 'xprovider' ||
+    normalized === 'endpoint' ||
+    normalized === 'xendpoint' ||
+    normalized === 'url' ||
+    normalized === 'xurl' ||
+    normalized === 'proxy' ||
+    normalized === 'xproxy' ||
+    (options.stripModel === true &&
+      (normalized === 'model' ||
+        normalized === 'xmodel' ||
+        normalized === 'modelid' ||
+        normalized === 'xmodelid' ||
+        normalized === 'modeloverride' ||
+        normalized === 'xmodeloverride'))
   );
 }
 
 function stripSessionBrokerAuthQuery(
-  query: Record<string, string | number | boolean | null | undefined>
+  query: Record<string, string | number | boolean | null | undefined>,
+  options: { stripModel?: boolean } = {}
 ): Record<string, string | number | boolean | null | undefined> {
   return Object.entries(query).reduce<
     Record<string, string | number | boolean | null | undefined>
   >((acc, [key, value]) => {
-    if (!isSensitiveSessionBrokerQueryKey(key)) {
+    if (!isSensitiveSessionBrokerQueryKey(key, options)) {
       acc[key] = value;
     }
     return acc;
@@ -185,10 +278,11 @@ function stripSessionBrokerAuthQuery(
 
 function applyAuthQuery(
   context: ResolvedProviderContext,
-  query: Record<string, string | number | boolean | null | undefined>
+  query: Record<string, string | number | boolean | null | undefined>,
+  options: { stripModel?: boolean } = {}
 ): Record<string, string | number | boolean | null | undefined> {
   if (isSessionBrokerAuth(context)) {
-    return stripSessionBrokerAuthQuery(query);
+    return stripSessionBrokerAuthQuery(query, options);
   }
 
   if (!context.apiKey || context.authType !== 'query') {
@@ -206,6 +300,33 @@ function applyAuthQuery(
     ...query,
     [authQueryKey]: context.apiKey,
   };
+}
+
+function isVideoRelayPath(path: string): boolean {
+  return /(^|\/)videos?(\/|$)/i.test(path);
+}
+
+const SESSION_BROKER_BASE_URL = '/creative/relay/v1';
+
+function isAbsoluteRequestPath(path: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith('//');
+}
+
+function assertSessionBrokerBaseUrl(context: ResolvedProviderContext): void {
+  const normalizedBaseUrl = trimTrailingSlashes(context.baseUrl);
+  if (
+    /^[a-z][a-z0-9+.-]*:/i.test(normalizedBaseUrl) ||
+    normalizedBaseUrl.startsWith('//')
+  ) {
+    throw new Error(
+      'session-broker transport requires baseUrl to be /creative/relay/v1'
+    );
+  }
+  if (normalizedBaseUrl !== SESSION_BROKER_BASE_URL) {
+    throw new Error(
+      'session-broker transport requires baseUrl to be /creative/relay/v1'
+    );
+  }
 }
 
 function createTimeoutSignal(
@@ -259,19 +380,26 @@ export class ProviderTransport {
     context: ResolvedProviderContext,
     request: ProviderTransportRequest
   ): PreparedProviderTransportRequest {
-    if (isSessionBrokerAuth(context) && /^https?:\/\//i.test(request.path)) {
-      throw new Error(
-        'session-broker transport requires a relative path to keep relay calls same-origin'
-      );
+    if (isSessionBrokerAuth(context)) {
+      if (isAbsoluteRequestPath(request.path)) {
+        throw new Error(
+          'session-broker transport requires a relative path to keep relay calls same-origin'
+        );
+      }
+      assertSessionBrokerBaseUrl(context);
     }
 
     const pathParts = splitPathQuery(request.path);
     const mergedHeaders = mergeHeaders(context.extraHeaders, request.headers);
     const authenticatedHeaders = applyAuthHeaders(context, mergedHeaders);
-    const query = applyAuthQuery(context, {
-      ...pathParts.query,
-      ...(request.query || {}),
-    });
+    const query = applyAuthQuery(
+      context,
+      {
+        ...pathParts.query,
+        ...(request.query || {}),
+      },
+      { stripModel: isVideoRelayPath(pathParts.path) }
+    );
     const resolvedBaseUrl = applyBaseUrlStrategy(
       context.baseUrl,
       request.baseUrlStrategy
@@ -314,9 +442,7 @@ export class ProviderTransport {
     } catch (error) {
       if (timeoutControl.didTimeout()) {
         const timeoutMinutes = Math.floor((request.timeoutMs || 0) / 60000);
-        const timeoutError = new Error(
-          `请求超时（>${timeoutMinutes} 分钟）`
-        );
+        const timeoutError = new Error(`请求超时（>${timeoutMinutes} 分钟）`);
         timeoutError.name = 'TimeoutError';
         throw timeoutError;
       }

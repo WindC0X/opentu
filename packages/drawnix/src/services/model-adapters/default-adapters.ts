@@ -229,10 +229,18 @@ export const geminiVideoAdapter: VideoModelAdapter = {
     const adapterParams = request.params
       ? Object.fromEntries(
           Object.entries(request.params).filter(
-            ([key]) => key !== 'onProgress' && key !== 'onSubmitted'
+            ([key]) =>
+              key !== 'onProgress' &&
+              key !== 'onSubmitted' &&
+              key !== 'idempotencyKey'
           )
         )
       : undefined;
+    const idempotencyKey =
+      request.idempotencyKey ||
+      (typeof request.params?.idempotencyKey === 'string'
+        ? request.params.idempotencyKey
+        : undefined);
     const seconds = durationEncoded
       ? undefined
       : request.duration
@@ -251,6 +259,7 @@ export const geminiVideoAdapter: VideoModelAdapter = {
         seconds,
         size,
         inputReferences,
+        idempotencyKey,
         params: adapterParams,
       },
       {

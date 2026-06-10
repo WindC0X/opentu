@@ -235,6 +235,7 @@ export async function executeVideoViaAdapter(
     duration?: string;
     referenceImages?: string[];
     inputReference?: string;
+    idempotencyKey?: string;
     params?: Record<string, unknown>;
   },
   options?: ExecutionOptions,
@@ -280,6 +281,12 @@ export async function executeVideoViaAdapter(
     const durationNum = params.duration
       ? parseInt(params.duration, 10)
       : undefined;
+    const nestedIdempotencyKey =
+      typeof params.params?.idempotencyKey === 'string'
+        ? params.params.idempotencyKey.trim()
+        : undefined;
+    const idempotencyKey =
+      params.idempotencyKey || nestedIdempotencyKey || `opentu-video-${taskId}`;
 
     const result = await adapter.generateVideo(
       getAdapterContextFromSettings('video', params.modelRef || params.model),
@@ -290,6 +297,7 @@ export async function executeVideoViaAdapter(
         size: params.size,
         duration: durationNum,
         referenceImages: processedImages,
+        idempotencyKey,
         params: {
           ...params.params,
           onProgress: (progress: number) => {

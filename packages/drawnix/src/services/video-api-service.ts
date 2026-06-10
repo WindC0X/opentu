@@ -9,6 +9,8 @@ import {
   providerTransport,
   resolveInvocationPlanFromRoute,
   type ProviderAuthStrategy,
+  type ProviderBaseUrlStrategy,
+  type ProviderModelBinding,
   type ResolvedProviderContext,
 } from './provider-routing';
 import {
@@ -47,6 +49,8 @@ export interface VideoGenerationParams {
   inputReferences?: UploadedVideoImage[];
   // Legacy single image support (for backward compatibility)
   inputReference?: string;
+  /** Stable request id for backend idempotency, scoped to one user action. */
+  idempotencyKey?: string;
 }
 
 // Video generation response (submit)
@@ -99,7 +103,9 @@ interface PollingOptions {
   params?: Record<string, unknown>;
 }
 
-function inferAuthType(route: ReturnType<typeof resolveInvocationRoute>): ProviderAuthStrategy {
+function inferAuthType(
+  route: ReturnType<typeof resolveInvocationRoute>
+): ProviderAuthStrategy {
   return route.authType || 'bearer';
 }
 
@@ -124,15 +130,162 @@ function resolveProviderContext(
 
 function resolveVideoPlanContext(routeModel?: string | ModelRef | null): {
   providerContext: ResolvedProviderContext;
-  binding: NonNullable<
-    ReturnType<typeof resolveInvocationPlanFromRoute>
-  >['binding'] | null;
+  binding:
+    | NonNullable<ReturnType<typeof resolveInvocationPlanFromRoute>>['binding']
+    | null;
 } {
   const plan = resolveInvocationPlanFromRoute('video', routeModel);
   return {
     providerContext: plan?.provider || resolveProviderContext(routeModel),
     binding: plan?.binding || null,
   };
+}
+
+function isSessionBrokerProviderContext(
+  providerContext: ResolvedProviderContext
+): boolean {
+  return providerContext.authType === 'session-broker';
+}
+
+function requireVideoProviderApiKey(
+  providerContext: ResolvedProviderContext,
+  message: string
+): void {
+  if (
+    !providerContext.apiKey &&
+    !isSessionBrokerProviderContext(providerContext)
+  ) {
+    throw new Error(message);
+  }
+}
+
+function createVideoIdempotencyKey(preferredKey?: string): string {
+  const trimmedPreferredKey = preferredKey?.trim();
+  if (trimmedPreferredKey) {
+    return trimmedPreferredKey;
+  }
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) {
+    return `video-${randomUUID()}`;
+  }
+  return `video-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function sessionBrokerVideoSubmitHeaders(
+  providerContext: ResolvedProviderContext,
+  idempotencyKey?: string
+): Record<string, string> | undefined {
+  if (!isSessionBrokerProviderContext(providerContext)) {
+    return undefined;
+  }
+  return { 'Idempotency-Key': createVideoIdempotencyKey(idempotencyKey) };
+}
+
+function resolveSessionBrokerVideoTaskPath(videoId: string): string {
+  return `/videos/${encodeURIComponent(videoId)}`;
+}
+
+function resolveSessionBrokerVideoContentPath(videoId: string): string {
+  return `${resolveSessionBrokerVideoTaskPath(videoId)}/content`;
+}
+
+function resolveVideoBaseUrlStrategy(
+  providerContext: ResolvedProviderContext,
+  binding: ProviderModelBinding | null
+): ProviderBaseUrlStrategy | undefined {
+  if (isSessionBrokerProviderContext(providerContext)) {
+    return undefined;
+  }
+  return binding?.baseUrlStrategy;
+}
+
+function resolveVideoStatusPath(
+  providerContext: ResolvedProviderContext,
+  videoId: string,
+  binding: ProviderModelBinding | null,
+  params?: Record<string, unknown>
+): string {
+  if (isSessionBrokerProviderContext(providerContext)) {
+    return resolveSessionBrokerVideoTaskPath(videoId);
+  }
+  return resolveVideoPollPath(videoId, binding, params);
+}
+
+const CREATIVE_VIDEO_UNSUPPORTED_MESSAGE =
+  '当前 new-api 后端暂不支持嵌入式视频生成';
+
+function isCreativeVideoUnsupportedStatus(status: number): boolean {
+  return status === 404 || status === 405 || status === 501;
+}
+
+function createCreativeVideoUnsupportedError(status: number): Error {
+  const error = new Error(`${CREATIVE_VIDEO_UNSUPPORTED_MESSAGE} (${status})`);
+  (error as any).unsupportedCreativeVideo = true;
+  (error as any).httpStatus = status;
+  return error;
+}
+
+function isCreativeVideoUnsupportedError(error: unknown): boolean {
+  return Boolean((error as any)?.unsupportedCreativeVideo);
+}
+
+function getVideoContentExtensionFromMimeType(mimeType?: string): string {
+  const normalized = mimeType?.toLowerCase() || '';
+  if (normalized.includes('quicktime')) return 'mov';
+  if (normalized.includes('webm')) return 'webm';
+  if (normalized.includes('ogg')) return 'ogv';
+  return 'mp4';
+}
+
+async function downloadSessionBrokerVideoContentToLocalUrl(params: {
+  videoId: string;
+  provider: ResolvedProviderContext;
+  binding?: ProviderModelBinding | null;
+  modelId?: string | null;
+  cacheKey?: string;
+}): Promise<string> {
+  const response = await providerTransport.send(params.provider, {
+    path: resolveSessionBrokerVideoContentPath(params.videoId),
+    baseUrlStrategy: resolveVideoBaseUrlStrategy(
+      params.provider,
+      params.binding || null
+    ),
+    method: 'GET',
+    headers: {
+      Accept: 'video/*,application/octet-stream',
+    },
+  });
+
+  if (!response.ok) {
+    if (isCreativeVideoUnsupportedStatus(response.status)) {
+      throw createCreativeVideoUnsupportedError(response.status);
+    }
+    const errorText = await response.text().catch(() => '');
+    throw new Error(
+      `视频内容下载失败: ${response.status}${
+        errorText ? ` - ${errorText}` : ''
+      }`
+    );
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) {
+    throw new Error('视频内容下载为空');
+  }
+
+  const format = getVideoContentExtensionFromMimeType(blob.type);
+  const cacheKey = params.cacheKey || params.videoId;
+  const localUrl = `/__aitu_cache__/video/${cacheKey}.${format}`;
+
+  try {
+    await unifiedCacheService.cacheMediaFromBlob(localUrl, blob, 'video', {
+      taskId: cacheKey,
+      model: params.modelId || undefined,
+    });
+    return localUrl;
+  } catch {
+    return URL.createObjectURL(blob);
+  }
 }
 
 /**
@@ -151,9 +304,10 @@ class VideoAPIService {
     );
     const startTime = Date.now();
 
-    if (!providerContext.apiKey) {
-      throw new Error('API Key 未配置，请先配置 API Key');
-    }
+    requireVideoProviderApiKey(
+      providerContext,
+      'API Key 未配置，请先配置 API Key'
+    );
 
     // 开始记录 LLM API 调用（降级模式直接调用）
     const referenceCount =
@@ -288,8 +442,12 @@ class VideoAPIService {
 
     const response = await providerTransport.send(providerContext, {
       path: '/videos',
-      baseUrlStrategy: binding?.baseUrlStrategy,
+      baseUrlStrategy: resolveVideoBaseUrlStrategy(providerContext, binding),
       method: 'POST',
+      headers: sessionBrokerVideoSubmitHeaders(
+        providerContext,
+        params.idempotencyKey
+      ),
       body: formData,
     });
 
@@ -355,19 +513,23 @@ class VideoAPIService {
   ): Promise<VideoQueryResponse> {
     const { providerContext, binding } = resolveVideoPlanContext(routeModel);
 
-    if (!providerContext.apiKey) {
-      throw new Error('API Key 未配置');
-    }
+    requireVideoProviderApiKey(providerContext, 'API Key 未配置');
 
     const response = await providerTransport.send(providerContext, {
-      path: resolveVideoPollPath(videoId, binding, params),
-      baseUrlStrategy: binding?.baseUrlStrategy,
+      path: resolveVideoStatusPath(providerContext, videoId, binding, params),
+      baseUrlStrategy: resolveVideoBaseUrlStrategy(providerContext, binding),
       method: 'GET',
     });
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error('[VideoAPI] Query failed:', response.status, errorText);
+      if (
+        isSessionBrokerProviderContext(providerContext) &&
+        isCreativeVideoUnsupportedStatus(response.status)
+      ) {
+        throw createCreativeVideoUnsupportedError(response.status);
+      }
       const error = new Error(
         `视频状态查询失败: ${response.status} - ${errorText}`
       );
@@ -567,8 +729,8 @@ class VideoAPIService {
           throw new Error(errorMessage);
         }
       } catch (err: any) {
-        // 业务失败（API 返回 status: failed）不应重试，直接抛出
-        if (isBusinessFailure) {
+        // 业务失败（API 返回 status: failed）或后端能力缺失不应重试，直接抛出
+        if (isBusinessFailure || isCreativeVideoUnsupportedError(err)) {
           throw err;
         }
 
@@ -610,9 +772,31 @@ class VideoAPIService {
     const { providerContext, binding } = resolveVideoPlanContext(
       routeModel || status.model
     );
+    if (isSessionBrokerProviderContext(providerContext)) {
+      const localUrl = await downloadSessionBrokerVideoContentToLocalUrl({
+        videoId,
+        provider: providerContext,
+        binding,
+        modelId: status.model,
+        cacheKey: videoId,
+      });
+
+      return {
+        ...status,
+        url: localUrl,
+        video_url: localUrl,
+      };
+    }
+
     const inlineUrl = extractInlineVideoUrl(status as Record<string, any>);
 
-    if (!shouldDownloadVideoContent(status.model, binding, status as Record<string, any>)) {
+    if (
+      !shouldDownloadVideoContent(
+        status.model,
+        binding,
+        status as Record<string, any>
+      )
+    ) {
       return inlineUrl ? { ...status, url: inlineUrl } : status;
     }
 

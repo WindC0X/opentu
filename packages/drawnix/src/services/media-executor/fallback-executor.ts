@@ -461,10 +461,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         const maskData = await unifiedCacheService.getImageForAI(
           params.maskImage
         );
-        processedMaskImage = await ensureBase64ForAI(
-          maskData,
-          options?.signal
-        );
+        processedMaskImage = await ensureBase64ForAI(maskData, options?.signal);
       }
 
       // 调用异步图片生成
@@ -606,6 +603,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           duration,
           referenceImages: params.referenceImages,
           inputReference: params.inputReference,
+          idempotencyKey: `opentu-video-${taskId}`,
           params: params.params,
         },
         options,
@@ -668,6 +666,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           size,
           duration: secondsToSend,
           referenceImages,
+          idempotencyKey: `opentu-video-${taskId}`,
           params: params.params,
         },
         videoApiConfig,
@@ -744,7 +743,6 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         } finally {
           this.pollingTasks.delete(taskId);
         }
-      } else {
       }
     } catch (error: any) {
       const elapsedTime = Date.now() - startTime;

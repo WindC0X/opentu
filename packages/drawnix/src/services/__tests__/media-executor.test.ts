@@ -99,17 +99,17 @@ describe('Media Executor Module', () => {
       vi.doMock('../media-executor/task-storage-writer', () => ({
         taskStorageWriter: {
           isAvailable: async () => true,
-          createTask: async () => {},
-          updateTaskStatus: async () => {},
-          completeTask: async () => {},
-          failTask: async () => {},
+          createTask: async () => undefined,
+          updateTaskStatus: async () => undefined,
+          completeTask: async () => undefined,
+          failTask: async () => undefined,
         },
       }));
       vi.doMock('../unified-cache-service', () => ({
         unifiedCacheService: {
           getImageForAI: vi.fn(),
           isCached: vi.fn(async () => false),
-          cacheMediaFromBlob: vi.fn(async () => {}),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
         },
       }));
 
@@ -140,17 +140,17 @@ describe('Media Executor Module', () => {
       vi.doMock('../media-executor/task-storage-writer', () => ({
         taskStorageWriter: {
           isAvailable: async () => true,
-          createTask: async () => {},
-          updateTaskStatus: async () => {},
-          completeTask: async () => {},
-          failTask: async () => {},
+          createTask: async () => undefined,
+          updateTaskStatus: async () => undefined,
+          completeTask: async () => undefined,
+          failTask: async () => undefined,
         },
       }));
       vi.doMock('../unified-cache-service', () => ({
         unifiedCacheService: {
           getImageForAI: vi.fn(),
           isCached: vi.fn(async () => false),
-          cacheMediaFromBlob: vi.fn(async () => {}),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
         },
       }));
 
@@ -190,8 +190,8 @@ describe('Media Executor Module', () => {
       }));
       vi.doMock('../media-executor/task-storage-writer', () => ({
         taskStorageWriter: {
-          completeTask: vi.fn(async () => {}),
-          failTask: vi.fn(async () => {}),
+          completeTask: vi.fn(async () => undefined),
+          failTask: vi.fn(async () => undefined),
         },
       }));
       vi.doMock('../unified-cache-service', () => ({
@@ -201,7 +201,7 @@ describe('Media Executor Module', () => {
             value: 'data:image/png;base64,abc',
           })),
           isCached: vi.fn(async () => false),
-          cacheMediaFromBlob: vi.fn(async () => {}),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
         },
       }));
       vi.doMock('../../utils/api-auth-error-event', () => ({
@@ -275,8 +275,8 @@ describe('Media Executor Module', () => {
     }, 15000);
 
     it('passes video adapter progress through fallback adapter routes', async () => {
-      const updateRemoteId = vi.fn(async () => {});
-      const completeTask = vi.fn(async () => {});
+      const updateRemoteId = vi.fn(async () => undefined);
+      const completeTask = vi.fn(async () => undefined);
       const onProgress = vi.fn();
 
       vi.doMock('../media-executor/llm-api-logger', () => ({
@@ -288,14 +288,14 @@ describe('Media Executor Module', () => {
         taskStorageWriter: {
           updateRemoteId,
           completeTask,
-          failTask: vi.fn(async () => {}),
+          failTask: vi.fn(async () => undefined),
         },
       }));
       vi.doMock('../unified-cache-service', () => ({
         unifiedCacheService: {
           getImageForAI: vi.fn(),
           isCached: vi.fn(async () => false),
-          cacheMediaFromBlob: vi.fn(async () => {}),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
         },
       }));
       vi.doMock('../../utils/api-auth-error-event', () => ({
@@ -320,11 +320,13 @@ describe('Media Executor Module', () => {
       const { executeVideoViaAdapter } = await import(
         '../media-executor/fallback-adapter-routes'
       );
+      let receivedIdempotencyKey: string | undefined;
       const adapter: VideoModelAdapter = {
         id: 'happyhorse-adapter',
         label: 'HappyHorse',
         kind: 'video',
         async generateVideo(_context, request) {
+          receivedIdempotencyKey = request.idempotencyKey;
           const handleProgress = request.params?.onProgress as
             | ((progress: number, status?: string) => void)
             | undefined;
@@ -352,6 +354,7 @@ describe('Media Executor Module', () => {
         { onProgress }
       );
 
+      expect(receivedIdempotencyKey).toBe('opentu-video-task-1');
       expect(updateRemoteId).toHaveBeenCalledWith(
         'task-1',
         'video-task-1',
@@ -396,7 +399,7 @@ describe('Media Executor Module', () => {
         unifiedCacheService: {
           getImageForAI: vi.fn(),
           isCached: vi.fn(async () => false),
-          cacheMediaFromBlob: vi.fn(async () => {}),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
         },
       }));
 

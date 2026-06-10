@@ -51,12 +51,12 @@ describe('ProviderTransport session-broker auth', () => {
       'X-Creative-CSRF': 'csrf-1',
       'X-Creative-Nonce': 'nonce-1',
     });
-    expect(Object.keys(prepared.headers).map((key) => key.toLowerCase())).not.toContain(
-      'authorization'
-    );
-    expect(Object.keys(prepared.headers).map((key) => key.toLowerCase())).not.toContain(
-      'x-api-key'
-    );
+    expect(
+      Object.keys(prepared.headers).map((key) => key.toLowerCase())
+    ).not.toContain('authorization');
+    expect(
+      Object.keys(prepared.headers).map((key) => key.toLowerCase())
+    ).not.toContain('x-api-key');
     expect(JSON.stringify(prepared)).not.toContain('must-not-leak');
     expect(JSON.stringify(prepared)).not.toContain('request-leak');
   });
@@ -154,8 +154,7 @@ describe('ProviderTransport session-broker auth', () => {
     };
 
     const prepared = transport.prepareRequest(context, {
-      path:
-        '/chat/completions?api_key=path-leak&Authorization=path-bearer&safe=1',
+      path: '/chat/completions?api_key=path-leak&Authorization=path-bearer&safe=1',
       query: {
         token: 'query-token-leak',
         upstream_key: 'query-upstream-leak',
@@ -182,6 +181,55 @@ describe('ProviderTransport session-broker auth', () => {
     );
   });
 
+  it('strips provider routing query and headers for session-broker relay calls', () => {
+    const transport = new ProviderTransport();
+    const context: ResolvedProviderContext = {
+      profileId: 'new-api-creative',
+      profileName: 'Creative',
+      providerType: 'openai-compatible',
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+      extraHeaders: {
+        'X-Provider': 'extra-provider-leak',
+        'X-Provider-Id': 'extra-provider-id-leak',
+        'X-Channel-Id': 'extra-channel-leak',
+        'X-Group': 'extra-group-leak',
+        'X-Group-Id': 'extra-group-id-leak',
+        'X-Base-URL': 'extra-base-url-leak',
+        'X-Model': 'extra-model-leak',
+        'X-Model-Override': 'extra-model-override-leak',
+        'X-Upstream-Key': 'extra-upstream-key-leak',
+        'X-Safe-Trace': 'trace-ok',
+      },
+    };
+
+    const prepared = transport.prepareRequest(context, {
+      path: '/videos/task-1?provider=path-provider-leak&providerId=path-provider-id-leak&channel=path-channel-leak&group=path-group-leak&groupId=path-group-id-leak&baseUrl=path-base-leak&modelId=path-model-id-leak&x_upstream_base_url=path-upstream-base-leak&safe=1',
+      headers: {
+        Provider: 'request-provider-leak',
+        ProviderId: 'request-provider-id-leak',
+        Channel: 'request-channel-leak',
+        Group: 'request-group-leak',
+        GroupId: 'request-group-id-leak',
+        BaseUrl: 'request-base-url-leak',
+        Model: 'request-model-leak',
+        ModelId: 'request-model-id-leak',
+        UpstreamKey: 'request-upstream-key-leak',
+        'X-Request-Id': 'request-ok',
+      },
+    });
+
+    expect(prepared.url).toBe('/creative/relay/v1/videos/task-1?safe=1');
+    expect(prepared.headers).toMatchObject({
+      'X-Safe-Trace': 'trace-ok',
+      'X-Request-Id': 'request-ok',
+    });
+    expect(JSON.stringify(prepared)).not.toMatch(
+      /provider-leak|provider-id-leak|channel-leak|group-leak|group-id-leak|base-url-leak|base-leak|model-leak|model-id-leak|model-override-leak|upstream-key-leak|upstream-base-leak/i
+    );
+  });
+
   it('rejects absolute upstream request paths for session-broker relay calls', () => {
     const transport = new ProviderTransport();
     const context: ResolvedProviderContext = {
@@ -195,10 +243,45 @@ describe('ProviderTransport session-broker auth', () => {
 
     expect(() =>
       transport.prepareRequest(context, {
-        path:
-          'https://upstream.example/v1/chat/completions?api_key=absolute-leak',
+        path: 'https://upstream.example/v1/chat/completions?api_key=absolute-leak',
       })
     ).toThrow(/session-broker.*relative path/i);
+  });
+
+  it('rejects absolute upstream baseUrl values for session-broker relay calls', () => {
+    const transport = new ProviderTransport();
+    const context: ResolvedProviderContext = {
+      profileId: 'new-api-creative',
+      profileName: 'Creative',
+      providerType: 'openai-compatible',
+      baseUrl: 'https://upstream.example/v1',
+      apiKey: '',
+      authType: 'session-broker',
+    };
+
+    expect(() =>
+      transport.prepareRequest(context, {
+        path: '/videos',
+      })
+    ).toThrow(/session-broker.*\/creative\/relay\/v1/i);
+  });
+
+  it('rejects non-canonical relative baseUrl values for session-broker relay calls', () => {
+    const transport = new ProviderTransport();
+    const context: ResolvedProviderContext = {
+      profileId: 'new-api-creative',
+      profileName: 'Creative',
+      providerType: 'openai-compatible',
+      baseUrl: '/creative/relay/v1/v1',
+      apiKey: '',
+      authType: 'session-broker',
+    };
+
+    expect(() =>
+      transport.prepareRequest(context, {
+        path: '/videos',
+      })
+    ).toThrow(/session-broker.*\/creative\/relay\/v1/i);
   });
 
   it('keeps bearer behavior unchanged for standalone API-key mode', () => {
