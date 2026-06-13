@@ -74,7 +74,8 @@
     "check:cycles:types": "node scripts/check-cycles.js --include-types",
     "verify:startup": "node scripts/validate-startup-bundle.js",
     "deploy:upload": "node scripts/upload-and-deploy.js",
-    "deploy:nginx": "node scripts/upload-nginx-config.js"
+    "deploy:nginx": "node scripts/upload-nginx-config.js",
+    "e2e:creative-embedded": "nx e2e web-e2e -- --project=creative-embedded"
   },
   "private": true,
   "dependencies": {

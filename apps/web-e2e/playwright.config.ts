@@ -4,7 +4,21 @@ import { nxE2EPreset } from '@nx/playwright/preset';
 import { workspaceRoot } from '@nx/devkit';
 
 // For CI, you may want to set BASE_URL to the deployed application.
+const creativeEmbeddedBaseURL = process.env['CREATIVE_EMBEDDED_BASE_URL'];
+const requestedProjects = process.argv.flatMap((arg, index, argv) => {
+  if (arg === '--project' && argv[index + 1]) {
+    return [argv[index + 1]];
+  }
+  if (arg.startsWith('--project=')) {
+    return [arg.slice('--project='.length)];
+  }
+  return [];
+});
+const onlyCreativeEmbeddedProject =
+  requestedProjects.length > 0 &&
+  requestedProjects.every((project) => project === 'creative-embedded');
 const baseURL = process.env['BASE_URL'] || 'http://localhost:7200';
+const shouldStartStandaloneWebServer = !onlyCreativeEmbeddedProject;
 
 /**
  * Read environment variables from file.
@@ -49,13 +63,15 @@ export default defineConfig({
   },
   
   /* Run your local dev server before starting the tests */
-  webServer: {
-    command: 'npx nx serve web',
-    url: 'http://localhost:7200',
-    reuseExistingServer: !process.env.CI,
-    cwd: workspaceRoot,
-    timeout: 120000,
-  },
+  webServer: shouldStartStandaloneWebServer
+    ? {
+        command: 'npx nx serve web',
+        url: 'http://localhost:7200',
+        reuseExistingServer: !process.env.CI,
+        cwd: workspaceRoot,
+        timeout: 120000,
+      }
+    : undefined,
   
   projects: [
     // 冒烟测试 - 仅 Chromium，快速运行
@@ -64,7 +80,17 @@ export default defineConfig({
       testMatch: '**/smoke/**/*.spec.ts',
       use: { ...devices['Desktop Chrome'] },
     },
-    
+
+    // Embedded new-api /creative/ smoke. Requires a local new-api server and
+    // CREATIVE_EMBEDDED_BASE_URL=http://localhost:<port>/creative/.
+    {
+      name: 'creative-embedded',
+      testMatch: '**/embedded/**/*.spec.ts',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: creativeEmbeddedBaseURL || baseURL,
+      },
+    },
     // 视觉回归测试 - 仅 Chromium
     {
       name: 'visual',

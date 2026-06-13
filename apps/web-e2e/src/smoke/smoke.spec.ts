@@ -4,6 +4,7 @@
  * 仅 2 次页面加载，覆盖所有核心功能
  */
 import { test, expect } from '../fixtures/test-base';
+import { waitForDrawnixReady } from '../support/drawnix-ready';
 
 test.describe('@smoke 核心功能验证', () => {
   /**
@@ -14,8 +15,7 @@ test.describe('@smoke 核心功能验证', () => {
     
     // 1. 验证页面加载（必须通过）
     await expect(page).toHaveTitle(/Opentu/);
-    const drawnix = page.locator('.drawnix');
-    await expect(drawnix).toBeVisible({ timeout: 10000 });
+    await waitForDrawnixReady(page);
     await page.waitForTimeout(2000);
     
     // 2. 验证工具栏存在（必须通过）
@@ -115,8 +115,7 @@ test.describe('@smoke 核心功能验证', () => {
    */
   test('弹窗抽屉：设置、项目、工具箱', async ({ page }) => {
     await page.goto('/');
-    const drawnix = page.locator('.drawnix');
-    await expect(drawnix).toBeVisible({ timeout: 10000 });
+    await waitForDrawnixReady(page);
     await page.waitForTimeout(1500);
     
     // === 项目抽屉 ===
