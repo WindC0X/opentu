@@ -27,7 +27,7 @@ export function isAIGeneratedAudioUrl(url: string): boolean {
 }
 
 export function isAIGeneratedVirtualUrl(url: string): boolean {
-  return isAIGeneratedAudioUrl(url);
+  return normalizeVirtualMediaUrl(url).startsWith(AI_GENERATED_URL_PREFIX);
 }
 
 export function isVirtualMediaUrl(url: string): boolean {

@@ -200,6 +200,9 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
               csrfToken: 'csrf-fresh',
               nonce: 'nonce-fresh',
             },
+            capabilities: {
+              videoRelayEnabled: true,
+            },
           },
         });
       }
@@ -299,6 +302,9 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
               csrfToken: 'csrf-force',
               nonce: 'nonce-force',
             },
+            capabilities: {
+              videoRelayEnabled: true,
+            },
           },
         });
       }
@@ -389,6 +395,9 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
               mode: 'session-broker',
               csrfToken: 'csrf-30',
               nonce: 'nonce-30',
+            },
+            capabilities: {
+              videoRelayEnabled: true,
             },
             defaultModel: 'server-owned-default',
             uiPolicy: { defaultVisibleModelIds: ['server-owned-default'] },
@@ -582,6 +591,60 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     });
     expect(JSON.stringify({ stored, markers })).not.toMatch(
       /sk-cloud-secret|cloud-secret\.example|Authorization|Bearer|baseUrl|apiKey/i
+    );
+  });
+
+  it('disables managed video capability and filters video models when backend video relay is off', async () => {
+    const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-no-video',
+              nonce: 'nonce-no-video',
+            },
+            capabilities: {
+              videoRelayEnabled: false,
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({
+          data: [
+            { id: 'gpt-5.5', type: 'text' },
+            { id: 'gpt-image-2-vip', type: 'image' },
+            { id: 'seedance-1.5-pro', type: 'video' },
+            { id: 'suno_music', type: 'audio' },
+          ],
+        });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    }) as unknown as typeof fetch;
+
+    const result = await initializeCreativeManagedSessionBroker(fetcher);
+
+    expect(result.status).toBe('ready');
+    expect(getFirstProviderProfilesUpdate()[0]?.capabilities?.supportsVideo).toBe(
+      false
+    );
+    expect(result.models?.map((model) => model.id)).toEqual(
+      expect.arrayContaining(['gpt-5.5', 'gpt-image-2-vip', 'suno_music'])
+    );
+    expect(result.models?.map((model) => model.id)).not.toContain(
+      'seedance-1.5-pro'
+    );
+    const creativeCatalog = getCreativeManagedCatalog(
+      getFirstProviderCatalogsUpdate()
+    );
+    expect(creativeCatalog.selectedModelIds).not.toContain('seedance-1.5-pro');
+    expect(creativeCatalog.discoveredModels.some((model) => model.type === 'video')).toBe(
+      false
+    );
+    expect(mocks.updateActiveInvocationRouteModel).not.toHaveBeenCalledWith(
+      'video',
+      expect.anything()
     );
   });
 

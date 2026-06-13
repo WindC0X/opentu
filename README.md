@@ -71,6 +71,7 @@ pnpm manual:build      # 生成用户手册
 - Vercel / Netlify：使用上方一键部署按钮或仓库配置。
 - Docker：使用仓库根目录的 `Dockerfile` 构建静态站点镜像。
 - Hybrid CDN + 自托管：见 [NPM CDN 部署](./docs/NPM_CDN_DEPLOY.md) 与 [CDN 部署](./docs/CDN_DEPLOYMENT.md)。
+- Creative Embed：见 [Creative 嵌入部署说明](./docs/CREATIVE_EMBED_DEPLOYMENT.md)。
 
 ## 仓库结构
 

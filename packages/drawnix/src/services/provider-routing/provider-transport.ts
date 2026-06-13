@@ -4,7 +4,11 @@ import type {
   ProviderTransportRequest,
   ResolvedProviderContext,
 } from './types';
-import { getCreativeSessionAuthHeaders } from '../creative-mode';
+import {
+  CREATIVE_CSRF_HEADER,
+  CREATIVE_NONCE_HEADER,
+  getCreativeSessionAuthHeaders,
+} from '../creative-mode';
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '');
@@ -85,6 +89,16 @@ function isSessionBrokerAuth(context: ResolvedProviderContext): boolean {
   return context.authType === 'session-broker';
 }
 
+function isUnsafeRequestMethod(method: string | undefined): boolean {
+  const normalized = (method || 'GET').trim().toUpperCase();
+  return (
+    normalized === 'POST' ||
+    normalized === 'PUT' ||
+    normalized === 'PATCH' ||
+    normalized === 'DELETE'
+  );
+}
+
 function isSensitiveAuthHeaderName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return (
@@ -148,8 +162,14 @@ function isSensitiveSessionBrokerRoutingHeaderName(name: string): boolean {
     normalized === 'xnotifyhook' ||
     normalized === 'notifyurl' ||
     normalized === 'xnotifyurl' ||
+    normalized === 'callback' ||
+    normalized === 'xcallback' ||
     normalized === 'callbackurl' ||
     normalized === 'xcallbackurl' ||
+    normalized === 'webhook' ||
+    normalized === 'xwebhook' ||
+    normalized === 'webhookurl' ||
+    normalized === 'xwebhookurl' ||
     normalized === 'endpoint' ||
     normalized === 'xendpoint' ||
     normalized === 'url' ||
@@ -182,12 +202,23 @@ function stripSessionBrokerAuthHeaders(
 
 function applyAuthHeaders(
   context: ResolvedProviderContext,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  method?: string
 ): Record<string, string> {
   if (isSessionBrokerAuth(context)) {
+    const sessionHeaders = getCreativeSessionAuthHeaders();
+    if (
+      isUnsafeRequestMethod(method) &&
+      (!sessionHeaders[CREATIVE_CSRF_HEADER] ||
+        !sessionHeaders[CREATIVE_NONCE_HEADER])
+    ) {
+      throw new Error(
+        'session-broker unsafe request requires Creative CSRF and nonce auth material'
+      );
+    }
     return {
       ...stripSessionBrokerAuthHeaders(headers),
-      ...getCreativeSessionAuthHeaders(),
+      ...sessionHeaders,
     };
   }
 
@@ -220,61 +251,50 @@ function isSensitiveSessionBrokerQueryKey(
   options: { stripModel?: boolean } = {}
 ): boolean {
   const normalized = normalizeSessionBrokerMaterialKey(key);
+  const dePrefixed = normalized.startsWith('x')
+    ? normalized.slice(1)
+    : normalized;
   if (
     normalized.startsWith('upstream') ||
-    normalized.replace(/^x/, '').startsWith('upstream')
+    dePrefixed.startsWith('upstream')
   ) {
     return true;
   }
   return (
-    normalized === 'apikey' ||
-    normalized === 'baseurl' ||
-    normalized === 'xbaseurl' ||
-    normalized === 'channel' ||
-    normalized === 'xchannel' ||
-    normalized === 'channelid' ||
-    normalized === 'xchannelid' ||
-    normalized === 'group' ||
-    normalized === 'xgroup' ||
-    normalized === 'groupid' ||
-    normalized === 'xgroupid' ||
-    normalized === 'provideroverride' ||
-    normalized === 'xprovideroverride' ||
-    normalized === 'providerid' ||
-    normalized === 'xproviderid' ||
-    normalized === 'providername' ||
-    normalized === 'xprovidername' ||
-    normalized === 'accesstoken' ||
-    normalized === 'refreshtoken' ||
-    normalized === 'idtoken' ||
-    normalized === 'internaltoken' ||
-    normalized === 'upstreamkey' ||
-    normalized === 'authorization' ||
-    normalized === 'token' ||
-    normalized === 'key' ||
-    normalized === 'provider' ||
-    normalized === 'xprovider' ||
-    normalized === 'selectedkey' ||
-    normalized === 'xselectedkey' ||
-    normalized === 'notifyhook' ||
-    normalized === 'xnotifyhook' ||
-    normalized === 'notifyurl' ||
-    normalized === 'xnotifyurl' ||
-    normalized === 'callbackurl' ||
-    normalized === 'xcallbackurl' ||
-    normalized === 'endpoint' ||
-    normalized === 'xendpoint' ||
-    normalized === 'url' ||
-    normalized === 'xurl' ||
-    normalized === 'proxy' ||
-    normalized === 'xproxy' ||
+    dePrefixed === 'apikey' ||
+    dePrefixed === 'apisecret' ||
+    dePrefixed === 'baseurl' ||
+    dePrefixed === 'channel' ||
+    dePrefixed === 'channelid' ||
+    dePrefixed === 'group' ||
+    dePrefixed === 'groupid' ||
+    dePrefixed === 'provideroverride' ||
+    dePrefixed === 'providerid' ||
+    dePrefixed === 'providername' ||
+    dePrefixed === 'accesstoken' ||
+    dePrefixed === 'refreshtoken' ||
+    dePrefixed === 'idtoken' ||
+    dePrefixed === 'internaltoken' ||
+    dePrefixed === 'upstreamkey' ||
+    dePrefixed === 'authorization' ||
+    dePrefixed === 'proxyauthorization' ||
+    dePrefixed === 'token' ||
+    dePrefixed === 'key' ||
+    dePrefixed === 'provider' ||
+    dePrefixed === 'selectedkey' ||
+    dePrefixed === 'notifyhook' ||
+    dePrefixed === 'notifyurl' ||
+    dePrefixed === 'callback' ||
+    dePrefixed === 'callbackurl' ||
+    dePrefixed === 'webhook' ||
+    dePrefixed === 'webhookurl' ||
+    dePrefixed === 'endpoint' ||
+    dePrefixed === 'url' ||
+    dePrefixed === 'proxy' ||
     (options.stripModel === true &&
-      (normalized === 'model' ||
-        normalized === 'xmodel' ||
-        normalized === 'modelid' ||
-        normalized === 'xmodelid' ||
-        normalized === 'modeloverride' ||
-        normalized === 'xmodeloverride'))
+      (dePrefixed === 'model' ||
+        dePrefixed === 'modelid' ||
+        dePrefixed === 'modeloverride'))
   );
 }
 
@@ -406,8 +426,13 @@ export class ProviderTransport {
     }
 
     const pathParts = splitPathQuery(request.path);
+    const method = request.method || 'GET';
     const mergedHeaders = mergeHeaders(context.extraHeaders, request.headers);
-    const authenticatedHeaders = applyAuthHeaders(context, mergedHeaders);
+    const authenticatedHeaders = applyAuthHeaders(
+      context,
+      mergedHeaders,
+      method
+    );
     const query = applyAuthQuery(
       context,
       {
@@ -416,10 +441,9 @@ export class ProviderTransport {
       },
       { stripModel: isServerSelectedModelRelayPath(pathParts.path) }
     );
-    const resolvedBaseUrl = applyBaseUrlStrategy(
-      context.baseUrl,
-      request.baseUrlStrategy
-    );
+    const resolvedBaseUrl = isSessionBrokerAuth(context)
+      ? trimTrailingSlashes(context.baseUrl)
+      : applyBaseUrlStrategy(context.baseUrl, request.baseUrlStrategy);
     const url = `${joinUrl(resolvedBaseUrl, pathParts.path)}${buildQueryString(
       query
     )}`;
@@ -428,7 +452,7 @@ export class ProviderTransport {
       url,
       headers: authenticatedHeaders,
       init: {
-        method: request.method || 'GET',
+        method,
         headers: authenticatedHeaders,
         body: request.body,
         signal: request.signal,

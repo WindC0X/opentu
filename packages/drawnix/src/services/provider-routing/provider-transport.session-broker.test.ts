@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearCreativeSessionAuthMaterial,
   setCreativeSessionAuthMaterial,
@@ -104,6 +104,10 @@ describe('ProviderTransport session-broker auth', () => {
       token: 'leak-token',
       key: 'leak-key',
       provider: 'leak-provider',
+      callback: 'leak-callback',
+      webhook: 'leak-webhook',
+      callbackUrl: 'leak-callbackUrl',
+      webhook_url: 'leak-webhook_url',
     };
 
     const prepared = transport.prepareRequest(context, {
@@ -200,12 +204,14 @@ describe('ProviderTransport session-broker auth', () => {
         'X-Model': 'extra-model-leak',
         'X-Model-Override': 'extra-model-override-leak',
         'X-Upstream-Key': 'extra-upstream-key-leak',
+        'X-Callback': 'extra-callback-leak',
+        'X-Webhook': 'extra-webhook-leak',
         'X-Safe-Trace': 'trace-ok',
       },
     };
 
     const prepared = transport.prepareRequest(context, {
-      path: '/videos/task-1?provider=path-provider-leak&providerId=path-provider-id-leak&channel=path-channel-leak&group=path-group-leak&groupId=path-group-id-leak&baseUrl=path-base-leak&modelId=path-model-id-leak&x_upstream_base_url=path-upstream-base-leak&safe=1',
+      path: '/videos/task-1?provider=path-provider-leak&providerId=path-provider-id-leak&channel=path-channel-leak&group=path-group-leak&groupId=path-group-id-leak&baseUrl=path-base-leak&modelId=path-model-id-leak&x_upstream_base_url=path-upstream-base-leak&callback=path-callback-leak&webhook=path-webhook-leak&safe=1',
       headers: {
         Provider: 'request-provider-leak',
         ProviderId: 'request-provider-id-leak',
@@ -216,6 +222,8 @@ describe('ProviderTransport session-broker auth', () => {
         Model: 'request-model-leak',
         ModelId: 'request-model-id-leak',
         UpstreamKey: 'request-upstream-key-leak',
+        Callback: 'request-callback-leak',
+        Webhook: 'request-webhook-leak',
         'X-Request-Id': 'request-ok',
       },
     });
@@ -226,7 +234,7 @@ describe('ProviderTransport session-broker auth', () => {
       'X-Request-Id': 'request-ok',
     });
     expect(JSON.stringify(prepared)).not.toMatch(
-      /provider-leak|provider-id-leak|channel-leak|group-leak|group-id-leak|base-url-leak|base-leak|model-leak|model-id-leak|model-override-leak|upstream-key-leak|upstream-base-leak/i
+      /provider-leak|provider-id-leak|channel-leak|group-leak|group-id-leak|base-url-leak|base-leak|model-leak|model-id-leak|model-override-leak|upstream-key-leak|upstream-base-leak|callback-leak|webhook-leak/i
     );
   });
 
@@ -369,6 +377,52 @@ describe('ProviderTransport session-broker auth', () => {
         path: '/videos',
       })
     ).toThrow(/session-broker.*\/creative\/relay\/v1/i);
+  });
+
+  it('ignores baseUrlStrategy for session-broker so validated relay base stays canonical', () => {
+    const transport = new ProviderTransport();
+    const context: ResolvedProviderContext = {
+      profileId: 'new-api-creative',
+      profileName: 'Creative',
+      providerType: 'openai-compatible',
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+    };
+
+    const prepared = transport.prepareRequest(context, {
+      path: '/videos',
+      baseUrlStrategy: 'trim-v1',
+    });
+
+    expect(prepared.url).toBe('/creative/relay/v1/videos');
+  });
+
+  it('fails unsafe session-broker methods locally when CSRF/nonce material is missing before fetch', async () => {
+    const transport = new ProviderTransport();
+    const context: ResolvedProviderContext = {
+      profileId: 'new-api-creative',
+      profileName: 'Creative',
+      providerType: 'openai-compatible',
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+    };
+
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      const fetcher = vi.fn<typeof fetch>();
+
+      await expect(
+        transport.send(context, {
+          path: '/videos',
+          method,
+          body: method === 'POST' ? '{}' : undefined,
+          fetcher,
+        })
+      ).rejects.toThrow(/session-broker.*(CSRF|nonce|auth)/i);
+
+      expect(fetcher).not.toHaveBeenCalled();
+    }
   });
 
   it('keeps bearer behavior unchanged for standalone API-key mode', () => {

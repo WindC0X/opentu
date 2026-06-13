@@ -63,6 +63,16 @@ export function getCreativeSessionAuthHeaders(): Record<string, string> {
   };
 }
 
+export function requireCreativeSessionAuthHeaders(): Record<string, string> {
+  const headers = getCreativeSessionAuthHeaders();
+  if (!headers[CREATIVE_CSRF_HEADER] || !headers[CREATIVE_NONCE_HEADER]) {
+    throw new Error(
+      'Creative unsafe mutation requires CSRF and nonce session auth material'
+    );
+  }
+  return headers;
+}
+
 function normalizeDisabledReason(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value.trim()) {
     return undefined;

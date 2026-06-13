@@ -661,6 +661,54 @@ describe('audio-api-service', () => {
     expect(extracted.providerTaskId).toBe(taskId);
   });
 
+  it('keeps notifyHook for direct Suno lyrics submit compatibility', async () => {
+    const sendMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ code: 'success', data: 'direct-lyrics-notify-task' }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () => null,
+        providerTransport: {
+          ...(actual as { providerTransport: object }).providerTransport,
+          send: sendMock,
+        },
+      };
+    });
+
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    await audioAPIService.submitAudioGeneration({
+      model: 'suno_lyrics',
+      prompt: '写一首歌词',
+      notifyHook: 'https://callback.example/direct-lyrics',
+    });
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const request = sendMock.mock.calls[0]?.[1] as { body?: string } | undefined;
+    expect(JSON.parse(request?.body || '{}')).toMatchObject({
+      prompt: '写一首歌词',
+      notify_hook: 'https://callback.example/direct-lyrics',
+    });
+  });
+
   it('extracts lyrics text from nested data wrappers without losing compatibility', async () => {
     const taskId = '9c02be46-2393-4867-b993-4c6722868481';
     const sendMock = vi
@@ -1007,6 +1055,106 @@ describe('audio-api-service', () => {
     );
   });
 
+  it('strips notify/callback/webhook material from session-broker Suno lyrics and music submit bodies', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ code: 'success', data: 'creative-lyrics-strip-task' }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ code: 'success', data: 'creative-music-strip-task' }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    const lyricsParams = Object.assign(
+      ({
+        model: 'suno_lyrics',
+        modelRef: { profileId: 'new-api-creative', modelId: 'suno_lyrics' },
+        prompt: '写一首歌词',
+        taskId: 'local-lyrics-strip-task',
+        notifyHook: 'top-notify-hook-leak',
+        params: {
+          notifyHook: 'nested-notify-hook-leak',
+          notify_hook: 'nested-notify-snake-leak',
+          callback: 'nested-callback-leak',
+          webhook: 'nested-webhook-leak',
+        },
+      } satisfies Parameters<typeof audioAPIService.submitAudioGeneration>[0]),
+      {
+        notify_hook: 'top-notify-snake-leak',
+        callback: 'top-callback-leak',
+        webhook: 'top-webhook-leak',
+      }
+    );
+    await audioAPIService.submitAudioGeneration(lyricsParams);
+
+    const musicParams = Object.assign(
+      ({
+        model: 'suno_music',
+        modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+        prompt: 'write a song',
+        taskId: 'local-music-strip-task',
+        notifyHook: 'top-music-notify-hook-leak',
+        params: {
+          notifyHook: 'nested-music-notify-hook-leak',
+          notify_hook: 'nested-music-notify-snake-leak',
+          callback: 'nested-music-callback-leak',
+          webhook: 'nested-music-webhook-leak',
+        },
+      } satisfies Parameters<typeof audioAPIService.submitAudioGeneration>[0]),
+      {
+        notify_hook: 'top-music-notify-snake-leak',
+        callback: 'top-music-callback-leak',
+        webhook: 'top-music-webhook-leak',
+      }
+    );
+    await audioAPIService.submitAudioGeneration(musicParams);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    for (const index of [0, 1]) {
+      const [, init] = getFetchCall(fetchMock, index);
+      const body = JSON.parse(init?.body as string);
+      expect(body).not.toHaveProperty('notify_hook');
+      expect(body).not.toHaveProperty('notifyHook');
+      expect(body).not.toHaveProperty('callback');
+      expect(body).not.toHaveProperty('webhook');
+      expect(JSON.stringify(body)).not.toMatch(
+        /notify-hook-leak|notify-snake-leak|callback-leak|webhook-leak/i
+      );
+    }
+  });
+
   it('uses a nested stable idempotency key from adapter task params for session-broker Suno submits', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
       new Response(
@@ -1050,6 +1198,92 @@ describe('audio-api-service', () => {
     expect((init?.headers as Record<string, string>)['Idempotency-Key']).toBe(
       'opentu-audio-task-from-adapter'
     );
+  });
+
+  it('rejects session-broker Suno submit without a stable idempotency key before fetch', async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal('fetch', fetchMock);
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    await expect(
+      audioAPIService.submitAudioGeneration({
+        model: 'suno_music',
+        modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+        prompt: 'write a song',
+      })
+    ).rejects.toThrow(/idempotency/i);
+
+    expect(loggerMocks.startLLMApiLog).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes non-unsupported session-broker Suno submit errors before logging or exposing raw bodies', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response('Authorization Bearer apiKey upstream secret leak', {
+        status: 500,
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    let caught: unknown;
+    try {
+      await audioAPIService.submitAudioGeneration({
+        model: 'suno_music',
+        modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+        prompt: 'write a song',
+        taskId: 'local-suno-error-task',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as Error).message).toBe('音乐生成提交失败: 500');
+    expect((caught as any).apiErrorBody).toBe('creative Suno relay status 500');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret/i
+    );
+    expect(JSON.stringify(loggerMocks.failLLMApiLog.mock.calls)).toContain(
+      'creative Suno relay status 500'
+    );
+    expect(JSON.stringify(loggerMocks.failLLMApiLog.mock.calls)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret/i
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('still rejects direct Suno providers without an API key before fetch', async () => {
@@ -1158,6 +1392,191 @@ describe('audio-api-service', () => {
     expect(`${submitInput} ${pollInput}`).not.toMatch(
       /Authorization|apiKey|upstream|credential|provider|channel|baseUrl/i
     );
+  });
+
+  it('sanitizes session-broker Suno task failure payloads before exposing them', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ code: 'success', data: 'failed-audio-task-secret' }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            task_id: 'failed-audio-task-secret',
+            status: 'failed',
+            fail_reason:
+              'Authorization Bearer secret apiKey upstream https://provider.example/audio.mp3',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    let caught: unknown;
+    try {
+      await audioAPIService.generateAudioWithPolling(
+        {
+          model: 'suno_music',
+          modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+          prompt: 'write a song',
+          taskId: 'local-failed-secret-task',
+        },
+        { interval: 1, maxAttempts: 2 }
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as Error).message).toBe('音乐生成失败');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example/i
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('sanitizes session-broker Suno failed submit logs and raw payloads', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          task_id: 'failed-audio-submit-redacted',
+          status: 'failed',
+          fail_reason:
+            'Authorization Bearer secret apiKey upstream https://provider.example/audio.mp3',
+          error: {
+            message:
+              'Authorization Bearer secret apiKey upstream https://provider.example/error',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    const result = await audioAPIService.submitAudioGeneration({
+      model: 'suno_music',
+      modelRef: { profileId: 'new-api-creative', modelId: 'suno_music' },
+      prompt: 'write a song',
+      taskId: 'local-failed-submit-redacted-task',
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.failReason).toBe('音乐生成失败');
+    expect(JSON.stringify(result.raw)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example/i
+    );
+    expect(JSON.stringify(result.raw)).toContain('音乐生成失败');
+    expect(JSON.stringify(loggerMocks.completeLLMApiLog.mock.calls)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example/i
+    );
+    expect(JSON.stringify(loggerMocks.completeLLMApiLog.mock.calls)).toContain(
+      '音乐生成失败'
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sanitizes session-broker Suno query raw payloads on terminal failure', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          task_id: 'failed-audio-query-redacted',
+          status: 'failed',
+          fail_reason:
+            'Authorization Bearer secret apiKey upstream https://provider.example/audio.mp3',
+          data: {
+            error:
+              'Authorization Bearer secret apiKey upstream https://provider.example/error',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { setCreativeSessionAuthMaterial } = await import('../creative-mode');
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-audio',
+      nonce: 'nonce-audio',
+    });
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () =>
+          createSessionBrokerAudioPlan(
+            createAudioBinding({ baseUrlStrategy: 'trim-v1' })
+          ),
+      };
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    const result = await audioAPIService.queryAudioTask(
+      'failed-audio-query-redacted',
+      { profileId: 'new-api-creative', modelId: 'suno_music' }
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.failReason).toBe('音乐生成失败');
+    expect(JSON.stringify(result.raw)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example/i
+    );
+    expect(JSON.stringify(result.raw)).toContain('音乐生成失败');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('sanitizes unsupported session-broker Suno submit responses without exposing backend bodies', async () => {

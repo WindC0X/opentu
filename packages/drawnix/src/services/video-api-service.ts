@@ -25,6 +25,7 @@ import {
   failLLMApiLog,
   updateLLMApiLogMetadata,
 } from './media-executor/llm-api-logger';
+import { sanitizeCreativeFailureObjectMessage } from './creative-error-sanitizer';
 import {
   downloadVideoContentToLocalUrl,
   extractInlineVideoUrl,
@@ -147,6 +148,29 @@ function isSessionBrokerProviderContext(
   return providerContext.authType === 'session-broker';
 }
 
+function sanitizeSessionBrokerVideoFailureResult<
+  T extends VideoSubmitResponse | VideoQueryResponse,
+>(result: T, providerContext: ResolvedProviderContext): T {
+  if (
+    !isSessionBrokerProviderContext(providerContext) ||
+    (result.status !== 'failed' && result.status !== 'error')
+  ) {
+    return result;
+  }
+
+  return {
+    id: result.id,
+    object: result.object,
+    model: result.model,
+    status: result.status,
+    progress: result.progress,
+    created_at: result.created_at,
+    seconds: result.seconds,
+    size: result.size,
+    error: sanitizeCreativeFailureObjectMessage(result.error, '视频生成失败'),
+  } as T;
+}
+
 function requireVideoProviderApiKey(
   providerContext: ResolvedProviderContext,
   message: string
@@ -164,11 +188,9 @@ function createVideoIdempotencyKey(preferredKey?: string): string {
   if (trimmedPreferredKey) {
     return trimmedPreferredKey;
   }
-  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
-  if (randomUUID) {
-    return `video-${randomUUID()}`;
-  }
-  return `video-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  throw new Error(
+    'session-broker video submit requires a stable idempotency key'
+  );
 }
 
 function sessionBrokerVideoSubmitHeaders(
@@ -225,6 +247,17 @@ function createCreativeVideoUnsupportedError(status: number): Error {
   return error;
 }
 
+function createSessionBrokerVideoRelayError(
+  messagePrefix: string,
+  status: number
+): Error {
+  const sanitizedBody = `creative video relay status ${status}`;
+  const error = new Error(`${messagePrefix}: ${status}`);
+  (error as any).apiErrorBody = sanitizedBody;
+  (error as any).httpStatus = status;
+  return error;
+}
+
 function isCreativeVideoUnsupportedError(error: unknown): boolean {
   return Boolean((error as any)?.unsupportedCreativeVideo);
 }
@@ -260,11 +293,9 @@ async function downloadSessionBrokerVideoContentToLocalUrl(params: {
     if (isCreativeVideoUnsupportedStatus(response.status)) {
       throw createCreativeVideoUnsupportedError(response.status);
     }
-    const errorText = await response.text().catch(() => '');
-    throw new Error(
-      `视频内容下载失败: ${response.status}${
-        errorText ? ` - ${errorText}` : ''
-      }`
+    throw createSessionBrokerVideoRelayError(
+      '视频内容下载失败',
+      response.status
     );
   }
 
@@ -307,6 +338,10 @@ class VideoAPIService {
     requireVideoProviderApiKey(
       providerContext,
       'API Key 未配置，请先配置 API Key'
+    );
+    const submitHeaders = sessionBrokerVideoSubmitHeaders(
+      providerContext,
+      params.idempotencyKey
     );
 
     // 开始记录 LLM API 调用（降级模式直接调用）
@@ -444,17 +479,38 @@ class VideoAPIService {
       path: '/videos',
       baseUrlStrategy: resolveVideoBaseUrlStrategy(providerContext, binding),
       method: 'POST',
-      headers: sessionBrokerVideoSubmitHeaders(
-        providerContext,
-        params.idempotencyKey
-      ),
+      headers: submitHeaders,
       body: formData,
     });
 
     if (!response.ok) {
+      const duration = Date.now() - startTime;
+      if (
+        isSessionBrokerProviderContext(providerContext) &&
+        isCreativeVideoUnsupportedStatus(response.status)
+      ) {
+        failLLMApiLog(logId, {
+          httpStatus: response.status,
+          duration,
+          errorMessage: `unsupported creative video relay status ${response.status}`,
+        });
+        throw createCreativeVideoUnsupportedError(response.status);
+      }
+      if (isSessionBrokerProviderContext(providerContext)) {
+        const sanitizedBody = `creative video relay status ${response.status}`;
+        failLLMApiLog(logId, {
+          httpStatus: response.status,
+          duration,
+          errorMessage: sanitizedBody,
+        });
+        throw createSessionBrokerVideoRelayError(
+          '视频生成提交失败',
+          response.status
+        );
+      }
+
       const errorText = await response.text();
       console.error('[VideoAPI] Submit failed:', response.status, errorText);
-      const duration = Date.now() - startTime;
       failLLMApiLog(logId, {
         httpStatus: response.status,
         duration,
@@ -468,7 +524,10 @@ class VideoAPIService {
       throw error;
     }
 
-    const result = await response.json();
+    const result = sanitizeSessionBrokerVideoFailureResult(
+      await response.json(),
+      providerContext
+    );
     const duration = Date.now() - startTime;
 
     // 记录视频提交成功（此时视频尚未生成完成，只是提交成功）
@@ -522,14 +581,20 @@ class VideoAPIService {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[VideoAPI] Query failed:', response.status, errorText);
       if (
         isSessionBrokerProviderContext(providerContext) &&
         isCreativeVideoUnsupportedStatus(response.status)
       ) {
         throw createCreativeVideoUnsupportedError(response.status);
       }
+      if (isSessionBrokerProviderContext(providerContext)) {
+        throw createSessionBrokerVideoRelayError(
+          '视频状态查询失败',
+          response.status
+        );
+      }
+      const errorText = await response.text();
+      console.error('[VideoAPI] Query failed:', response.status, errorText);
       const error = new Error(
         `视频状态查询失败: ${response.status} - ${errorText}`
       );
@@ -538,7 +603,10 @@ class VideoAPIService {
       throw error;
     }
 
-    const result = await response.json();
+    const result = sanitizeSessionBrokerVideoFailureResult(
+      await response.json(),
+      providerContext
+    );
     // console.log('[VideoAPI] Query response:', JSON.stringify(result, null, 2));
     return result;
   }
@@ -575,16 +643,10 @@ class VideoAPIService {
 
     // Check if submission already failed (e.g., content policy violation)
     if (submitResponse.status === 'failed') {
-      let errorMessage = '视频生成失败';
-      if (submitResponse.error) {
-        if (typeof submitResponse.error === 'string') {
-          errorMessage = submitResponse.error;
-        } else if (typeof submitResponse.error === 'object') {
-          errorMessage =
-            (submitResponse.error as any).message ||
-            JSON.stringify(submitResponse.error);
-        }
-      }
+      const errorMessage = sanitizeCreativeFailureObjectMessage(
+        submitResponse.error,
+        '视频生成失败'
+      );
       throw new Error(errorMessage);
     }
 
@@ -642,16 +704,10 @@ class VideoAPIService {
 
     // If already failed, throw error immediately
     if (immediateStatus.status === 'failed') {
-      let errorMessage = '视频生成失败';
-      if (immediateStatus.error) {
-        if (typeof immediateStatus.error === 'string') {
-          errorMessage = immediateStatus.error;
-        } else if (typeof immediateStatus.error === 'object') {
-          errorMessage =
-            (immediateStatus.error as any).message ||
-            JSON.stringify(immediateStatus.error);
-        }
-      }
+      const errorMessage = sanitizeCreativeFailureObjectMessage(
+        immediateStatus.error,
+        '视频生成失败'
+      );
       throw new Error(errorMessage);
     }
 
@@ -713,17 +769,10 @@ class VideoAPIService {
         }
 
         if (status.status === 'failed') {
-          // Handle error - extract message if error is an object
-          let errorMessage = '视频生成失败';
-          if (status.error) {
-            if (typeof status.error === 'string') {
-              errorMessage = status.error;
-            } else if (typeof status.error === 'object') {
-              // Error is an object, extract message
-              errorMessage =
-                (status.error as any).message || JSON.stringify(status.error);
-            }
-          }
+          const errorMessage = sanitizeCreativeFailureObjectMessage(
+            status.error,
+            '视频生成失败'
+          );
           // Mark as business failure so it won't be retried
           isBusinessFailure = true;
           throw new Error(errorMessage);

@@ -150,6 +150,7 @@ describe('video-api-service session-broker routing', () => {
 
   afterEach(() => {
     clearCreativeSessionAuthMaterial();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -224,6 +225,127 @@ describe('video-api-service session-broker routing', () => {
     expect(String(input)).not.toMatch(
       /provider-param-leak|channel-param-leak|base-param-leak|apiKey|baseUrl|provider|channel/i
     );
+  });
+
+  it('rejects session-broker video submit without a stable idempotency key before logging, image processing, or fetch', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.getImageForAI.mockResolvedValue({
+      type: 'url',
+      value: 'https://cdn.example/reference.png',
+    });
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    await expect(
+      videoAPIService.submitVideoGeneration({
+        model: 'veo3',
+        modelRef: { profileId: 'new-api-creative', modelId: 'veo3' },
+        prompt: 'make a safe video',
+        inputReferences: [
+          {
+            slot: 0,
+            url: '/__aitu_cache__/asset/reference.png',
+            name: 'reference.png',
+          },
+        ],
+      })
+    ).rejects.toThrow(/idempotency/i);
+
+    expect(mocks.startLLMApiLog).not.toHaveBeenCalled();
+    expect(mocks.getImageForAI).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes unsupported session-broker video submit responses before logging or exposing raw bodies', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch.mockResolvedValueOnce(
+      new Response(
+        'unsupported Authorization Bearer secret apiKey upstream credential leak',
+        { status: 405 }
+      )
+    );
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    let caught: unknown;
+    try {
+      await videoAPIService.submitVideoGeneration({
+        model: 'veo3',
+        modelRef: { profileId: 'new-api-creative', modelId: 'veo3' },
+        prompt: 'make a safe video',
+        idempotencyKey: 'opentu-video-submit-unsupported',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      unsupportedCreativeVideo: true,
+      httpStatus: 405,
+    });
+    expect((caught as Error).message).toMatch(/暂不支持嵌入式视频生成/);
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|credential|secret/i
+    );
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(mocks.failLLMApiLog.mock.calls)).toContain(
+      'unsupported creative video relay status 405'
+    );
+    expect(JSON.stringify(mocks.failLLMApiLog.mock.calls)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|credential|secret/i
+    );
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('sanitizes non-unsupported session-broker video submit errors before logging or exposing raw bodies', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch.mockResolvedValueOnce(
+      new Response('Authorization Bearer secret apiKey upstream credential leak', {
+        status: 500,
+      })
+    );
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    let caught: unknown;
+    try {
+      await videoAPIService.submitVideoGeneration({
+        model: 'veo3',
+        modelRef: { profileId: 'new-api-creative', modelId: 'veo3' },
+        prompt: 'make a safe video',
+        idempotencyKey: 'opentu-video-submit-error',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as Error).message).toBe('视频生成提交失败: 500');
+    expect((caught as any).apiErrorBody).toBe('creative video relay status 500');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|credential|secret/i
+    );
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(mocks.failLLMApiLog.mock.calls)).toContain(
+      'creative video relay status 500'
+    );
+    expect(JSON.stringify(mocks.failLLMApiLog.mock.calls)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|credential|secret/i
+    );
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
   });
 
   it('queries session-broker video status through canonical /videos/:taskId without binding override query material', async () => {
@@ -371,6 +493,222 @@ describe('video-api-service session-broker routing', () => {
     expect(init?.credentials).toBe('same-origin');
   });
 
+  it('sanitizes unsupported session-broker video status responses without logging raw bodies', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch.mockResolvedValueOnce(
+      new Response(
+        'unsupported Authorization Bearer secret apiKey upstream credential leak',
+        { status: 501 }
+      )
+    );
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    let caught: unknown;
+    try {
+      await videoAPIService.resumePolling('task-unsupported-secret', {
+        routeModel: { profileId: 'new-api-creative', modelId: 'veo3' },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      unsupportedCreativeVideo: true,
+      httpStatus: 501,
+    });
+    expect((caught as Error).message).toMatch(/暂不支持嵌入式视频生成/);
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|credential|secret/i
+    );
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('sanitizes non-unsupported session-broker video status errors without exposing raw bodies', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch.mockResolvedValueOnce(
+      new Response('Authorization Bearer secret apiKey upstream credential leak', {
+        status: 500,
+      })
+    );
+    const consoleErrorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    let caught: unknown;
+    try {
+      await videoAPIService.resumePolling('task-error-secret', {
+        routeModel: { profileId: 'new-api-creative', modelId: 'veo3' },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as Error).message).toBe('视频状态查询失败: 500');
+    expect((caught as any).apiErrorBody).toBe('creative video relay status 500');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|credential|secret/i
+    );
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('sanitizes session-broker video task failure payloads before exposing them', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'task-failed-secret',
+          status: 'failed',
+          error: {
+            message:
+              'Authorization Bearer secret apiKey upstream https://provider.example/private.mp4',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    let caught: unknown;
+    try {
+      await videoAPIService.resumePolling('task-failed-secret', {
+        routeModel: { profileId: 'new-api-creative', modelId: 'veo3' },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as Error).message).toBe('视频生成失败');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example/i
+    );
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('sanitizes session-broker video submit failed payloads before returning or logging them', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'task-submit-failed-redacted',
+          object: 'video',
+          model: 'veo3',
+          status: 'failed',
+          progress: 100,
+          created_at: 1,
+          seconds: '8',
+          error: {
+            code: 'policy',
+            message:
+              'Authorization Bearer secret apiKey upstream https://provider.example/private.mp4',
+          },
+          notifyHook: 'notifyHook callback relay metadata',
+          callback: 'callback relay metadata',
+          data: {
+            webhook: 'webhook relay metadata',
+            detail:
+              'Authorization Bearer apiKey upstream https://provider.example/raw',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    const result = await videoAPIService.submitVideoGeneration({
+      model: 'veo3',
+      modelRef: { profileId: 'new-api-creative', modelId: 'veo3' },
+      prompt: 'make a safe video',
+      idempotencyKey: 'opentu-video-submit-failed-redacted',
+    });
+
+    expect(result.status).toBe('failed');
+    expect(JSON.stringify(result)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example|callback|webhook|notifyHook/i
+    );
+    expect(JSON.stringify(result)).toContain('视频生成失败');
+    expect(JSON.stringify(mocks.failLLMApiLog.mock.calls)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example/i
+    );
+    expect(JSON.stringify(mocks.failLLMApiLog.mock.calls)).toContain(
+      '视频生成失败'
+    );
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('sanitizes session-broker video query failed payloads before returning them', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'task-query-failed-redacted',
+          object: 'video',
+          model: 'veo3',
+          status: 'failed',
+          progress: 100,
+          created_at: 1,
+          seconds: '8',
+          error: {
+            code: 'provider_failure',
+            message:
+              'Authorization Bearer secret apiKey upstream https://provider.example/private.mp4',
+          },
+          raw: {
+            notify_hook: 'notify_hook relay metadata',
+            webhook: 'webhook relay metadata',
+            detail:
+              'Authorization Bearer apiKey upstream https://provider.example/raw',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    const result = await videoAPIService.queryVideoStatus('task-query-failed-redacted', {
+      profileId: 'new-api-creative',
+      modelId: 'veo3',
+    });
+
+    expect(result.status).toBe('failed');
+    expect(JSON.stringify(result)).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example|callback|webhook|notify_hook/i
+    );
+    expect(JSON.stringify(result)).toContain('视频生成失败');
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('fails unsupported session-broker video content download without direct fallback', async () => {
     mocks.resolveInvocationPlanFromRoute.mockReturnValue(
       createSessionBrokerPlan(createVideoBinding())
@@ -395,16 +733,31 @@ describe('video-api-service session-broker routing', () => {
         )
       )
       .mockResolvedValueOnce(
-        new Response('unsupported creative video content', { status: 501 })
+        new Response(
+          'unsupported Authorization Bearer secret apiKey upstream credential leak',
+          { status: 501 }
+        )
       );
 
     const { videoAPIService } = await import('../video-api-service');
 
-    await expect(
-      videoAPIService.resumePolling('task-content-unsupported', {
+    let caught: unknown;
+    try {
+      await videoAPIService.resumePolling('task-content-unsupported', {
         routeModel: { profileId: 'new-api-creative', modelId: 'veo3' },
-      })
-    ).rejects.toThrow(/暂不支持嵌入式视频生成/);
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      unsupportedCreativeVideo: true,
+      httpStatus: 501,
+    });
+    expect((caught as Error).message).toMatch(/暂不支持嵌入式视频生成/);
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|credential|secret/i
+    );
 
     expect(mocks.fetch).toHaveBeenCalledTimes(2);
     const [statusInput] = getFetchCall(mocks.fetch, 0);

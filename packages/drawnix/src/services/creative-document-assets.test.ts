@@ -23,7 +23,10 @@ describe('creative document asset preparation', () => {
       getCachedBlob: vi.fn(async (url: string) => {
         const type = url.includes('/audio/')
           ? 'audio/mpeg'
-          : url.includes('/video/')
+          : url.includes('/video/') ||
+            url.includes('/videos/') ||
+            url.includes('/clips/') ||
+            url.endsWith('.mp4')
           ? 'video/mp4'
           : 'image/png';
         return new Blob([`cached:${url}`], { type });
@@ -104,6 +107,67 @@ describe('creative document asset preparation', () => {
     expect(preparedJson).not.toContain(audioUrl);
     expect(preparedJson).not.toContain(assetLibraryUrl);
     expect(preparedJson).not.toContain(dataUrl);
+  });
+
+  it('uploads generated image/video URLs across poster/cover/clips fields before sync', async () => {
+    const generatedPoster = '/__aitu_generated__/images/poster.png';
+    const generatedPosterArray = '/__aitu_generated__/images/poster-array.png';
+    const generatedCover = '/__aitu_generated__/images/cover.png';
+    const generatedCoverArray = '/__aitu_generated__/images/cover-array.png';
+    const generatedClip = '/__aitu_generated__/videos/clip.mp4';
+    const generatedClipString = '/__aitu_generated__/clips/clip-string.mp4';
+    const generatedClipPoster = '/__aitu_generated__/images/clip-poster.png';
+    const generatedClipCover = '/__aitu_generated__/images/clip-cover.png';
+    const payload = {
+      snapshot: {
+        elements: [
+          {
+            id: 'video-card-1',
+            posterUrl: generatedPoster,
+            posters: [generatedPosterArray],
+            cover: generatedCover,
+            covers: [generatedCoverArray],
+            clips: [
+              generatedClipString,
+              {
+                url: generatedClip,
+                posterUrl: generatedClipPoster,
+                cover: generatedClipCover,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const cache = createCache();
+    const upload = vi.fn(async (_blob: Blob, metadata?: { sourceUrl?: string }) =>
+      `/creative/api/assets/${metadata?.sourceUrl
+        ?.split('/')
+        .pop()
+        ?.replace(/\W+/g, '_')}/content`
+    );
+
+    const prepared = await prepareCreativeDocumentAssetsForSync(payload, {
+      assetSyncEnabled: true,
+      assetAdapter: { upload },
+      cache,
+    });
+
+    expect(upload).toHaveBeenCalledTimes(8);
+    for (const localUrl of [
+      generatedPoster,
+      generatedPosterArray,
+      generatedCover,
+      generatedCoverArray,
+      generatedClipString,
+      generatedClip,
+      generatedClipPoster,
+      generatedClipCover,
+    ]) {
+      expect(cache.getCachedBlob).toHaveBeenCalledWith(localUrl);
+      expect(JSON.stringify(prepared)).not.toContain(localUrl);
+    }
+    expect(JSON.stringify(prepared)).toContain('/creative/api/assets/');
   });
 
   it('keeps local-only media pending when asset sync is disabled without leaking the raw URL', async () => {
@@ -190,13 +254,46 @@ describe('creative document asset preparation', () => {
     expect(JSON.stringify(hydrated)).not.toContain(cloudUrl);
   });
 
+  it('rejects signed remote URLs during hydrate even when there are no cloud asset refs', async () => {
+    const signedUrl =
+      'https://private-bucket.s3.amazonaws.com/path/image.png?X-Amz-Credential=AKIA_TEST&X-Amz-Signature=super-secret';
+    const download = vi.fn(async () => new Blob(['remote'], { type: 'image/png' }));
+
+    await expect(
+      hydrateCreativeDocumentAssets(
+        { snapshot: { elements: [{ imageUrl: signedUrl }] } },
+        {
+          assetSyncEnabled: true,
+          assetAdapter: { download },
+          cache: createCache(),
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'creative_asset_unsafe_url',
+    });
+
+    expect(download).not.toHaveBeenCalled();
+    await expect(
+      hydrateCreativeDocumentAssets(
+        { snapshot: { elements: [{ imageUrl: signedUrl }] } },
+        {
+          assetSyncEnabled: true,
+          assetAdapter: { download },
+          cache: createCache(),
+        }
+      )
+    ).rejects.not.toThrow(/AKIA_TEST|super-secret|s3\.amazonaws/i);
+  });
+
   it('recognizes only query-free same-origin creative asset content refs', () => {
+    const runtimeOrigin = window.location.origin;
+
     expect(isCreativeAssetContentUrl('/creative/api/assets/asset_123/content')).toBe(
       true
     );
     expect(
       isCreativeAssetContentUrl(
-        `${window.location.origin}/creative/api/assets/asset_123/content`
+        `${runtimeOrigin}/creative/api/assets/asset_123/content`
       )
     ).toBe(true);
     expect(isCreativeAssetContentUrl('/creative/api/assets/asset_123/content?x=1')).toBe(
@@ -262,5 +359,19 @@ describe('CreativeAssetCloudAdapter', () => {
     expect(JSON.stringify(calls[0].init?.headers)).not.toMatch(
       /bucket|objectkey|access.*key|secret|provider|baseurl/i
     );
+  });
+
+  it('fails unsafe asset uploads locally when session auth material is missing', async () => {
+    const fetcher = vi.fn(async () => new Response('{}', { status: 200 }));
+    const adapter = new CreativeAssetCloudAdapter(
+      fetcher as unknown as typeof fetch
+    );
+
+    await expect(
+      adapter.upload(new Blob(['image-bytes'], { type: 'image/png' }), {
+        mediaType: 'image',
+      })
+    ).rejects.toThrow(/Creative.*CSRF.*nonce/i);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

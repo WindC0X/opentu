@@ -299,6 +299,32 @@ describe('provider routing', () => {
     );
   });
 
+  it('strips x-prefixed credential query aliases from session-broker requests', () => {
+    const prepared = providerTransport.prepareRequest(
+      {
+        profileId: 'creative-session',
+        profileName: 'Creative Session',
+        providerType: 'openai-compatible',
+        baseUrl: '/creative/relay/v1',
+        apiKey: '',
+        authType: 'session-broker',
+      },
+      {
+        path: '/videos/task_123?x-api-key=query-secret&x-authorization=Bearer%20secret&x-access-token=access-secret&prompt=safe',
+        method: 'GET',
+        query: {
+          'x-api-secret': 'api-secret',
+          'x-refresh-token': 'refresh-secret',
+          keep: 'ok',
+        },
+      }
+    );
+
+    expect(prepared.url).toBe(
+      '/creative/relay/v1/videos/task_123?prompt=safe&keep=ok'
+    );
+  });
+
   it('trims a trailing /v1 for google-compatible protocol roots', () => {
     const prepared = providerTransport.prepareRequest(
       {

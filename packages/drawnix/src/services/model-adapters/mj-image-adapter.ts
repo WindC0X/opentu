@@ -6,6 +6,7 @@ import type {
 import { registerModelAdapter } from './registry';
 import { sendAdapterRequest } from './context';
 import { IMAGE_GENERATION_TIMEOUT_MS } from '../../constants/TASK_CONSTANTS';
+import { sanitizeCreativeFailureMessage } from '../creative-error-sanitizer';
 
 type MJSubmitResponse = {
   code: number;
@@ -62,17 +63,22 @@ const createCreativeMJUnsupportedError = (status: number): Error => {
   return error;
 };
 
+const createSessionBrokerMJRelayError = (
+  operation: 'submit' | 'query',
+  status: number
+): Error => {
+  const error = new Error(`MJ ${operation} failed: ${status}`);
+  (error as any).httpStatus = status;
+  return error;
+};
+
 const createMJIdempotencyKey = (preferredKey?: string): string => {
   const trimmedPreferredKey = preferredKey?.trim();
   if (trimmedPreferredKey) {
     return trimmedPreferredKey;
   }
 
-  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
-  if (randomUUID) {
-    return `opentu-image-${randomUUID()}`;
-  }
-  return `opentu-image-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  throw new Error('session-broker MJ submit requires a stable idempotency key');
 };
 
 const resolveMJIdempotencySource = (
@@ -146,6 +152,9 @@ const submitMJImagine = async (
     ) {
       throw createCreativeMJUnsupportedError(response.status);
     }
+    if (isSessionBrokerContext(context)) {
+      throw createSessionBrokerMJRelayError('submit', response.status);
+    }
 
     const errorText = await response.text();
     throw new Error(`MJ submit failed: ${response.status} - ${errorText}`);
@@ -174,6 +183,9 @@ const queryMJTask = async (
       isCreativeMJUnsupportedStatus(response.status)
     ) {
       throw createCreativeMJUnsupportedError(response.status);
+    }
+    if (isSessionBrokerContext(context)) {
+      throw createSessionBrokerMJRelayError('query', response.status);
     }
 
     const errorText = await response.text();
@@ -239,7 +251,12 @@ export const mjImageAdapter: ImageModelAdapter = {
       }
 
       if (isFailureStatus(statusResponse.status)) {
-        throw new Error(statusResponse.failReason || 'MJ generation failed');
+        throw new Error(
+          sanitizeCreativeFailureMessage(
+            statusResponse.failReason,
+            'MJ generation failed'
+          )
+        );
       }
     }
 

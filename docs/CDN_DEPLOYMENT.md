@@ -5,7 +5,7 @@
 本文档描述 Opentu 的多 CDN 智能部署策略，实现：
 
 1. **Service Worker 缓存优先** - 最快加载速度
-2. **多 CDN 自动回退** - 高可用性
+2. **npm CDN 发布 + 运行时 jsDelivr 主链路** - 静态资源发布到 npm，运行时关键资源以 jsDelivr 为主链路，服务器保留完整兜底副本
 3. **本地服务器兜底** - 最终保障
 4. **零服务器流量成本** - 利用免费 CDN
 5. **安全混合部署** - HTML 在自有服务器，静态资源在 CDN
@@ -31,24 +31,31 @@
          ↓
    ┌──────┼──────┐
    ↓      ↓      ↓
- unpkg  jsdelivr 服务器
- (优先)  (备用)   (兜底)
+ jsdelivr  npm包/服务器
+ (主链路)  (发布源/兜底)
 ```
 
 ### 使用方法
 
 ```bash
 # 一键部署：构建 + 发布 CDN + 部署服务器
-pnpm run deploy --otp=123456
+pnpm run release -- --otp=123456
 
 # 预览模式（不实际执行）
-pnpm run deploy:dry
+pnpm run release:dry
 
 # 只发布到 CDN（跳过服务器部署）
-pnpm run deploy:cdn-only --otp=123456
+pnpm run release -- --skip-server --otp=123456
 
 # 只部署到服务器（跳过 npm 发布）
-pnpm run deploy:server-only
+pnpm run release -- --skip-npm
+
+# 跳过构建/E2E/npm/manual，仅复用现有部署包执行快速发布
+pnpm run release:skip
+
+# 仅上传已有部署包或 nginx 配置
+pnpm run deploy:upload
+pnpm run deploy:nginx
 ```
 
 ### 服务器配置
@@ -72,20 +79,26 @@ DEPLOY_SSH_PASSWORD=your-password
 
 | 文件类型 | CDN | 服务器 | 说明 |
 |---------|:---:|:------:|------|
-| `*.html` | ❌ | ✅ | 安全：不在 CDN 公开 |
+| `*.html` | ❌ | ✅ | HTML 文档 origin-first；不做 CDN-first preload/rewrite |
 | `sw.js` | ❌ | ✅ | Service Worker 必须同源 |
 | `init.json` | ❌ | ✅ | 初始化配置 |
 | `assets/*.js` | ✅ | ✅ | CDN 优先，服务器兜底 |
 | `assets/*.css` | ✅ | ✅ | CDN 优先，服务器兜底 |
-| `icons/*` | ✅ | ✅ | CDN 优先，服务器兜底 |
-| `manifest.json` | ✅ | ✅ | CDN 优先，服务器兜底 |
+| `icons/*` / `logo/*` / `favicon.ico` | ✅ | ✅ | 公共静态资源可 CDN 优先，服务器兜底 |
+| `manifest.json` / `version.json` / `precache-manifest.json` / `idle-prefetch-manifest.json` | 可选静态副本 | ✅ | release metadata 运行时 origin-first；npm/CDN 副本不能作为 rewrite 目标 |
+| `/creative/api/*` / `/creative/relay/v1/*` | ❌ | ✅ | `new-api` 同源会话接口，禁止 CDN 缓存/重写 |
 
-### 加载顺序
+### 加载顺序（仅针对可 CDN 化的静态资源）
 
 1. **Service Worker 缓存** - 最快，离线可用
-2. **CDN unpkg** - 优先加载，节约服务器流量
-3. **CDN jsdelivr** - unpkg 失败时备用
-4. **自有服务器** - 所有 CDN 失败时兜底
+2. **CDN jsDelivr** - 当前运行时主 CDN，节约服务器流量
+3. **npm 包 CDN 地址** - unpkg/jsDelivr 均可访问已发布包；运行时关键资源检查以 jsDelivr 为准
+4. **自有服务器** - 所有 CDN 失败时兜底；HTML / `sw.js` / release metadata / Creative API/relay 始终 origin-first
+
+
+## Creative Embed 注意事项
+
+当 Opentu 作为 `new-api` 的 Creative 嵌入前端使用时，HTML、`sw.js`、`init.json`、运行时配置以及 `/creative/api/*`、`/creative/relay/v1/*` 必须保持同源，由 `new-api` 处理浏览器会话、CSRF/nonce 和 `private, no-store` 响应。只允许将 hashed `assets/*.js` / `assets/*.css` 等纯静态资源改写到 CDN。详细矩阵见 [Creative 嵌入部署说明](./CREATIVE_EMBED_DEPLOYMENT.md)。
 
 ## 架构图
 
@@ -99,15 +112,11 @@ DEPLOY_SSH_PASSWORD=your-password
 │  │    ↓ 缓存命中 → 直接返回                 │    │
 │  │    ↓ 缓存未命中                          │    │
 │  │                                          │    │
-│  │ 2. 尝试 CDN 1: unpkg.com                │    │
+│  │ 2. 尝试运行时主 CDN: jsdelivr.net       │    │
 │  │    ↓ 成功 → 缓存并返回                   │    │
 │  │    ↓ 失败                                │    │
 │  │                                          │    │
-│  │ 3. 尝试 CDN 2: jsdelivr.net             │    │
-│  │    ↓ 成功 → 缓存并返回                   │    │
-│  │    ↓ 失败                                │    │
-│  │                                          │    │
-│  │ 4. 回退本地服务器                        │    │
+│  │ 3. 回退本地服务器                        │    │
 │  │    ↓ 成功 → 缓存并返回                   │    │
 │  │    ↓ 失败 → 显示离线页面                 │    │
 │  └─────────────────────────────────────────┘    │
@@ -118,8 +127,8 @@ DEPLOY_SSH_PASSWORD=your-password
 
 | CDN | 免费额度 | 特点 | 访问地址 |
 |-----|----------|------|----------|
-| unpkg | 无限 | npm 官方托管，全球节点 | `unpkg.com/aitu-app@{version}/` |
-| jsdelivr | 无限 | 国内访问快，有缓存 | `cdn.jsdelivr.net/npm/aitu-app@{version}/` |
+| jsDelivr | 无限 | 当前运行时主链路，发布后关键资源就绪检查以此为准 | `cdn.jsdelivr.net/npm/aitu-app@{version}/` |
+| unpkg | 无限 | npm 包公开访问地址，可作为人工排障/备用访问来源 | `unpkg.com/aitu-app@{version}/` |
 | 本地服务器 | 自有流量 | 完全可控，最终兜底 | 自有域名 |
 
 ## 部署流程
@@ -130,19 +139,19 @@ DEPLOY_SSH_PASSWORD=your-password
 # 步骤 1：升级版本
 pnpm run version:patch
 
-# 步骤 2：构建混合部署包
-pnpm run cdn:build
+# 步骤 2：构建、拆分 CDN/Server 包、发布静态资源并部署服务器
+pnpm run release -- --otp=123456
 
-# 步骤 3：发布静态资源到 npm
-pnpm run cdn:publish --skip-build --otp=123456
+# 可选：只发布 npm CDN 静态资源，不部署服务器
+pnpm run release -- --skip-server --otp=123456
 
-# 步骤 4：部署 HTML 到自有服务器
-scp -r dist/deploy/server/* user@your-server:/path/to/web/
+# 可选：只部署服务器，不发布 npm CDN
+pnpm run release -- --skip-npm
 ```
 
 **CDN 上没有 HTML 文件**，用户信息安全。
 
-### 方式 2：完整发布到 npm（包含 HTML）
+### 方式 2：发布 npm 静态资源包
 
 ```bash
 # 升级版本并发布
@@ -151,10 +160,10 @@ pnpm run npm:publish --otp=123456
 ```
 
 发布后，CDN 自动可用：
-- unpkg: `https://unpkg.com/aitu-app@{version}/index.html`
-- jsdelivr: `https://cdn.jsdelivr.net/npm/aitu-app@{version}/index.html`
+- jsDelivr: `https://cdn.jsdelivr.net/npm/aitu-app@{version}/assets/<asset-file>.js`
+- unpkg: `https://unpkg.com/aitu-app@{version}/assets/<asset-file>.js`
 
-> ⚠️ 注意：此方式 HTML 文件也在 CDN 上公开
+> 注意：npm 包仍只包含静态资源和清单，不包含 HTML、`sw.js` 或运行时 `init.json`。
 
 ### 2. 配置自有域名（可选）
 
@@ -174,7 +183,7 @@ pnpm run npm:publish --otp=123456
 
 1. 部署到自有服务器（使用现有脚本）：
    ```bash
-   pnpm run deploy:package
+   pnpm run package
    pnpm run deploy:upload
    ```
 
@@ -198,13 +207,13 @@ pnpm run npm:publish --otp=123456
 // CDN 源配置
 const CDN_SOURCES = [
   {
-    name: 'unpkg',
-    urlTemplate: 'https://unpkg.com/aitu-app@{version}/{path}',
+    name: 'jsdelivr',
+    urlTemplate: 'https://cdn.jsdelivr.net/npm/aitu-app@{version}/{path}',
     priority: 1,
   },
   {
-    name: 'jsdelivr',
-    urlTemplate: 'https://cdn.jsdelivr.net/npm/aitu-app@{version}/{path}',
+    name: 'unpkg',
+    urlTemplate: 'https://unpkg.com/aitu-app@{version}/{path}',
     priority: 2,
   },
 ];
@@ -254,19 +263,19 @@ if (isCDNAvailable(cdnName)) {
 
 ```
 用户 → SW 缓存（命中）→ 立即返回
-用户 → SW 缓存（未命中）→ unpkg → 缓存 → 返回
+用户 → SW 缓存（未命中）→ jsDelivr → 缓存 → 返回
 ```
 
-### 场景 2：unpkg 不可用
+### 场景 2：jsDelivr 不可用
 
 ```
-用户 → SW 缓存（未命中）→ unpkg（失败）→ jsdelivr → 缓存 → 返回
+用户 → SW 缓存（未命中）→ jsDelivr（失败）→ unpkg/本地服务器 → 缓存 → 返回
 ```
 
 ### 场景 3：所有 CDN 不可用
 
 ```
-用户 → SW 缓存（未命中）→ unpkg（失败）→ jsdelivr（失败）→ 本地服务器 → 返回
+用户 → SW 缓存（未命中）→ jsDelivr（失败）→ unpkg（失败）→ 本地服务器 → 返回
 ```
 
 ### 场景 4：完全离线
@@ -367,14 +376,14 @@ const isDevelopment =
 A: 
 - unpkg：通常 1-5 分钟
 - jsdelivr：可能需要手动刷新缓存
-- 使用版本号指定（`@0.5.16`）确保获取正确版本
+- 使用版本号指定（`@<version>`）确保获取正确版本
 
 ### Q: 如何强制刷新 CDN 缓存？
 
 A:
 ```bash
 # jsdelivr 刷新
-curl -X PURGE https://purge.jsdelivr.net/npm/aitu-app@0.5.16/
+curl -X PURGE https://purge.jsdelivr.net/npm/aitu-app@<version>/
 
 # unpkg 自动同步，无需手动刷新
 ```

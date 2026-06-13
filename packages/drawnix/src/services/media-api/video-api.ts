@@ -92,12 +92,9 @@ function resolveSubmitHeaders(
   if (idempotencyKey) {
     return { 'Idempotency-Key': idempotencyKey };
   }
-  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
-  return {
-    'Idempotency-Key': randomUUID
-      ? `video-${randomUUID()}`
-      : `video-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  };
+  throw new Error(
+    'session-broker video submit requires a stable idempotency key'
+  );
 }
 
 function isUnsupportedCreativeVideoStatus(status: number): boolean {
@@ -111,6 +108,16 @@ class CreativeVideoUnsupportedError extends Error {
     (this as any).httpStatus = status;
     (this as any).unsupportedCreativeVideo = true;
   }
+}
+
+function createSessionBrokerVideoRelayError(
+  status: number,
+  messagePrefix = 'Video submission failed'
+): Error {
+  const error = new Error(`${messagePrefix}: ${status}`);
+  (error as any).apiErrorBody = `creative video relay status ${status}`;
+  (error as any).httpStatus = status;
+  return error;
 }
 
 function getVideoContentExtensionFromMimeType(mimeType?: string): string {
@@ -140,11 +147,9 @@ async function downloadSessionBrokerVideoContentToLocalUrl(
     if (isUnsupportedCreativeVideoStatus(response.status)) {
       throw new CreativeVideoUnsupportedError(response.status);
     }
-    const errorText = await response.text().catch(() => '');
-    throw new Error(
-      `视频内容下载失败: ${response.status}${
-        errorText ? ` - ${errorText}` : ''
-      }`
+    throw createSessionBrokerVideoRelayError(
+      response.status,
+      '视频内容下载失败'
     );
   }
 
@@ -194,6 +199,7 @@ export async function submitVideoGeneration(
   const fetchFn = config.fetchImpl || fetch;
   const baseUrl = resolveVideoApiBase(config);
   const providerContext = buildProviderContextFromApiConfig(config, baseUrl);
+  const submitHeaders = resolveSubmitHeaders(params, config);
   const model = params.model || config.defaultModel || 'veo3';
   // seconds can come from duration (number/string) or explicit seconds
   const secondsParam = params.duration ?? (params as any).seconds;
@@ -242,13 +248,22 @@ export async function submitVideoGeneration(
       ? undefined
       : config.binding?.baseUrlStrategy,
     method: 'POST',
-    headers: resolveSubmitHeaders(params, config),
+    headers: submitHeaders,
     body: formData,
     signal,
     fetcher: fetchFn,
   });
 
   if (!response.ok) {
+    if (
+      isSessionBrokerConfig(config) &&
+      isUnsupportedCreativeVideoStatus(response.status)
+    ) {
+      throw new CreativeVideoUnsupportedError(response.status);
+    }
+    if (isSessionBrokerConfig(config)) {
+      throw createSessionBrokerVideoRelayError(response.status);
+    }
     const errorText = await response.text();
     throw new Error(
       `Video submission failed: ${response.status} - ${errorText}`

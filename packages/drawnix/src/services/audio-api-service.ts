@@ -28,6 +28,7 @@ import {
   failLLMApiLog,
   updateLLMApiLogMetadata,
 } from './media-executor/llm-api-logger';
+import { sanitizeCreativeFailureMessage } from './creative-error-sanitizer';
 
 export interface AudioGenerationParams {
   model: string;
@@ -100,6 +101,16 @@ interface AudioPollingOptions {
   routeModel?: string | ModelRef | null;
 }
 
+function createAudioTaskFailureError(message: string): Error {
+  const error = new Error(message);
+  (error as any).creativeTaskFailure = true;
+  return error;
+}
+
+function isAudioTaskFailureError(error: unknown): boolean {
+  return Boolean((error as any)?.creativeTaskFailure);
+}
+
 interface ClipIdentifierMemory {
   byBatchIndex: Map<number, string>;
   ordered: string[];
@@ -169,11 +180,9 @@ function createAudioIdempotencyKey(localTaskId?: string): string {
       : `opentu-audio-${trimmedLocalTaskId}`;
   }
 
-  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
-  if (randomUUID) {
-    return `opentu-audio-${randomUUID()}`;
-  }
-  return `opentu-audio-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  throw new Error(
+    'session-broker Suno submit requires a stable idempotency key'
+  );
 }
 
 function resolveAudioIdempotencySource(
@@ -233,6 +242,17 @@ const CREATIVE_SUNO_UNSUPPORTED_MESSAGE =
 
 function isCreativeSunoUnsupportedStatus(status: number): boolean {
   return status === 404 || status === 405 || status === 501;
+}
+
+function createSessionBrokerSunoRelayError(
+  messagePrefix: string,
+  status: number
+): Error {
+  const sanitizedBody = `creative Suno relay status ${status}`;
+  const error = new Error(`${messagePrefix}: ${status}`);
+  (error as any).apiErrorBody = sanitizedBody;
+  (error as any).httpStatus = status;
+  return error;
 }
 
 function createCreativeSunoUnsupportedError(status: number): Error {
@@ -631,6 +651,10 @@ function normalizeAudioClipResult(
 
 function extractFailureReason(payload: any, clips: AudioClipRecord[]): string {
   const lyrics = extractLyricsPayload(payload);
+  const fallback =
+    normalizeSunoAction(payload?.action || payload?.data?.action) === 'lyrics'
+      ? '歌词生成失败'
+      : '音乐生成失败';
   const candidates = [
     payload?.fail_reason,
     payload?.message,
@@ -645,13 +669,11 @@ function extractFailureReason(payload: any, clips: AudioClipRecord[]): string {
 
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim();
+      return sanitizeCreativeFailureMessage(candidate, fallback);
     }
   }
 
-  return normalizeSunoAction(payload?.action || payload?.data?.action) === 'lyrics'
-    ? '歌词生成失败'
-    : '音乐生成失败';
+  return fallback;
 }
 
 function getPrimaryTaskId(payload: any, fallback = ''): string {
@@ -677,6 +699,25 @@ function getPrimaryTaskId(payload: any, fallback = ''): string {
   return fallback;
 }
 
+function sanitizeTerminalAudioFailureRawPayload(
+  payload: any,
+  fallbackTaskId: string,
+  action: string | undefined,
+  status: string,
+  failReason: string
+): unknown {
+  if (!isTerminalFailure(status)) {
+    return payload;
+  }
+
+  return {
+    task_id: getPrimaryTaskId(payload, fallbackTaskId),
+    action,
+    status,
+    fail_reason: failReason,
+  };
+}
+
 function normalizeAudioTaskResponse(
   payload: any,
   fallbackTaskId = '',
@@ -696,15 +737,18 @@ function normalizeAudioTaskResponse(
     ? applyRememberedClipIdentifiers(extractedClips, clipMemory)
     : extractedClips;
   const lyrics = extractLyricsPayload(payload);
+  const action =
+    normalizeStatus(payload?.action) ||
+    normalizeStatus(payload?.data?.action) ||
+    normalizeStatus(payload?.data?.data?.action) ||
+    undefined;
+  const status = normalizeLifecycleStatus(payload);
+  const failReason = extractFailureReason(payload, clips);
 
   return {
     taskId: getPrimaryTaskId(payload, fallbackTaskId),
-    action:
-      normalizeStatus(payload?.action) ||
-      normalizeStatus(payload?.data?.action) ||
-      normalizeStatus(payload?.data?.data?.action) ||
-      undefined,
-    status: normalizeLifecycleStatus(payload),
+    action,
+    status,
     progress: resolveProgressValue(
       payload?.progress,
       payload?.data?.progress,
@@ -718,10 +762,16 @@ function normalizeAudioTaskResponse(
         : lyrics?.text
         ? 100
         : undefined),
-    failReason: extractFailureReason(payload, clips),
+    failReason,
     clips,
     lyrics,
-    raw: payload,
+    raw: sanitizeTerminalAudioFailureRawPayload(
+      payload,
+      fallbackTaskId,
+      action,
+      status,
+      failReason
+    ),
   };
 }
 
@@ -826,19 +876,24 @@ function buildMusicSubmitBody(params: AudioGenerationParams): string {
   return JSON.stringify(body);
 }
 
-function buildLyricsSubmitBody(params: AudioGenerationParams): string {
+function buildLyricsSubmitBody(
+  params: AudioGenerationParams,
+  options: { includeNotifyHook?: boolean } = {}
+): string {
   const body: Record<string, unknown> = {
     prompt: params.prompt,
   };
 
-  const notifyHook =
-    params.notifyHook ||
-    (typeof params.params?.notifyHook === 'string'
-      ? params.params.notifyHook
-      : undefined) ||
-    (typeof params.params?.notify_hook === 'string'
-      ? params.params.notify_hook
-      : undefined);
+  const includeNotifyHook = options.includeNotifyHook !== false;
+  const notifyHook = includeNotifyHook
+    ? params.notifyHook ||
+      (typeof params.params?.notifyHook === 'string'
+        ? params.params.notifyHook
+        : undefined) ||
+      (typeof params.params?.notify_hook === 'string'
+        ? params.params.notify_hook
+        : undefined)
+    : undefined;
 
   if (notifyHook) {
     body.notify_hook = notifyHook;
@@ -847,9 +902,14 @@ function buildLyricsSubmitBody(params: AudioGenerationParams): string {
   return JSON.stringify(body);
 }
 
-function buildSubmitBody(params: AudioGenerationParams): string {
+function buildSubmitBody(
+  params: AudioGenerationParams,
+  providerContext: ResolvedProviderContext
+): string {
   return resolveRequestedAction(params) === 'lyrics'
-    ? buildLyricsSubmitBody(params)
+    ? buildLyricsSubmitBody(params, {
+        includeNotifyHook: !isSessionBrokerProviderContext(providerContext),
+      })
     : buildMusicSubmitBody(params);
 }
 
@@ -977,7 +1037,11 @@ class AudioAPIService {
 
     const action = resolveRequestedAction(params);
     const submitPath = resolveSubmitPath(params, providerContext, binding);
-    const body = buildSubmitBody(params);
+    const body = buildSubmitBody(params, providerContext);
+    const headers = {
+      'Content-Type': 'application/json',
+      ...sessionBrokerAudioSubmitHeaders(providerContext, params),
+    };
     const startTime = Date.now();
 
     const logId = startLLMApiLog({
@@ -994,10 +1058,7 @@ class AudioAPIService {
         path: submitPath,
         baseUrlStrategy,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...sessionBrokerAudioSubmitHeaders(providerContext, params),
-        },
+        headers,
         body,
       });
     } catch (error: any) {
@@ -1020,6 +1081,18 @@ class AudioAPIService {
           errorMessage: `unsupported creative Suno relay status ${response.status}`,
         });
         throw createCreativeSunoUnsupportedError(response.status);
+      }
+      if (isSessionBrokerProviderContext(providerContext)) {
+        const sanitizedBody = `creative Suno relay status ${response.status}`;
+        failLLMApiLog(logId, {
+          httpStatus: response.status,
+          duration,
+          errorMessage: sanitizedBody,
+        });
+        throw createSessionBrokerSunoRelayError(
+          `${action === 'lyrics' ? '歌词' : '音乐'}生成提交失败`,
+          response.status
+        );
       }
 
       const errorText = await response.text();
@@ -1045,7 +1118,7 @@ class AudioAPIService {
       duration,
       resultType: action === 'lyrics' ? 'lyrics' : 'audio',
       remoteId: result.taskId,
-      responseBody: JSON.stringify(payload),
+      responseBody: JSON.stringify(result.raw),
     });
 
     if (result.taskId) {
@@ -1082,6 +1155,12 @@ class AudioAPIService {
         isCreativeSunoUnsupportedStatus(response.status)
       ) {
         throw createCreativeSunoUnsupportedError(response.status);
+      }
+      if (isSessionBrokerProviderContext(providerContext)) {
+        throw createSessionBrokerSunoRelayError(
+          'Suno 任务查询失败',
+          response.status
+        );
       }
 
       const errorText = await response.text();
@@ -1125,11 +1204,12 @@ class AudioAPIService {
     }
 
     if (isTerminalFailure(submitResponse.status)) {
-      throw new Error(
-        submitResponse.failReason ||
-          (resolveRequestedAction(params) === 'lyrics'
-            ? '歌词生成失败'
-            : '音乐生成失败')
+      const fallback =
+        resolveRequestedAction(params) === 'lyrics'
+          ? '歌词生成失败'
+          : '音乐生成失败';
+      throw createAudioTaskFailureError(
+        sanitizeCreativeFailureMessage(submitResponse.failReason, fallback)
       );
     }
 
@@ -1167,7 +1247,9 @@ class AudioAPIService {
     }
 
     if (isTerminalFailure(immediate.status)) {
-      throw new Error(immediate.failReason || 'Suno 生成失败');
+      throw createAudioTaskFailureError(
+        sanitizeCreativeFailureMessage(immediate.failReason, 'Suno 生成失败')
+      );
     }
 
     return this.pollUntilComplete(taskId, options, clipMemory);
@@ -1204,10 +1286,12 @@ class AudioAPIService {
         }
 
         if (isTerminalFailure(result.status)) {
-          throw new Error(result.failReason || 'Suno 生成失败');
+          throw createAudioTaskFailureError(
+            sanitizeCreativeFailureMessage(result.failReason, 'Suno 生成失败')
+          );
         }
       } catch (error) {
-        if (isCreativeSunoUnsupportedError(error)) {
+        if (isCreativeSunoUnsupportedError(error) || isAudioTaskFailureError(error)) {
           throw error;
         }
 

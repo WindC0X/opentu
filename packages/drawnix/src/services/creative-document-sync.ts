@@ -5,14 +5,13 @@ import {
 import {
   CREATIVE_DOCUMENTS_ENDPOINT,
   getCreativeAssetSyncConfig,
-  getCreativeSessionAuthHeaders,
   isCreativeEmbeddedMode,
+  requireCreativeSessionAuthHeaders,
 } from './creative-mode';
 import {
   creativeAssetCloudAdapter,
   assertNoUnsafeCreativeAssetPersistenceRefs,
   getSafeCreativeAssetSyncErrorMessage,
-  hasCreativeAssetContentRefs,
   hydrateCreativeDocumentAssets,
   prepareCreativeDocumentAssetsForSync,
   toCreativeAssetSyncErrorStatus,
@@ -599,7 +598,7 @@ export class CreativeDocumentCloudAdapter {
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        ...getCreativeSessionAuthHeaders(),
+        ...requireCreativeSessionAuthHeaders(),
       },
       body: JSON.stringify(
         prepareOutboundCreativeDocumentPayload(snapshot)
@@ -648,7 +647,7 @@ export class CreativeDocumentCloudAdapter {
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        ...getCreativeSessionAuthHeaders(),
+        ...requireCreativeSessionAuthHeaders(),
       },
       body: JSON.stringify(body),
     });
@@ -669,7 +668,7 @@ export class CreativeDocumentCloudAdapter {
     const response = await this.fetcher(`${this.endpoint}/${encodeURIComponent(documentId)}`, {
       method: 'DELETE',
       credentials: 'same-origin',
-      headers: getCreativeSessionAuthHeaders(),
+      headers: requireCreativeSessionAuthHeaders(),
     });
     if (!response.ok && response.status !== 404) {
       throw new Error(`文档删除同步失败: HTTP ${response.status}`);
@@ -1214,23 +1213,6 @@ export class CreativeDocumentCloudSyncService {
         const remote = await this.adapter.get<CreativeWorkspaceBoardSnapshot>(
           boardId
         );
-        if (!hasCreativeAssetContentRefs(remote)) {
-          const board = documentToBoard(remote);
-          if (!board) {
-            continue;
-          }
-          const revision = getDocumentRevision(remote) ?? remoteRevision;
-          if (revision === undefined) {
-            continue;
-          }
-          await this.workspaceRepository.upsertBoardFromCloud(board, revision, {
-            suppressOutboundSync: true,
-          });
-          this.revisions.set(boardId, revision);
-          this.persistRevisions();
-          continue;
-        }
-
         const hydrated = await hydrateCreativeDocumentAssets(remote, {
           assetSyncEnabled: this.assetSyncEnabled,
           assetAdapter: this.assetAdapter,

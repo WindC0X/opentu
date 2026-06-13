@@ -23,9 +23,10 @@ describe('app-shell-routing', () => {
     ).toBe(false);
   });
 
-  it('keeps only root shell and release metadata on origin-first preload', () => {
+  it('keeps html documents and release metadata on origin-first preload', () => {
     expect(shouldUseOriginFirstPreload('/')).toBe(true);
     expect(shouldUseOriginFirstPreload('/index.html')).toBe(true);
+    expect(shouldUseOriginFirstPreload('/user-manual/index.html')).toBe(true);
     expect(shouldUseOriginFirstPreload('/version.json')).toBe(true);
     expect(shouldUseOriginFirstPreload('/manifest.json')).toBe(true);
     expect(shouldUseOriginFirstPreload('/sw.js')).toBe(true);
@@ -40,7 +41,7 @@ describe('app-shell-routing', () => {
     expect(shouldUseCDNFirstPreload('/icons/android-chrome-192x192.png')).toBe(
       true
     );
-    expect(shouldUseCDNFirstPreload('/user-manual/index.html')).toBe(true);
+    expect(shouldUseCDNFirstPreload('/user-manual/index.html')).toBe(false);
   });
 
   it('bypasses the cached app shell only for fresh lazy chunk recovery reloads', () => {

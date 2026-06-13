@@ -2,6 +2,10 @@ function isRootPathname(pathname: string): boolean {
   return pathname === '/' || pathname === '/index.html';
 }
 
+function isHtmlDocumentPathname(pathname: string): boolean {
+  return pathname.toLowerCase().endsWith('.html');
+}
+
 const ORIGIN_FIRST_PRELOAD_SUFFIXES = [
   '/version.json',
   '/manifest.json',
@@ -26,7 +30,7 @@ export function shouldUseAppShellStrategy(
 }
 
 export function shouldUseOriginFirstPreload(pathname: string): boolean {
-  if (isRootPathname(pathname)) {
+  if (isRootPathname(pathname) || isHtmlDocumentPathname(pathname)) {
     return true;
   }
 

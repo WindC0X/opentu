@@ -8,9 +8,9 @@
  * 2. 在 dist 目录生成 npm 专用的 package.json
  * 3. 发布到 npm
  * 
- * 使用免费 CDN 访问：
- * - unpkg: https://unpkg.com/aitu-app@版本号/index.html
- * - jsdelivr: https://cdn.jsdelivr.net/npm/aitu-app@版本号/index.html
+ * 使用免费 CDN 访问静态资源（不含 HTML）：
+ * - jsdelivr: https://cdn.jsdelivr.net/npm/aitu-app@版本号/assets/
+ * - unpkg: https://unpkg.com/aitu-app@版本号/assets/
  * 
  * 用法：
  *   node scripts/publish-npm.js [--dry-run] [--skip-build]
@@ -88,7 +88,7 @@ function generateNpmPackageJson(version) {
   const npmPackage = {
     name: CONFIG.packageName,
     version: version,
-    description: 'Opentu static assets for CDN (HTML not included)',
+    description: 'Opentu static assets for CDN (HTML/SW/runtime config not included)',
     keywords: [
       'aitu',
       'whiteboard',
@@ -132,17 +132,15 @@ function generateReadme(version) {
 [![npm version](https://img.shields.io/npm/v/${CONFIG.packageName}.svg)](https://www.npmjs.com/package/${CONFIG.packageName})
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## 在线访问
+## CDN 静态资源访问
 
-通过免费 CDN 直接访问：
+此 npm 包只包含 Opentu 的静态资源，不包含 HTML、Service Worker 或运行时配置。请从自有服务器提供 HTML 入口；运行时只应把 hashed bundles 与公共静态资源（如 fonts/icons/logo/favicon）指向 CDN。包内 \`manifest.json\` / \`version.json\` 仅作为静态副本或安装兜底，应用运行时仍应从同源服务器 origin-first 加载 release metadata。
 
-### unpkg (推荐)
-- **最新版**: [https://unpkg.com/${CONFIG.packageName}/index.html](https://unpkg.com/${CONFIG.packageName}/index.html)
-- **指定版本**: [https://unpkg.com/${CONFIG.packageName}@${version}/index.html](https://unpkg.com/${CONFIG.packageName}@${version}/index.html)
+### jsDelivr（运行时主链路）
+- **指定版本资源**: https://cdn.jsdelivr.net/npm/${CONFIG.packageName}@${version}/assets/
 
-### jsDelivr
-- **最新版**: [https://cdn.jsdelivr.net/npm/${CONFIG.packageName}/index.html](https://cdn.jsdelivr.net/npm/${CONFIG.packageName}/index.html)
-- **指定版本**: [https://cdn.jsdelivr.net/npm/${CONFIG.packageName}@${version}/index.html](https://cdn.jsdelivr.net/npm/${CONFIG.packageName}@${version}/index.html)
+### unpkg（备用/排障）
+- **指定版本资源**: https://unpkg.com/${CONFIG.packageName}@${version}/assets/
 
 ## 功能特性
 
@@ -154,17 +152,15 @@ function generateReadme(version) {
 - 💾 **自动保存** - 本地数据持久化
 - 📱 **PWA 支持** - 可安装为桌面应用
 
-## 本地部署
+## 静态资源包使用
 
-1. 下载此 npm 包的内容
-2. 使用任意静态文件服务器托管
+1. 从自有服务器或 \`new-api\` Creative 同源服务器提供 HTML、\`sw.js\`、运行时配置和 release metadata。
+2. 将构建后的 hashed JS/CSS、fonts/icons/logo/favicon 指向此 npm 包的 CDN URL。
+3. 不要把此包当作完整应用入口托管。
 
-\`\`\`bash
-# 使用 npx serve
-npx serve ./node_modules/${CONFIG.packageName}
-
-# 或使用 http-server
-npx http-server ./node_modules/${CONFIG.packageName}
+\`\`\`text
+# 示例：仅引用静态资源，不作为 HTML 入口
+https://cdn.jsdelivr.net/npm/${CONFIG.packageName}@${version}/assets/<asset-file>.js
 \`\`\`
 
 ## 源代码
@@ -244,6 +240,11 @@ async function main() {
     exec(`ls -la "${CONFIG.distDir}"`);
     log('\n📄 package.json 内容:', 'yellow');
     console.log(JSON.stringify(npmPackageJson, null, 2));
+    log('\n🔎 npm pack dry-run（验证实际 packlist）:', 'yellow');
+    if (!exec(`cd "${CONFIG.distDir}" && npm pack --dry-run --json`)) {
+      logError('npm pack dry-run 失败');
+      process.exit(1);
+    }
     logWarning('\n使用 --dry-run 模式，未实际发布');
   } else {
     // 切换到 dist 目录并发布（使用 cd 确保在正确目录）
@@ -268,10 +269,9 @@ async function main() {
 
   // 输出访问链接
   log('\n🎉 完成！', 'green');
-  log('\n📌 CDN 访问链接:', 'blue');
-  log(`   unpkg:     https://unpkg.com/${CONFIG.packageName}@${version}/index.html`);
-  log(`   jsdelivr:  https://cdn.jsdelivr.net/npm/${CONFIG.packageName}@${version}/index.html`);
-  log(`   最新版:    https://unpkg.com/${CONFIG.packageName}/index.html`);
+  log('\n📌 CDN 静态资源地址（不含 HTML）:', 'blue');
+  log(`   jsdelivr:  https://cdn.jsdelivr.net/npm/${CONFIG.packageName}@${version}/assets/`);
+  log(`   unpkg:     https://unpkg.com/${CONFIG.packageName}@${version}/assets/`);
 }
 
 main().catch(error => {

@@ -254,6 +254,25 @@ function applyCreativeBootstrapAssetSyncConfig(payload: unknown): void {
   });
 }
 
+type CreativeBootstrapCapabilities = {
+  videoRelayEnabled: boolean;
+};
+
+function getCreativeBootstrapCapabilities(
+  payload: unknown
+): CreativeBootstrapCapabilities {
+  const data = getBootstrapData(payload);
+  const capabilities = readNestedRecord(data, 'capabilities');
+  const features = readNestedRecord(data, 'features');
+  const videoRelayEnabled =
+    readBooleanFlag(capabilities?.videoRelayEnabled) ??
+    readBooleanFlag(capabilities?.supportsVideo) ??
+    readBooleanFlag(features?.videoRelayEnabled) ??
+    false;
+
+  return { videoRelayEnabled };
+}
+
 async function fetchCreativeJson(
   endpoint: string,
   fetcher: typeof fetch = fetch
@@ -274,7 +293,9 @@ async function fetchCreativeJson(
   return text.trim() ? JSON.parse(text) : {};
 }
 
-function buildManagedProfile(): ProviderProfile {
+function buildManagedProfile(
+  capabilities: CreativeBootstrapCapabilities
+): ProviderProfile {
   return {
     id: CREATIVE_MANAGED_PROFILE_ID,
     name: CREATIVE_MANAGED_PROFILE_NAME,
@@ -287,15 +308,17 @@ function buildManagedProfile(): ProviderProfile {
       supportsModelsEndpoint: true,
       supportsText: true,
       supportsImage: true,
-      supportsVideo: true,
+      supportsVideo: capabilities.videoRelayEnabled,
       supportsAudio: true,
       supportsTools: true,
     },
   };
 }
 
-async function upsertManagedProfile(): Promise<void> {
-  const profile = buildManagedProfile();
+async function upsertManagedProfile(
+  capabilities: CreativeBootstrapCapabilities
+): Promise<void> {
+  const profile = buildManagedProfile(capabilities);
   const profiles = providerProfilesSettings.get();
   const nextProfiles = [
     ...profiles.filter((item) => item.id !== CREATIVE_MANAGED_PROFILE_ID),
@@ -324,6 +347,16 @@ async function upsertManagedCatalog(models: ModelConfig[]): Promise<void> {
     ...catalogs.filter((item) => item.profileId !== CREATIVE_MANAGED_PROFILE_ID),
     nextCatalog,
   ]);
+}
+
+function filterModelsByCreativeCapabilities(
+  models: ModelConfig[],
+  capabilities: CreativeBootstrapCapabilities
+): ModelConfig[] {
+  if (capabilities.videoRelayEnabled) {
+    return models;
+  }
+  return models.filter((model) => model.type !== 'video');
 }
 
 async function applyManagedDefaults(models: ModelConfig[]): Promise<void> {
@@ -370,16 +403,20 @@ async function initializeCreativeManagedSessionBrokerInternal(
     );
     applyCreativeBootstrapAuthMaterial(bootstrapPayload);
     applyCreativeBootstrapAssetSyncConfig(bootstrapPayload);
+    const capabilities = getCreativeBootstrapCapabilities(bootstrapPayload);
     const modelsPayload = await fetchCreativeJson(CREATIVE_MODELS_ENDPOINT, fetcher);
-    const models = extractModelItems(modelsPayload)
-      .map(normalizeCreativeModel)
-      .filter(Boolean) as ModelConfig[];
+    const models = filterModelsByCreativeCapabilities(
+      extractModelItems(modelsPayload)
+        .map(normalizeCreativeModel)
+        .filter(Boolean) as ModelConfig[],
+      capabilities
+    );
 
     if (models.length === 0) {
       throw new Error('creative models pool is empty');
     }
 
-    await upsertManagedProfile();
+    await upsertManagedProfile(capabilities);
     await upsertManagedCatalog(models);
     reconcilePersistedCreativeModelSelections(models);
     await applyManagedDefaults(models);

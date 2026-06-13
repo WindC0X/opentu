@@ -1,10 +1,10 @@
 # NPM + CDN 部署指南
 
-本文档介绍如何将 Opentu 发布到 npm，并通过免费 CDN 访问。
+本文档介绍如何将 Opentu 的静态资源发布到 npm，并通过免费 CDN 提供给自有 HTML/服务器使用。
 
 ## 概述
 
-通过将构建产物发布到 npm，可以利用免费的 CDN 服务（如 unpkg、jsDelivr）托管和访问应用，无需自建服务器。
+通过将 hashed 静态资源发布到 npm，可以利用免费的 CDN 服务（如 unpkg、jsDelivr）托管资源。当前发布包**不包含 HTML / `sw.js` / `init.json` / 运行时配置**；完整应用入口、release metadata（如 `manifest.json`、`version.json`、precache/idle manifests）以及 Creative API/relay 仍应由自有服务器或 `new-api` Creative 同源服务器 origin-first 提供。发布包内的 metadata 仅是静态副本/安装兜底，不是运行时 CDN rewrite 目标。
 
 ## 快速开始
 
@@ -21,28 +21,24 @@ pnpm run npm:publish:dry
 pnpm run npm:publish:skip-build
 ```
 
-### 2. 访问应用
+`npm:publish:dry` 会生成发布目录中的 npm 元数据，并执行 `npm pack --dry-run --json` 验证实际 packlist；它不会执行真实发布。
 
-发布成功后，可以通过以下 CDN 地址访问：
+### 2. 访问静态资源
 
-#### unpkg (推荐)
+发布成功后，可以通过以下 CDN 地址访问静态资源包；不要把这些 URL 当作完整应用入口：
 
-```
-# 最新版本
-https://unpkg.com/aitu-app/index.html
-
-# 指定版本
-https://unpkg.com/aitu-app@0.5.14/index.html
-```
-
-#### jsDelivr
+#### jsDelivr（运行时主链路）
 
 ```
-# 最新版本
-https://cdn.jsdelivr.net/npm/aitu-app/index.html
+# 指定版本静态资源
+https://cdn.jsdelivr.net/npm/aitu-app@<version>/assets/<asset-file>.js
+```
 
-# 指定版本
-https://cdn.jsdelivr.net/npm/aitu-app@0.5.14/index.html
+#### unpkg（备用/排障）
+
+```
+# 指定版本静态资源
+https://unpkg.com/aitu-app@<version>/assets/<asset-file>.js
 ```
 
 ## 技术细节
@@ -65,24 +61,26 @@ https://cdn.jsdelivr.net/npm/aitu-app@0.5.14/index.html
 `scripts/publish-npm.js` 执行以下操作：
 
 1. 构建项目（使用相对路径）
-2. 在 `dist/apps/web` 目录生成 npm 专用的 `package.json`
+2. 在发布目录生成 npm 专用的 `package.json`
 3. 生成 README.md
-4. 移除不必要的文件（如 source maps）
+4. 仅保留 `assets/**`、图标、Logo、favicon，以及 `version.json` / `manifest.json` 等静态副本；运行时仍应从同源服务器 origin-first 加载 metadata
 5. 发布到 npm
 
 ### npm 包结构
 
 ```
 aitu-app/
-├── index.html          # 入口页面
 ├── assets/             # JS、CSS、字体等资源
 ├── icons/              # 图标
 ├── logo/               # Logo
-├── manifest.json       # PWA 配置
-├── sw.js               # Service Worker
+├── manifest.json       # PWA 配置静态副本（运行时 origin-first）
+├── favicon.ico
+├── version.json
 ├── package.json        # npm 包信息
 └── README.md           # 包说明
 ```
+
+不包含：`index.html`、`sw.js`、`init.json`、运行时配置、`/creative/api/*` 或 `/creative/relay/v1/*`。
 
 ## 自定义配置
 
@@ -115,6 +113,10 @@ CDN 部署时，Service Worker 的功能可能受限：
 - 跨域 CDN 可能需要配置 CORS
 - 某些 PWA 功能（如推送通知）可能不可用
 
+### Creative Embed
+
+如果 Opentu 作为 `new-api` 的 Creative 嵌入前端使用，不要把 HTML、`sw.js`、`init.json`、运行时配置或 `/creative/api/*`、`/creative/relay/v1/*` 改写到 npm CDN。这些路径必须保持在 `new-api` 同源服务器上，以保留浏览器会话、CSRF/nonce、`private, no-store` 缓存边界和资产私有化。只发布 hashed `assets/*.js` / `assets/*.css` 等纯静态资源。详见 [Creative 嵌入部署说明](./CREATIVE_EMBED_DEPLOYMENT.md)。
+
 ### 缓存更新
 
 CDN 可能有缓存延迟，发布新版本后：
@@ -124,10 +126,10 @@ CDN 可能有缓存延迟，发布新版本后：
 
 ### 版本管理
 
-建议使用版本号访问，确保一致性：
+建议使用版本号访问静态资源，确保一致性：
 
 ```
-https://unpkg.com/aitu-app@0.5.14/index.html
+https://cdn.jsdelivr.net/npm/aitu-app@<version>/assets/<asset-file>.js
 ```
 
 ## 与传统部署对比
@@ -172,5 +174,5 @@ npm view aitu-app version
 npm view aitu-app versions
 
 # 取消发布（24小时内）
-npm unpublish aitu-app@0.5.14
+npm unpublish aitu-app@<version>
 ```

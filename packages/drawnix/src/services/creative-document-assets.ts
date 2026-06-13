@@ -2,7 +2,7 @@ import { unifiedCacheService, type CacheMediaType } from './unified-cache-servic
 import {
   CREATIVE_ASSETS_ENDPOINT,
   getCreativeAssetSyncConfig,
-  getCreativeSessionAuthHeaders,
+  requireCreativeSessionAuthHeaders,
 } from './creative-mode';
 import {
   isVirtualMediaUrl,
@@ -83,15 +83,23 @@ const REQUIRED_URL_FIELDS = new Set([
   'videoUrl',
   'audioUrl',
   'poster',
+  'posterUrl',
   'src',
   'thumbnail',
   'thumbnailUrl',
   'previewImageUrl',
+  'cover',
   'coverUrl',
   'imageLargeUrl',
 ]);
 
-const REQUIRED_URL_ARRAY_FIELDS = new Set(['urls', 'thumbnailUrls']);
+const REQUIRED_URL_ARRAY_FIELDS = new Set([
+  'urls',
+  'thumbnailUrls',
+  'posters',
+  'covers',
+  'clips',
+]);
 
 const SIGNED_OR_CREDENTIAL_QUERY_PARAMS = new Set([
   'access_token',
@@ -669,6 +677,7 @@ export async function hydrateCreativeDocumentAssets<T>(
   options: CreativeDocumentAssetSyncOptions = {}
 ): Promise<T> {
   const copy = cloneJsonLike(payload);
+  assertNoUnsafeRemoteUrls(copy);
 
   if (!hasCreativeAssetContentRefs(copy)) {
     return copy;
@@ -790,7 +799,7 @@ export class CreativeAssetCloudAdapter implements CreativeAssetCloudAdapterLike 
       credentials: 'same-origin',
       headers: {
         Accept: 'application/json',
-        ...getCreativeSessionAuthHeaders(),
+        ...requireCreativeSessionAuthHeaders(),
       },
       body: formData,
     });

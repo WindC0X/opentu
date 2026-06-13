@@ -46,6 +46,7 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
 
   afterEach(() => {
     clearCreativeSessionAuthMaterial();
+    vi.restoreAllMocks();
   });
 
   it('unwraps document list wrappers and maps backend time fields', async () => {
@@ -82,6 +83,10 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
   });
 
   it('unwraps single document wrappers from create and get responses', async () => {
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-doc-wrapper',
+      nonce: 'nonce-doc-wrapper',
+    });
     const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) =>
       new Response(
         JSON.stringify({
@@ -218,7 +223,30 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
     });
   });
 
+  it('fails unsafe document mutations locally when session auth material is missing', async () => {
+    const fetcher = vi.fn(async () => new Response('{}', { status: 200 }));
+    const adapter = new CreativeDocumentCloudAdapter(
+      fetcher as unknown as typeof fetch,
+      '/documents'
+    );
+
+    await expect(
+      adapter.create({ id: 'doc-1', snapshot: { elements: [] } })
+    ).rejects.toThrow(/Creative.*CSRF.*nonce/i);
+    await expect(
+      adapter.put('doc-1', { id: 'doc-1', snapshot: { elements: [] } })
+    ).rejects.toThrow(/Creative.*CSRF.*nonce/i);
+    await expect(adapter.delete('doc-1')).rejects.toThrow(
+      /Creative.*CSRF.*nonce/i
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('rejects high-confidence secret-looking strings in create and put before fetch', async () => {
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-doc-secret',
+      nonce: 'nonce-doc-secret',
+    });
     const createFetch = vi.fn(async () => new Response('{}', { status: 200 }));
     const createAdapter = new CreativeDocumentCloudAdapter(
       createFetch as unknown as typeof fetch,
@@ -265,6 +293,10 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
   });
 
   it('allows normal public text mentioning Authorization header while stripping structured secrets', async () => {
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-doc-public',
+      nonce: 'nonce-doc-public',
+    });
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ input, init });
@@ -1025,5 +1057,67 @@ describe('creative workspace document cloud sync', () => {
       { suppressOutboundSync: true }
     );
     expect(service.getRevision('remote-board')).toBe(3);
+  });
+
+  it('rejects unsafe missing remote documents before cold-start workspace import even without cloud refs', async () => {
+    const signedUrl =
+      'https://private-bucket.s3.amazonaws.com/path/image.png?X-Amz-Credential=AKIA_TEST&X-Amz-Signature=super-secret';
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: 'remote-board-unsafe',
+          title: 'Remote Unsafe Board',
+          revision: 4,
+        },
+      ]),
+      get: vi.fn(async () => ({
+        id: 'remote-board-unsafe',
+        title: 'Remote Unsafe Board',
+        snapshot: {
+          elements: [{ id: 'image-unsafe', imageUrl: signedUrl }],
+        },
+        metadata: {
+          folderId: null,
+          order: 0,
+        },
+        revision: 4,
+        createdAt: 1710000000,
+        updatedAt: 1710000001,
+      })),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: () => Promise<Array<{ id: string; title?: string; revision: number }>>;
+    };
+    const upsertBoardFromCloud = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 0,
+      assetSyncEnabled: true,
+      assetAdapter: {
+        download: vi.fn(),
+      },
+      assetCache: {
+        getCachedBlob: vi.fn(),
+        cacheLocalMediaByContent: vi.fn(),
+      },
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    await service.syncRemoteDocumentsForColdStart();
+
+    expect(upsertBoardFromCloud).not.toHaveBeenCalled();
+    expect(service.getStatus().lastAssetSyncError).toMatchObject({
+      code: 'creative_asset_unsafe_url',
+    });
+    expect(JSON.stringify(service.getStatus())).not.toMatch(
+      /AKIA_TEST|super-secret|s3\.amazonaws/i
+    );
+    warnSpy.mockRestore();
   });
 });

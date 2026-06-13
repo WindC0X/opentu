@@ -178,6 +178,43 @@ describe('mjImageAdapter session-broker relay', () => {
     expect(String(input)).toBe('/creative/relay/v1/mj/submit/imagine');
   });
 
+  it('rejects session-broker MJ submit without a stable idempotency key before fetch', async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+
+    await expect(
+      mjImageAdapter.generateImage(createSessionBrokerContext(fetchMock), {
+        prompt: 'draw a cat',
+      })
+    ).rejects.toThrow(/idempotency/i);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes session-broker MJ submit failures without exposing backend bodies', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response('Authorization apiKey upstream credential secret leak', {
+        status: 500,
+      })
+    );
+
+    let caught: unknown;
+    try {
+      await mjImageAdapter.generateImage(createSessionBrokerContext(fetchMock), {
+        prompt: 'draw a cat',
+        params: { idempotencyKey: 'opentu-image-local-submit-failure' },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe('MJ submit failed: 500');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|apiKey|upstream|credential|secret/i
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('sanitizes unsupported session-broker MJ fetch errors without retrying direct providers', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -227,6 +264,95 @@ describe('mjImageAdapter session-broker relay', () => {
     expect(String(submitInput)).toBe('/creative/relay/v1/mj/submit/imagine');
     expect(String(fetchInput)).toBe(
       '/creative/relay/v1/mj/task/unsupported-mj-task-1/fetch'
+    );
+  });
+
+  it('sanitizes session-broker MJ fetch failures without exposing backend bodies', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            code: 1,
+            description: 'submitted',
+            result: 'failed-mj-task-1',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response('Authorization apiKey upstream credential secret leak', {
+          status: 502,
+        })
+      );
+
+    const promise = mjImageAdapter
+      .generateImage(createSessionBrokerContext(fetchMock), {
+        prompt: 'draw a cat',
+        params: { idempotencyKey: 'opentu-image-local-fetch-failure' },
+      })
+      .catch((error) => error);
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const caught = await promise;
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe('MJ query failed: 502');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|apiKey|upstream|credential|secret/i
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('sanitizes session-broker MJ task failure reasons before exposing them', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            code: 1,
+            description: 'submitted',
+            result: 'failed-mj-task-secret',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: 'FAILURE',
+            failReason:
+              'Authorization Bearer secret apiKey upstream https://provider.example/private.png',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+
+    const promise = mjImageAdapter
+      .generateImage(createSessionBrokerContext(fetchMock), {
+        prompt: 'draw a cat',
+        params: { idempotencyKey: 'opentu-image-local-task-failure' },
+      })
+      .catch((error) => error);
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const caught = await promise;
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe('MJ generation failed');
+    expect((caught as Error).message).not.toMatch(
+      /Authorization|Bearer|apiKey|upstream|secret|provider\.example/i
     );
   });
 
