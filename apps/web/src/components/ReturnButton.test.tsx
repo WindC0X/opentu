@@ -1,33 +1,26 @@
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ReturnButton } from './ReturnButton';
+import { describe, expect, it } from 'vitest';
+import {
+  RETURN_BUTTON_LEFT,
+  RETURN_BUTTON_Z_INDEX,
+  getReturnButtonStyle,
+} from './ReturnButton';
+import { isEmbeddedInNewApi } from '../utils/embed-detection';
+
+function locationLike(pathname: string): Location {
+  return { pathname } as Location;
+}
 
 describe('ReturnButton', () => {
-  beforeEach(() => {
-    window.history.pushState({}, '', '/');
+  it('is enabled only in embedded /creative mode', () => {
+    expect(isEmbeddedInNewApi(locationLike('/creative/board/demo'))).toBe(true);
+    expect(isEmbeddedInNewApi(locationLike('/creative'))).toBe(true);
+    expect(isEmbeddedInNewApi(locationLike('/board/demo'))).toBe(false);
   });
 
-  afterEach(() => {
-    cleanup();
-  });
+  it('keeps the button outside the docked left toolbar safe area', () => {
+    const style = getReturnButtonStyle();
 
-  it('renders in embedded /creative mode', () => {
-    window.history.pushState({}, '', '/creative/board/demo');
-
-    render(<ReturnButton />);
-
-    expect(
-      screen.getByRole('button', { name: '返回控制台' })
-    ).not.toBeNull();
-  });
-
-  it('does not render in standalone mode', () => {
-    window.history.pushState({}, '', '/board/demo');
-
-    render(<ReturnButton />);
-
-    expect(
-      screen.queryByRole('button', { name: '返回控制台' })
-    ).toBeNull();
+    expect(style.left).toBe(RETURN_BUTTON_LEFT);
+    expect(style.zIndex).toBe(RETURN_BUTTON_Z_INDEX);
   });
 });

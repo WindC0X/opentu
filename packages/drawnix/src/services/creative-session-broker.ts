@@ -349,6 +349,30 @@ async function upsertManagedCatalog(models: ModelConfig[]): Promise<void> {
   ]);
 }
 
+async function upsertManagedUnavailableCatalog(): Promise<void> {
+  const catalogs = providerCatalogsSettings.get();
+  const nextCatalog: ProviderCatalog = {
+    profileId: CREATIVE_MANAGED_PROFILE_ID,
+    discoveredAt: Date.now(),
+    discoveredModels: [],
+    selectedModelIds: [],
+    sourceBaseUrl: CREATIVE_MODELS_ENDPOINT,
+    signature: 'creative:unavailable',
+    error: 'creative_session_unavailable',
+  };
+  await providerCatalogsSettings.update([
+    ...catalogs.filter((item) => item.profileId !== CREATIVE_MANAGED_PROFILE_ID),
+    nextCatalog,
+  ]);
+}
+
+async function ensureManagedUnavailableProfile(): Promise<void> {
+  await upsertManagedProfile({
+    videoRelayEnabled: false,
+  });
+  await upsertManagedUnavailableCatalog();
+}
+
 function filterModelsByCreativeCapabilities(
   models: ModelConfig[],
   capabilities: CreativeBootstrapCapabilities
@@ -438,6 +462,14 @@ async function initializeCreativeManagedSessionBrokerInternal(
       disabledReason: 'bootstrap_error',
     });
     const message = error instanceof Error ? error.message : String(error);
+    try {
+      await ensureManagedUnavailableProfile();
+    } catch (fallbackError) {
+      console.warn(
+        '[CreativeSessionBroker] failed to install managed unavailable profile:',
+        fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+      );
+    }
     console.warn('[CreativeSessionBroker] initialization failed:', message);
     return {
       status: 'error',

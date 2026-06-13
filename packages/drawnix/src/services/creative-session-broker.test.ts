@@ -67,6 +67,10 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
+function statusResponse(status: number): Response {
+  return new Response('', { status });
+}
+
 function getFirstProviderProfilesUpdate(): ProviderProfile[] {
   const call = mocks.providerProfilesUpdate.mock.calls[0];
   if (!call) {
@@ -689,8 +693,58 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
       expect(result.error).toMatch(expectedError);
       expect(getCreativeSessionAuthMaterial()).toBeNull();
       expect(fetcher).toHaveBeenCalledTimes(1);
-      expect(mocks.providerProfilesUpdate).not.toHaveBeenCalled();
-      expect(mocks.providerCatalogsUpdate).not.toHaveBeenCalled();
+      expect(mocks.providerProfilesUpdate).toHaveBeenCalledTimes(1);
+      expect(getFirstProviderProfilesUpdate()).toEqual([
+        expect.objectContaining({
+          id: CREATIVE_MANAGED_PROFILE_ID,
+          baseUrl: CREATIVE_RELAY_BASE_URL,
+          apiKey: '',
+          authType: 'session-broker',
+          enabled: true,
+        }),
+      ]);
+      expect(mocks.providerCatalogsUpdate).toHaveBeenCalledTimes(1);
+      const creativeCatalog = getCreativeManagedCatalog(
+        getFirstProviderCatalogsUpdate()
+      );
+      expect(creativeCatalog).toMatchObject({
+        profileId: CREATIVE_MANAGED_PROFILE_ID,
+        discoveredModels: [],
+        selectedModelIds: [],
+        sourceBaseUrl: '/creative/api/models',
+        signature: 'creative:unavailable',
+        error: 'creative_session_unavailable',
+      });
     }
   );
+
+  it('keeps embedded mode on the managed session-broker profile when bootstrap is unauthorized', async () => {
+    const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        return statusResponse(401);
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    }) as unknown as typeof fetch;
+
+    const result = await initializeCreativeManagedSessionBroker(fetcher);
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('/creative/api/bootstrap HTTP 401');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(getFirstProviderProfilesUpdate()).toEqual([
+      expect.objectContaining({
+        id: CREATIVE_MANAGED_PROFILE_ID,
+        name: 'New API Creative',
+        baseUrl: CREATIVE_RELAY_BASE_URL,
+        apiKey: '',
+        authType: 'session-broker',
+      }),
+    ]);
+    const creativeCatalog = getCreativeManagedCatalog(
+      getFirstProviderCatalogsUpdate()
+    );
+    expect(creativeCatalog.discoveredModels).toEqual([]);
+    expect(creativeCatalog.selectedModelIds).toEqual([]);
+    expect(creativeCatalog.error).toBe('creative_session_unavailable');
+  });
 });

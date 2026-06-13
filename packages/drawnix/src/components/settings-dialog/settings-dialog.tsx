@@ -6,6 +6,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -51,7 +52,10 @@ import {
   normalizeModelApiBaseUrl,
   runtimeModelDiscovery,
 } from '../../utils/runtime-model-discovery';
-import { CREATIVE_MANAGED_PROFILE_ID } from '../../services/creative-mode';
+import {
+  CREATIVE_MANAGED_PROFILE_ID,
+  isCreativeEmbeddedMode,
+} from '../../services/creative-mode';
 import { compareModelsByDisplayPriority } from '../../utils/model-sort';
 import {
   createModelRef,
@@ -694,6 +698,16 @@ export const SettingsDialog = ({
     new Set()
   );
   const [isApiKeyVisible, setIsApiKeyVisible] = useState(false);
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
+  const visibleProfilesDraft = useMemo(
+    () =>
+      creativeEmbeddedMode
+        ? profilesDraft.filter(
+            (profile) => profile.id === CREATIVE_MANAGED_PROFILE_ID
+          )
+        : profilesDraft,
+    [creativeEmbeddedMode, profilesDraft]
+  );
 
   const toggleGroupCollapse = (type: ModelType) => {
     setCollapsedGroups((prev) => {
@@ -708,8 +722,8 @@ export const SettingsDialog = ({
   };
 
   const selectedProfile =
-    profilesDraft.find((profile) => profile.id === selectedProfileId) ||
-    profilesDraft[0] ||
+    visibleProfilesDraft.find((profile) => profile.id === selectedProfileId) ||
+    visibleProfilesDraft[0] ||
     null;
   const selectedImageApiCompatibilityHint = selectedProfile
     ? getImageApiCompatibilityHint(selectedProfile)
@@ -740,7 +754,9 @@ export const SettingsDialog = ({
     'text'
   );
 
-  const enabledProfiles = profilesDraft.filter((profile) => profile.enabled);
+  const enabledProfiles = visibleProfilesDraft.filter(
+    (profile) => profile.enabled
+  );
   const isCompactLayout =
     isMobileDevice || viewportWidth <= SETTINGS_DIALOG_COMPACT_BREAKPOINT;
 
@@ -898,13 +914,21 @@ export const SettingsDialog = ({
     const geminiConfig = geminiSettings.get();
     let nextShowWorkZoneCard = true;
     const pendingProviderIntent = readPendingProviderNavigationIntent();
+    const visibleNextProfiles = creativeEmbeddedMode
+      ? nextProfiles.filter(
+          (profile) => profile.id === CREATIVE_MANAGED_PROFILE_ID
+        )
+      : nextProfiles;
     const nextSelectedProfileId =
       pendingProviderIntent?.action === 'select' &&
-      nextProfiles.some(
+      visibleNextProfiles.some(
         (profile) => profile.id === pendingProviderIntent.profileId
       )
         ? pendingProviderIntent.profileId
-        : nextProfiles[0]?.id || LEGACY_DEFAULT_PROVIDER_PROFILE_ID;
+        : visibleNextProfiles[0]?.id ||
+          (creativeEmbeddedMode
+            ? CREATIVE_MANAGED_PROFILE_ID
+            : LEGACY_DEFAULT_PROVIDER_PROFILE_ID);
 
     setProfilesDraft(nextProfiles);
     setPresetsDraft(nextPresets);
@@ -913,9 +937,9 @@ export const SettingsDialog = ({
     setSelectedProfileId((currentProfileId) =>
       pendingProviderIntent
         ? nextSelectedProfileId
-        : nextProfiles.some((profile) => profile.id === currentProfileId)
+        : visibleNextProfiles.some((profile) => profile.id === currentProfileId)
         ? currentProfileId
-        : nextProfiles[0]?.id || LEGACY_DEFAULT_PROVIDER_PROFILE_ID
+        : nextSelectedProfileId
     );
     setSelectedPresetId((currentPresetId) =>
       nextPresets.some((preset) => preset.id === currentPresetId)
@@ -958,22 +982,22 @@ export const SettingsDialog = ({
     if (pendingProviderIntent?.action === 'create') {
       applyProviderNavigationIntent(pendingProviderIntent, nextProfiles);
     }
-  }, [appState.openSettings]);
+  }, [appState.openSettings, creativeEmbeddedMode]);
 
   useEffect(() => {
-    if (!selectedProfileId && profilesDraft[0]) {
-      setSelectedProfileId(profilesDraft[0].id);
+    if (!selectedProfileId && visibleProfilesDraft[0]) {
+      setSelectedProfileId(visibleProfilesDraft[0].id);
       return;
     }
 
     if (
       selectedProfileId &&
-      profilesDraft.length > 0 &&
-      !profilesDraft.some((profile) => profile.id === selectedProfileId)
+      visibleProfilesDraft.length > 0 &&
+      !visibleProfilesDraft.some((profile) => profile.id === selectedProfileId)
     ) {
-      setSelectedProfileId(profilesDraft[0].id);
+      setSelectedProfileId(visibleProfilesDraft[0].id);
     }
-  }, [profilesDraft, selectedProfileId]);
+  }, [visibleProfilesDraft, selectedProfileId]);
 
   useEffect(() => {
     if (!selectedPresetId && presetsDraft[0]) {
@@ -1151,6 +1175,11 @@ export const SettingsDialog = ({
       setCompactProviderMode('detail');
     }
 
+    if (creativeEmbeddedMode) {
+      setSelectedProfileId(CREATIVE_MANAGED_PROFILE_ID);
+      return sourceProfiles;
+    }
+
     if (intent.action === 'select') {
       const targetProfileId = sourceProfiles.some(
         (profile) => profile.id === intent.profileId
@@ -1170,6 +1199,11 @@ export const SettingsDialog = ({
   };
 
   const handleAddProfile = () => {
+    if (creativeEmbeddedMode) {
+      setSelectedProfileId(CREATIVE_MANAGED_PROFILE_ID);
+      return;
+    }
+
     const nextProfile = createProfile(profilesDraft.length + 1);
     analytics.trackUIInteraction({
       area: 'settings',
@@ -1710,6 +1744,12 @@ export const SettingsDialog = ({
         getRouteModelId(activePreset?.text) || normalizedTextModel;
 
       normalizedProfiles.forEach((profile) => {
+        if (
+          profile.id === CREATIVE_MANAGED_PROFILE_ID ||
+          profile.authType === 'session-broker'
+        ) {
+          return;
+        }
         runtimeModelDiscovery.invalidateIfConfigChanged(
           profile.id,
           profile.baseUrl || TUZI_PROVIDER_DEFAULT_BASE_URL,
@@ -1869,7 +1909,7 @@ export const SettingsDialog = ({
       </div>
 
       <div className="settings-dialog__sidebar-list">
-        {profilesDraft.map((profile) => {
+        {visibleProfilesDraft.map((profile) => {
           const isSelected = profile.id === selectedProfile?.id;
 
           return (
@@ -1942,6 +1982,11 @@ export const SettingsDialog = ({
             </div>
           );
         })}
+        {visibleProfilesDraft.length === 0 ? (
+          <div className="settings-dialog__empty-panel">
+            正在同步 New API Creative 模型池，请稍后刷新。
+          </div>
+        ) : null}
       </div>
 
       <ContextMenu
@@ -1951,7 +1996,7 @@ export const SettingsDialog = ({
         zIndex={20000}
       />
 
-      {!isCompactLayout ? (
+      {!creativeEmbeddedMode && !isCompactLayout ? (
         <button
           type="button"
           className="settings-dialog__sidebar-add"
@@ -2803,6 +2848,10 @@ export const SettingsDialog = ({
     return profilesDraft
       .filter(
         (profile) =>
+          !creativeEmbeddedMode || profile.id === CREATIVE_MANAGED_PROFILE_ID
+      )
+      .filter(
+        (profile) =>
           profile.id === currentProfileId ||
           (profile.enabled && profile.capabilities[capabilityKey])
       )
@@ -2824,6 +2873,7 @@ export const SettingsDialog = ({
         );
 
         if (
+          !creativeEmbeddedMode &&
           profile.id === currentProfileId &&
           currentModelId &&
           !uniqueModels.some((model) => model.id === currentModelId)
@@ -2858,7 +2908,8 @@ export const SettingsDialog = ({
     const selectedProfileId = getRouteProfileId(route);
     const selectedModelId = getRouteModelId(route);
     const selectedProfileName =
-      profilesDraft.find((profile) => profile.id === selectedProfileId)?.name ||
+      visibleProfilesDraft.find((profile) => profile.id === selectedProfileId)
+        ?.name ||
       '未配置';
     const selectableModels = buildPresetRouteModels(routeGroups);
     const selectedSelectionKey =
@@ -2886,7 +2937,7 @@ export const SettingsDialog = ({
                 selectedModel={selectedModelId || ''}
                 selectedSelectionKey={selectedSelectionKey}
                 models={selectableModels}
-                providerProfilesOverride={profilesDraft}
+                providerProfilesOverride={visibleProfilesDraft}
                 placement="down"
                 placeholder={`搜索${ROUTE_LABELS[routeType]}模型或供应商`}
                 allowCustomValue={false}

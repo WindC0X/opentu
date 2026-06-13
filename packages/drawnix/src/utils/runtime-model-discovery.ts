@@ -14,6 +14,10 @@ import {
 } from '../constants/model-config';
 import { normalizeApiBase } from '../services/media-api/utils';
 import {
+  CREATIVE_MANAGED_PROFILE_ID,
+  isCreativeEmbeddedMode,
+} from '../services/creative-mode';
+import {
   LEGACY_DEFAULT_PROVIDER_PROFILE_ID,
   providerCatalogsSettings,
   invocationPresetsSettings,
@@ -1175,10 +1179,25 @@ class RuntimeModelDiscoveryStore {
   }
 
   getPreferredModels(type: ModelType): ModelConfig[] {
+    if (isCreativeEmbeddedMode()) {
+      return sortModelsByDisplayPriority(
+        this.getCatalogState(CREATIVE_MANAGED_PROFILE_ID).models.filter(
+          (model) => model.type === type
+        )
+      );
+    }
     return getModelsByType(type);
   }
 
   getSelectableModels(type: ModelType): ModelConfig[] {
+    if (isCreativeEmbeddedMode()) {
+      return sortModelsByDisplayPriority(
+        this.getCatalogState(CREATIVE_MANAGED_PROFILE_ID).models.filter(
+          (model) => model.type === type
+        )
+      );
+    }
+
     const runtimeModels: ModelConfig[] = [];
     for (const state of this.catalogStates.values()) {
       if (!isProfileEnabled(state.profileId)) {
@@ -1205,6 +1224,33 @@ class RuntimeModelDiscoveryStore {
 
     const profileId = modelRef?.profileId || null;
     const expectedSelectionKey = buildSelectionKey(profileId, modelId);
+
+    if (isCreativeEmbeddedMode()) {
+      if (profileId && profileId !== CREATIVE_MANAGED_PROFILE_ID) {
+        return null;
+      }
+
+      const managedState = this.getCatalogState(CREATIVE_MANAGED_PROFILE_ID);
+      const matchesModel = (model: ModelConfig) =>
+        profileId
+          ? (model.selectionKey ||
+              buildSelectionKey(CREATIVE_MANAGED_PROFILE_ID, model.id)) ===
+            expectedSelectionKey
+          : model.id === modelId;
+      const directMatch =
+        managedState.models.find(
+          (model) => model.type === type && matchesModel(model)
+        ) ||
+        managedState.discoveredModels.find(
+          (model) => model.type === type && matchesModel(model)
+        );
+
+      if (directMatch) {
+        return directMatch;
+      }
+
+      return null;
+    }
 
     if (profileId) {
       const state = this.catalogStates.get(profileId);
@@ -1273,6 +1319,11 @@ class RuntimeModelDiscoveryStore {
   ): ModelConfig[] {
     const state = this.getCatalogState(profileId);
     const runtimeModels = state.models.filter((model) => model.type === type);
+    if (isCreativeEmbeddedMode()) {
+      return profileId === CREATIVE_MANAGED_PROFILE_ID
+        ? sortModelsByDisplayPriority(runtimeModels)
+        : [];
+    }
     return mergeModels(getStaticModelsByType(type), runtimeModels);
   }
 
@@ -1281,6 +1332,9 @@ class RuntimeModelDiscoveryStore {
     baseUrl: string,
     apiKey: string
   ): void {
+    if (profileId === CREATIVE_MANAGED_PROFILE_ID) {
+      return;
+    }
     const state = this.getCatalogState(profileId);
     const signature = buildDiscoverySignature(baseUrl, apiKey);
     if (!state.signature || state.signature === signature) {

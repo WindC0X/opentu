@@ -60,6 +60,7 @@ import {
   type ModelRef,
   type ProviderProfile,
 } from '../../utils/settings-manager';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import type { UnavailableModelSelectionMarker } from '../../utils/ai-model-selection-storage';
 
 const SETTINGS_PROVIDER_NAV_EVENT = 'aitu:settings:provider-nav';
@@ -276,6 +277,8 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const providerProfiles = useProviderProfiles();
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
+  const shouldShowProviderAction = showProviderAction && !creativeEmbeddedMode;
   const effectiveProviderProfiles =
     providerProfilesOverride || providerProfiles;
   const providerProfileMap = useMemo(
@@ -390,7 +393,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const currentModel =
     models.find(
       (model) => getModelKey(model) === (selectedSelectionKey || selectedModel)
-    ) || getModelConfig(selectedModel);
+    ) || (!creativeEmbeddedMode ? getModelConfig(selectedModel) : undefined);
   const currentProfile = useMemo(
     () => (currentModel ? getModelProfile(currentModel) : null),
     [currentModel, getModelProfile]
@@ -1079,7 +1082,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
               searchQuery={searchQuery}
               compact
               tabsFooter={
-                showProviderAction ? (
+                shouldShowProviderAction ? (
                   <button
                     type="button"
                     className="model-dropdown__provider-action"

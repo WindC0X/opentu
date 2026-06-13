@@ -38,10 +38,10 @@ import {
 import { benchmarkLaunchAtom } from '../../services/model-benchmark-launcher';
 import { runtimeModelDiscovery } from '../../utils/runtime-model-discovery';
 import {
-  LEGACY_DEFAULT_PROVIDER_PROFILE_ID,
   providerProfilesSettings,
   type ProviderProfile,
 } from '../../utils/settings-manager';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import type { KnowledgeContextRef } from '../../types/task.types';
 import type { ModelConfig } from '../../constants/model-config';
 import { AI_GENERATION_CONCURRENCY_LIMIT } from '../../constants/TASK_CONSTANTS';
@@ -49,16 +49,11 @@ import { useConfirmDialog } from '../dialog/ConfirmDialog';
 import './model-benchmark-workbench.scss';
 import { HoverTip } from '../shared/hover';
 import { KnowledgeNoteContextSelector, RetryImage } from '../shared';
+import { getAvailableProfilesForModality } from './model-benchmark-profile-filter';
 
 interface ModelBenchmarkWorkbenchProps {
   // props reserved for future use
 }
-
-type CapabilityKey =
-  | 'supportsText'
-  | 'supportsImage'
-  | 'supportsVideo'
-  | 'supportsAudio';
 
 const MODALITY_LABELS: Record<BenchmarkModality, string> = {
   text: '文本',
@@ -248,26 +243,6 @@ function matchesQuery(
   return tokens.every((token) => haystack.includes(token));
 }
 
-function getCapabilityKey(modality: BenchmarkModality): CapabilityKey {
-  if (modality === 'text') return 'supportsText';
-  if (modality === 'image') return 'supportsImage';
-  if (modality === 'video') return 'supportsVideo';
-  return 'supportsAudio';
-}
-
-function getAvailableProfilesForModality(
-  profiles: ProviderProfile[],
-  modality: BenchmarkModality
-) {
-  const capabilityKey = getCapabilityKey(modality);
-  return profiles.filter(
-    (profile) =>
-      profile.enabled &&
-      (profile.id === LEGACY_DEFAULT_PROVIDER_PROFILE_ID ||
-        profile.capabilities[capabilityKey])
-  );
-}
-
 function useDiscoveryVersion() {
   const [version, setVersion] = useState(0);
 
@@ -433,6 +408,7 @@ function ModelBenchmarkWorkbench({}: ModelBenchmarkWorkbenchProps) {
   const createRunLockRef = useRef(false);
   const pickerAnchorRef = useRef<string | null>(null);
   const pickerButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
 
   useEffect(() => {
     const subscription: Subscription = modelBenchmarkService
@@ -446,8 +422,12 @@ function ModelBenchmarkWorkbench({}: ModelBenchmarkWorkbenchProps) {
   }, []);
 
   const availableProfiles = useMemo(() => {
-    return getAvailableProfilesForModality(profiles, modality);
-  }, [modality, profiles]);
+    return getAvailableProfilesForModality(
+      profiles,
+      modality,
+      creativeEmbeddedMode
+    );
+  }, [creativeEmbeddedMode, modality, profiles]);
 
   const profileMap = useMemo(
     () => new Map(availableProfiles.map((profile) => [profile.id, profile])),

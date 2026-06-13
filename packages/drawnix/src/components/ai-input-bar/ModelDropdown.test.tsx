@@ -67,6 +67,7 @@ vi.mock('../shared/ModelBenchmarkBadge', () => ({
 
 describe('ModelDropdown', () => {
   afterEach(() => {
+    window.history.pushState({}, '', '/');
     vi.restoreAllMocks();
     cleanup();
   });
@@ -384,5 +385,25 @@ describe('ModelDropdown', () => {
     expect(menuNotice.classList.contains('model-dropdown__unavailable-notice')).toBe(
       true
     );
+  });
+
+  it('does not fall back to OpenTU static model config for a missing embedded model selection', () => {
+    window.history.pushState({}, '', '/creative/');
+
+    const { container } = render(
+      <ModelDropdown
+        selectedModel="gpt-image-2"
+        models={[]}
+        onSelect={vi.fn()}
+        showProviderAction={false}
+      />
+    );
+
+    const trigger = container.querySelector(
+      '.model-dropdown__trigger--minimal'
+    );
+
+    expect(trigger?.textContent).toContain('#img');
+    expect(trigger?.textContent).not.toContain('#gpt2');
   });
 });
