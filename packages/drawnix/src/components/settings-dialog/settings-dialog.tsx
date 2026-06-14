@@ -31,10 +31,7 @@ import {
 import { LS_KEYS } from '../../constants/storage-keys';
 import { ModelDiscoveryDialog } from './model-discovery-dialog';
 import { PricingFieldGroup } from './pricing-field-group';
-import {
-  useModelPriceText,
-  useModelMeta,
-} from '../../hooks/use-model-pricing';
+import { useModelPriceText, useModelMeta } from '../../hooks/use-model-pricing';
 import {
   getDefaultAudioModel,
   getDefaultImageModel,
@@ -104,6 +101,7 @@ import { modelBenchmarkService } from '../../services/model-benchmark-service';
 import { HoverTip } from '../shared/hover';
 import { createProviderProfileDraft } from './provider-profile-draft';
 import { MessagePlugin } from '../../utils/message-plugin';
+import { getCreativePolicyModels } from '../../services/creative-model-policy-resolver';
 
 export { IMAGE_MODEL_GROUPED_SELECT_OPTIONS as IMAGE_MODEL_GROUPED_OPTIONS } from '../../constants/model-config';
 export { VIDEO_MODEL_SELECT_OPTIONS as VIDEO_MODEL_OPTIONS } from '../../constants/model-config';
@@ -225,6 +223,8 @@ const MODEL_SUMMARY_GROUP_ORDER: ModelType[] = [
   'video',
   'audio',
 ];
+
+const MODEL_ROUTE_TYPES: ModelType[] = ['image', 'video', 'audio', 'text'];
 
 const PROVIDER_TYPE_META: Record<
   ProviderProfile['providerType'],
@@ -736,6 +736,9 @@ export const SettingsDialog = ({
   const runtimeState = useRuntimeModelDiscoveryState(
     selectedProfile?.id || LEGACY_DEFAULT_PROVIDER_PROFILE_ID
   );
+  const managedRuntimeState = useRuntimeModelDiscoveryState(
+    CREATIVE_MANAGED_PROFILE_ID
+  );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const legacyImageModels = useProfilePreferredModels(
     LEGACY_DEFAULT_PROVIDER_PROFILE_ID,
@@ -752,6 +755,104 @@ export const SettingsDialog = ({
   const legacyTextModels = useProfilePreferredModels(
     LEGACY_DEFAULT_PROVIDER_PROFILE_ID,
     'text'
+  );
+  const routeModelsByType = useMemo<Record<ModelType, ModelConfig[]>>(
+    () => ({
+      image: creativeEmbeddedMode
+        ? getCreativePolicyModels('image', managedRuntimeState.models)
+        : legacyImageModels,
+      video: creativeEmbeddedMode
+        ? getCreativePolicyModels('video', managedRuntimeState.models)
+        : legacyVideoModels,
+      audio: creativeEmbeddedMode
+        ? getCreativePolicyModels('audio', managedRuntimeState.models)
+        : legacyAudioModels,
+      text: creativeEmbeddedMode
+        ? getCreativePolicyModels('text', managedRuntimeState.models)
+        : legacyTextModels,
+    }),
+    [
+      creativeEmbeddedMode,
+      managedRuntimeState.models,
+      legacyAudioModels,
+      legacyImageModels,
+      legacyTextModels,
+      legacyVideoModels,
+    ]
+  );
+
+  const getStaticFallbackModelId = useCallback((type: ModelType): string => {
+    if (type === 'audio') return getDefaultAudioModel();
+    if (type === 'image') return getDefaultImageModel();
+    if (type === 'video') return getDefaultVideoModel();
+    return getDefaultTextModel();
+  }, []);
+
+  const getRouteModelFallback = useCallback(
+    (type: ModelType): string => {
+      return (
+        routeModelsByType[type][0]?.id ||
+        (creativeEmbeddedMode ? '' : getStaticFallbackModelId(type))
+      );
+    },
+    [creativeEmbeddedMode, getStaticFallbackModelId, routeModelsByType]
+  );
+
+  const isModelAvailableForRoute = useCallback(
+    (type: ModelType, modelId?: string | null): boolean => {
+      const normalizedModelId = modelId?.trim();
+      if (!normalizedModelId) {
+        return false;
+      }
+      return routeModelsByType[type].some(
+        (model) => model.id === normalizedModelId
+      );
+    },
+    [routeModelsByType]
+  );
+
+  const resolveSettingsModelName = useCallback(
+    (
+      type: ModelType,
+      modelId?: string | null,
+      profileId?: string | null
+    ): string => {
+      const normalizedModelId = modelId?.trim() || '';
+      if (creativeEmbeddedMode) {
+        if (
+          normalizedModelId &&
+          (!profileId || profileId === CREATIVE_MANAGED_PROFILE_ID) &&
+          isModelAvailableForRoute(type, normalizedModelId)
+        ) {
+          return normalizedModelId;
+        }
+        return getRouteModelFallback(type);
+      }
+      return normalizedModelId || getRouteModelFallback(type);
+    },
+    [creativeEmbeddedMode, getRouteModelFallback, isModelAvailableForRoute]
+  );
+
+  const normalizePresetRouteForSave = useCallback(
+    (routeType: ModelType, route: RouteConfig): RouteConfig => {
+      const routeProfileId = getRouteProfileId(route);
+      const routeModelId = getRouteModelId(route);
+
+      if (!creativeEmbeddedMode) {
+        return createRouteConfig(createModelRef(routeProfileId, routeModelId));
+      }
+
+      const normalizedModelId =
+        routeProfileId === CREATIVE_MANAGED_PROFILE_ID &&
+        isModelAvailableForRoute(routeType, routeModelId)
+          ? routeModelId
+          : getRouteModelFallback(routeType);
+
+      return createRouteConfig(
+        createModelRef(CREATIVE_MANAGED_PROFILE_ID, normalizedModelId || null)
+      );
+    },
+    [creativeEmbeddedMode, getRouteModelFallback, isModelAvailableForRoute]
   );
 
   const enabledProfiles = visibleProfilesDraft.filter(
@@ -883,18 +984,31 @@ export const SettingsDialog = ({
     const persistedShowWorkZoneCard = readPersistedWorkZoneCard();
 
     setInitialProfiles(persistedProfiles);
+    const baselineAudioModelName = resolveSettingsModelName(
+      'audio',
+      persistedGemini.audioModelName
+    );
+    const baselineImageModelName = resolveSettingsModelName(
+      'image',
+      persistedGemini.imageModelName
+    );
+    const baselineVideoModelName = resolveSettingsModelName(
+      'video',
+      persistedGemini.videoModelName
+    );
+    const baselineTextModelName = resolveSettingsModelName(
+      'text',
+      persistedGemini.textModelName || persistedGemini.chatModel
+    );
     setInitialDraftSignature(
       createSettingsDraftSignature({
         profiles: persistedProfiles,
         presets: persistedPresets,
         activePresetId: persistedActivePresetId,
-        audioModelName:
-          persistedGemini.audioModelName || getDefaultAudioModel(),
-        imageModelName:
-          persistedGemini.imageModelName || getDefaultImageModel(),
-        videoModelName:
-          persistedGemini.videoModelName || getDefaultVideoModel(),
-        textModelName: persistedGemini.textModelName || getDefaultTextModel(),
+        audioModelName: baselineAudioModelName,
+        imageModelName: baselineImageModelName,
+        videoModelName: baselineVideoModelName,
+        textModelName: baselineTextModelName,
         showWorkZoneCard: persistedShowWorkZoneCard,
       })
     );
@@ -946,10 +1060,26 @@ export const SettingsDialog = ({
         ? currentPresetId
         : nextPresets[0]?.id || DEFAULT_INVOCATION_PRESET_ID
     );
-    setAudioModelName(geminiConfig.audioModelName || getDefaultAudioModel());
-    setImageModelName(geminiConfig.imageModelName || getDefaultImageModel());
-    setVideoModelName(geminiConfig.videoModelName || getDefaultVideoModel());
-    setTextModelName(geminiConfig.textModelName || getDefaultTextModel());
+    const nextAudioModelName = resolveSettingsModelName(
+      'audio',
+      geminiConfig.audioModelName
+    );
+    const nextImageModelName = resolveSettingsModelName(
+      'image',
+      geminiConfig.imageModelName
+    );
+    const nextVideoModelName = resolveSettingsModelName(
+      'video',
+      geminiConfig.videoModelName
+    );
+    const nextTextModelName = resolveSettingsModelName(
+      'text',
+      geminiConfig.textModelName || geminiConfig.chatModel
+    );
+    setAudioModelName(nextAudioModelName);
+    setImageModelName(nextImageModelName);
+    setVideoModelName(nextVideoModelName);
+    setTextModelName(nextTextModelName);
 
     try {
       nextShowWorkZoneCard =
@@ -971,10 +1101,10 @@ export const SettingsDialog = ({
         profiles: nextProfiles,
         presets: nextPresets,
         activePresetId: nextActivePresetId,
-        audioModelName: geminiConfig.audioModelName || getDefaultAudioModel(),
-        imageModelName: geminiConfig.imageModelName || getDefaultImageModel(),
-        videoModelName: geminiConfig.videoModelName || getDefaultVideoModel(),
-        textModelName: geminiConfig.textModelName || getDefaultTextModel(),
+        audioModelName: nextAudioModelName,
+        imageModelName: nextImageModelName,
+        videoModelName: nextVideoModelName,
+        textModelName: nextTextModelName,
         showWorkZoneCard: nextShowWorkZoneCard,
       })
     );
@@ -982,7 +1112,7 @@ export const SettingsDialog = ({
     if (pendingProviderIntent?.action === 'create') {
       applyProviderNavigationIntent(pendingProviderIntent, nextProfiles);
     }
-  }, [appState.openSettings, creativeEmbeddedMode]);
+  }, [appState.openSettings, creativeEmbeddedMode, resolveSettingsModelName]);
 
   useEffect(() => {
     if (!selectedProfileId && visibleProfilesDraft[0]) {
@@ -1055,22 +1185,33 @@ export const SettingsDialog = ({
         nextPresets[0] ||
         null;
       const nextAudioModelName =
-        getRouteModelId(activePreset?.audio) ||
-        persistedGemini.audioModelName ||
-        getDefaultAudioModel();
+        resolveSettingsModelName(
+          'audio',
+          getRouteModelId(activePreset?.audio),
+          getRouteProfileId(activePreset?.audio)
+        ) || resolveSettingsModelName('audio', persistedGemini.audioModelName);
       const nextImageModelName =
-        getRouteModelId(activePreset?.image) ||
-        persistedGemini.imageModelName ||
-        getDefaultImageModel();
+        resolveSettingsModelName(
+          'image',
+          getRouteModelId(activePreset?.image),
+          getRouteProfileId(activePreset?.image)
+        ) || resolveSettingsModelName('image', persistedGemini.imageModelName);
       const nextVideoModelName =
-        getRouteModelId(activePreset?.video) ||
-        persistedGemini.videoModelName ||
-        getDefaultVideoModel();
+        resolveSettingsModelName(
+          'video',
+          getRouteModelId(activePreset?.video),
+          getRouteProfileId(activePreset?.video)
+        ) || resolveSettingsModelName('video', persistedGemini.videoModelName);
       const nextTextModelName =
-        getRouteModelId(activePreset?.text) ||
-        persistedGemini.textModelName ||
-        persistedGemini.chatModel ||
-        getDefaultTextModel();
+        resolveSettingsModelName(
+          'text',
+          getRouteModelId(activePreset?.text),
+          getRouteProfileId(activePreset?.text)
+        ) ||
+        resolveSettingsModelName(
+          'text',
+          persistedGemini.textModelName || persistedGemini.chatModel
+        );
 
       await invocationPresetsSettings.update(cloneValue(nextPresets));
       await invocationPresetsSettings.setActivePresetId(
@@ -1356,12 +1497,14 @@ export const SettingsDialog = ({
   );
 
   const handleAddPreset = () => {
-    const fallbackProfileId = enabledProfiles[0]?.id || null;
+    const fallbackProfileId = creativeEmbeddedMode
+      ? CREATIVE_MANAGED_PROFILE_ID
+      : enabledProfiles[0]?.id || null;
     const nextPreset = createPreset(fallbackProfileId, {
-      audio: audioModelName || getDefaultAudioModel(),
-      image: imageModelName || getDefaultImageModel(),
-      video: videoModelName || getDefaultVideoModel(),
-      text: textModelName || getDefaultTextModel(),
+      audio: resolveSettingsModelName('audio', audioModelName),
+      image: resolveSettingsModelName('image', imageModelName),
+      video: resolveSettingsModelName('video', videoModelName),
+      text: resolveSettingsModelName('text', textModelName),
     });
     setPresetsDraft((current) => [...current, nextPreset]);
     analytics.trackUIInteraction({
@@ -1583,19 +1726,25 @@ export const SettingsDialog = ({
         !nextImageModels.some((model) => model.id === imageModelName) &&
         discoveredImageIds.includes(imageModelName)
       ) {
-        setImageModelName(nextImageModels[0]?.id || getDefaultImageModel());
+        setImageModelName(
+          nextImageModels[0]?.id || getRouteModelFallback('image')
+        );
       }
       if (
         !nextVideoModels.some((model) => model.id === videoModelName) &&
         discoveredVideoIds.includes(videoModelName)
       ) {
-        setVideoModelName(nextVideoModels[0]?.id || getDefaultVideoModel());
+        setVideoModelName(
+          nextVideoModels[0]?.id || getRouteModelFallback('video')
+        );
       }
       if (
         !nextTextModels.some((model) => model.id === textModelName) &&
         discoveredTextIds.includes(textModelName)
       ) {
-        setTextModelName(nextTextModels[0]?.id || getDefaultTextModel());
+        setTextModelName(
+          nextTextModels[0]?.id || getRouteModelFallback('text')
+        );
       }
     }
 
@@ -1677,23 +1826,19 @@ export const SettingsDialog = ({
           text: { ...preset.text },
         };
 
-        (['image', 'video', 'audio', 'text'] as ModelType[]).forEach(
-          (routeType) => {
-            const route = nextPreset[routeType];
-            const routeProfileId = getRouteProfileId(route);
-            const routeModelId = getRouteModelId(route);
-            if (routeProfileId && !profileIds.has(routeProfileId)) {
-              nextPreset[routeType] = createRouteConfig(
-                createModelRef(null, routeModelId)
-              );
-              return;
-            }
-
-            nextPreset[routeType] = createRouteConfig(
-              createModelRef(routeProfileId, routeModelId)
-            );
+        MODEL_ROUTE_TYPES.forEach((routeType) => {
+          const route = nextPreset[routeType];
+          const routeProfileId = getRouteProfileId(route);
+          const routeModelId = getRouteModelId(route);
+          if (routeProfileId && !profileIds.has(routeProfileId)) {
+            nextPreset[routeType] = creativeEmbeddedMode
+              ? normalizePresetRouteForSave(routeType, route)
+              : createRouteConfig(createModelRef(null, routeModelId));
+            return;
           }
-        );
+
+          nextPreset[routeType] = normalizePresetRouteForSave(routeType, route);
+        });
 
         return nextPreset;
       });
@@ -1718,30 +1863,46 @@ export const SettingsDialog = ({
       const normalizedLegacyBaseUrl = normalizeModelApiBaseUrl(
         legacyProfile?.baseUrl || TUZI_PROVIDER_DEFAULT_BASE_URL
       );
-      const normalizedAudioModel =
-        audioModelName.trim() ||
-        legacyAudioModels[0]?.id ||
-        getDefaultAudioModel();
-      const normalizedImageModel =
-        imageModelName.trim() ||
-        legacyImageModels[0]?.id ||
-        getDefaultImageModel();
-      const normalizedVideoModel =
-        videoModelName.trim() ||
-        legacyVideoModels[0]?.id ||
-        getDefaultVideoModel();
-      const normalizedTextModel =
-        textModelName.trim() ||
-        legacyTextModels[0]?.id ||
-        getDefaultTextModel();
+      const normalizedAudioModel = resolveSettingsModelName(
+        'audio',
+        audioModelName
+      );
+      const normalizedImageModel = resolveSettingsModelName(
+        'image',
+        imageModelName
+      );
+      const normalizedVideoModel = resolveSettingsModelName(
+        'video',
+        videoModelName
+      );
+      const normalizedTextModel = resolveSettingsModelName(
+        'text',
+        textModelName
+      );
       const normalizedActiveImageModel =
-        getRouteModelId(activePreset?.image) || normalizedImageModel;
+        resolveSettingsModelName(
+          'image',
+          getRouteModelId(activePreset?.image),
+          getRouteProfileId(activePreset?.image)
+        ) || normalizedImageModel;
       const normalizedActiveVideoModel =
-        getRouteModelId(activePreset?.video) || normalizedVideoModel;
+        resolveSettingsModelName(
+          'video',
+          getRouteModelId(activePreset?.video),
+          getRouteProfileId(activePreset?.video)
+        ) || normalizedVideoModel;
       const normalizedActiveAudioModel =
-        getRouteModelId(activePreset?.audio) || normalizedAudioModel;
+        resolveSettingsModelName(
+          'audio',
+          getRouteModelId(activePreset?.audio),
+          getRouteProfileId(activePreset?.audio)
+        ) || normalizedAudioModel;
       const normalizedActiveTextModel =
-        getRouteModelId(activePreset?.text) || normalizedTextModel;
+        resolveSettingsModelName(
+          'text',
+          getRouteModelId(activePreset?.text),
+          getRouteProfileId(activePreset?.text)
+        ) || normalizedTextModel;
 
       normalizedProfiles.forEach((profile) => {
         if (
@@ -1819,7 +1980,9 @@ export const SettingsDialog = ({
           closeAfterSave,
           profilesCount: normalizedProfiles.length,
           presetsCount: normalizedPresets.length,
-          enabledProfilesCount: normalizedProfiles.filter((profile) => profile.enabled).length,
+          enabledProfilesCount: normalizedProfiles.filter(
+            (profile) => profile.enabled
+          ).length,
         },
       });
 
@@ -2319,8 +2482,8 @@ export const SettingsDialog = ({
               />
               {isSelectedSessionBrokerProfile ? (
                 <span className="settings-dialog__field-hint">
-                  托管会话固定通过 opentu /creative 中继访问，不会向浏览器暴露上游
-                  Base URL。
+                  托管会话固定通过 opentu /creative
+                  中继访问，不会向浏览器暴露上游 Base URL。
                 </span>
               ) : null}
             </div>
@@ -2430,7 +2593,11 @@ export const SettingsDialog = ({
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setIsApiKeyVisible((visible) => !visible)}
                     >
-                      {isApiKeyVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                      {isApiKeyVisible ? (
+                        <EyeOff size={16} />
+                      ) : (
+                        <Eye size={16} />
+                      )}
                     </button>
                   </HoverTip>
                 </div>
@@ -2455,8 +2622,10 @@ export const SettingsDialog = ({
                       />
                       同步中
                     </>
+                  ) : isSelectedSessionBrokerProfile ? (
+                    '查看模型池'
                   ) : (
-                    isSelectedSessionBrokerProfile ? '查看模型池' : '获取模型'
+                    '获取模型'
                   )}
                 </button>
               </div>
@@ -2857,12 +3026,16 @@ export const SettingsDialog = ({
       )
       .map((profile) => {
         const sourceModels =
-          profile.id === LEGACY_DEFAULT_PROVIDER_PROFILE_ID
+          creativeEmbeddedMode && profile.id === CREATIVE_MANAGED_PROFILE_ID
+            ? routeModelsByType[routeType]
+            : profile.id === LEGACY_DEFAULT_PROVIDER_PROFILE_ID
             ? routeType === 'image'
-              ? legacyImageModels
+              ? routeModelsByType.image
               : routeType === 'video'
-              ? legacyVideoModels
-              : legacyTextModels
+              ? routeModelsByType.video
+              : routeType === 'audio'
+              ? routeModelsByType.audio
+              : routeModelsByType.text
             : runtimeModelDiscovery
                 .getState(profile.id)
                 .models.filter((model) => model.type === routeType);
@@ -2909,8 +3082,7 @@ export const SettingsDialog = ({
     const selectedModelId = getRouteModelId(route);
     const selectedProfileName =
       visibleProfilesDraft.find((profile) => profile.id === selectedProfileId)
-        ?.name ||
-      '未配置';
+        ?.name || '未配置';
     const selectableModels = buildPresetRouteModels(routeGroups);
     const selectedSelectionKey =
       selectedProfileId && selectedModelId

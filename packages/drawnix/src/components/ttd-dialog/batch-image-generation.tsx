@@ -76,6 +76,7 @@ import {
   sanitizeImageToolExtraParams,
 } from '../../services/ai-generation-preferences-service';
 import { buildMJPromptSuffix } from '../../utils/mj-params';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 // 本地缓存 key
 const BATCH_IMAGE_CACHE_KEY = LS_KEYS_TO_MIGRATE.BATCH_IMAGE_CACHE;
@@ -346,6 +347,7 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
   const { language } = useI18n();
   const { confirm, confirmDialog } = useConfirmDialog();
   const imageModels = useSelectableModels('image');
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
   const { createTask, tasks: queueTasks } = useTaskQueue();
   const { addAsset, assets: libraryAssets, loadAssets } = useAssets();
   const { isMobile, isTablet } = useDeviceType();
@@ -505,14 +507,21 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
       initialRoute.modelId,
       createModelRef(initialRoute.profileId, initialRoute.modelId)
     );
+  const initialFallbackModel = creativeEmbeddedMode
+    ? ''
+    : 'gemini-2.5-flash-image-vip';
+  const initialModelId =
+    initialMatchedModel?.id || imageModels[0]?.id || initialFallbackModel;
+  const initialModelRef =
+    getModelRefFromConfig(initialMatchedModel) ||
+    (initialRoute.modelId
+      ? createModelRef(initialRoute.profileId, initialRoute.modelId)
+      : null);
   const [selectedModel, setSelectedModel] = useState<string>(
-    initialMatchedModel?.id ||
-      imageModels[0]?.id ||
-      'gemini-2.5-flash-image-vip'
+    initialModelId
   );
   const [selectedModelRef, setSelectedModelRef] = useState<ModelRef | null>(
-    getModelRefFromConfig(initialMatchedModel) ||
-      createModelRef(initialRoute.profileId, initialRoute.modelId)
+    initialModelRef
   );
   const visibleImageModels = useMemo(() => {
     const currentMatch = findMatchingSelectableModel(
@@ -573,7 +582,13 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
   }, [cacheLoaded, defaultModelParams, selectedModel]);
 
   useEffect(() => {
-    if (visibleImageModels.length === 0) return;
+    if (visibleImageModels.length === 0) {
+      if (creativeEmbeddedMode && selectedModel) {
+        setSelectedModel('');
+        setSelectedModelRef(null);
+      }
+      return;
+    }
     const matchedModel = findMatchingSelectableModel(
       visibleImageModels,
       selectedModel,
@@ -583,7 +598,12 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
       setSelectedModel(visibleImageModels[0].id);
       setSelectedModelRef(getModelRefFromConfig(visibleImageModels[0]));
     }
-  }, [selectedModel, selectedModelRef, visibleImageModels]);
+  }, [
+    creativeEmbeddedMode,
+    selectedModel,
+    selectedModelRef,
+    visibleImageModels,
+  ]);
 
   useEffect(() => {
     if (!controlledSelectedModel) {
@@ -2220,6 +2240,17 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
     // 获取选中的行索引（从 checkbox 选中状态获取）
     const selectedRowIndices = [...selectedRows].sort((a, b) => a - b);
 
+    if (creativeEmbeddedMode && !selectedModel) {
+      MessagePlugin.warning(
+        language === 'zh'
+          ? 'New API Creative 未提供可用图片模型，请联系管理员启用模型'
+          : 'No image model is available in New API Creative. Ask an administrator to enable one.'
+      );
+      submitLockRef.current = false;
+      setIsSubmitting(false);
+      return;
+    }
+
     // 如果没有选中行，提示用户
     if (selectedRowIndices.length === 0) {
       MessagePlugin.warning(
@@ -2338,12 +2369,14 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
     executeSubmit(validTasks);
   }, [
     confirm,
+    creativeEmbeddedMode,
     tasks,
     selectedRows,
     language,
     executeSubmit,
     getRowTasksInfo,
     isSubmitting,
+    selectedModel,
   ]);
 
   // 键盘导航和直接输入
@@ -3308,7 +3341,9 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
               theme="primary"
               onClick={submitToQueue}
               loading={isSubmitting}
-              disabled={isSubmitting}
+              disabled={
+                isSubmitting || (creativeEmbeddedMode && !selectedModel)
+              }
               className="batch-generate-btn"
               data-track="batch_generate_click"
               data-track-params={JSON.stringify({

@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaskType } from '../../types/task.types';
-import type { ImageModelAdapter } from '../model-adapters/types';
+import { ModelVendor, type ModelConfig } from '../../constants/model-config';
 
 const mocks = vi.hoisted(() => ({
   adapterGenerateImage: vi.fn(),
   resolveAdapterForInvocation: vi.fn(),
   getAdapterContextFromSettings: vi.fn(),
+  getSelectableModels: vi.fn<() => ModelConfig[]>(() => []),
+  getPinnedSelectableModel: vi.fn(() => null),
   trackModelCall: vi.fn(),
   trackModelSuccess: vi.fn(),
   trackModelFailure: vi.fn(),
@@ -15,6 +17,16 @@ const mocks = vi.hoisted(() => ({
   getTask: vi.fn(),
 }));
 
+vi.mock('../creative-mode', () => ({
+  CREATIVE_MANAGED_PROFILE_ID: 'new-api-creative',
+  isCreativeEmbeddedMode: () => true,
+}));
+
+vi.mock('../../utils/runtime-model-discovery', () => ({
+  getSelectableModels: mocks.getSelectableModels,
+  getPinnedSelectableModel: mocks.getPinnedSelectableModel,
+}));
+
 vi.mock('../model-adapters', () => ({
   GPT_IMAGE_EDIT_REQUEST_SCHEMAS: [
     'openai.image.gpt-edit-form',
@@ -22,16 +34,6 @@ vi.mock('../model-adapters', () => ({
   ],
   resolveAdapterForInvocation: mocks.resolveAdapterForInvocation,
   getAdapterContextFromSettings: mocks.getAdapterContextFromSettings,
-}));
-
-vi.mock('../creative-mode', () => ({
-  CREATIVE_MANAGED_PROFILE_ID: 'new-api-creative',
-  isCreativeEmbeddedMode: () => false,
-}));
-
-vi.mock('../../utils/runtime-model-discovery', () => ({
-  getSelectableModels: vi.fn(() => []),
-  getPinnedSelectableModel: vi.fn(() => null),
 }));
 
 vi.mock('../task-queue', () => ({
@@ -77,62 +79,92 @@ vi.mock('../task-invocation-route', () => ({
   assertTaskInvocationRouteAvailable: vi.fn(),
   createTaskInvocationRouteSnapshot: vi.fn(() => ({
     operation: 'image',
-    modelId: 'mj-imagine',
+    modelId: 'newapi-image',
   })),
   shouldUseStrictTaskInvocationRoute: vi.fn(() => false),
 }));
 
-describe('generation-api-service MJ image idempotency', () => {
+const managedImageModel: ModelConfig = {
+  id: 'newapi-image',
+  label: 'New API Image',
+  type: 'image',
+  vendor: ModelVendor.GPT,
+  sourceProfileId: 'new-api-creative',
+  selectionKey: 'new-api-creative::newapi-image',
+};
+
+describe('generation-api-service embedded Creative model guard', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-
-    const adapter: ImageModelAdapter = {
-      id: 'mj-image-adapter',
-      label: 'MJ',
+    mocks.getSelectableModels.mockReturnValue([]);
+    mocks.getPinnedSelectableModel.mockReturnValue(null);
+    mocks.resolveAdapterForInvocation.mockReturnValue({
+      id: 'image-adapter',
+      label: 'Image Adapter',
       kind: 'image',
       generateImage: mocks.adapterGenerateImage,
-    };
-
-    mocks.resolveAdapterForInvocation.mockReturnValue(adapter);
+    });
     mocks.getAdapterContextFromSettings.mockReturnValue({
       baseUrl: '/creative/relay/v1',
       apiKey: '',
       authType: 'session-broker',
     });
     mocks.adapterGenerateImage.mockResolvedValue({
-      url: 'https://cdn.example.com/mj.jpg',
-      format: 'jpg',
+      url: 'https://cdn.example.com/image.png',
+      format: 'png',
     });
   });
 
-  it('passes a stable opentu-image idempotency key from the local task id into the MJ adapter request', async () => {
+  it('fails locally before adapter/provider calls when embedded image pool is empty', async () => {
+    const { generationAPIService } = await import('../generation-api-service');
+
+    await expect(
+      generationAPIService.generate(
+        'empty-image-pool',
+        {
+          prompt: 'draw a cat',
+        },
+        TaskType.IMAGE
+      )
+    ).rejects.toThrow(/Creative image model is unavailable/);
+
+    expect(mocks.resolveAdapterForInvocation).not.toHaveBeenCalled();
+    expect(mocks.adapterGenerateImage).not.toHaveBeenCalled();
+  });
+
+  it('replaces a missing request model with the managed default instead of a static fallback', async () => {
+    mocks.getSelectableModels.mockReturnValue([managedImageModel]);
+    mocks.getPinnedSelectableModel.mockImplementation((_type, modelId) =>
+      modelId === managedImageModel.id ? managedImageModel : null
+    );
     const { generationAPIService } = await import('../generation-api-service');
 
     await generationAPIService.generate(
-      'local-image-task-1',
+      'default-image-model',
       {
         prompt: 'draw a cat',
-        model: 'mj-imagine',
-        params: {
-          idempotencyKey: 'caller-must-not-override-local-task-id',
-        },
       },
       TaskType.IMAGE
     );
 
+    expect(mocks.resolveAdapterForInvocation).toHaveBeenCalledWith(
+      'image',
+      'newapi-image',
+      {
+        profileId: 'new-api-creative',
+        modelId: 'newapi-image',
+      },
+      expect.any(Object)
+    );
     expect(mocks.adapterGenerateImage).toHaveBeenCalledWith(
+      expect.any(Object),
       expect.objectContaining({
-        authType: 'session-broker',
-        baseUrl: '/creative/relay/v1',
-      }),
-      expect.objectContaining({
-        prompt: 'draw a cat',
-        model: 'mj-imagine',
-        idempotencyKey: 'opentu-image-local-image-task-1',
-        params: expect.objectContaining({
-          idempotencyKey: 'opentu-image-local-image-task-1',
-        }),
+        model: 'newapi-image',
+        modelRef: {
+          profileId: 'new-api-creative',
+          modelId: 'newapi-image',
+        },
       })
     );
   });

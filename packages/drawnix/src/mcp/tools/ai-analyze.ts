@@ -27,8 +27,25 @@ import {
   getDefaultImageModel,
   getDefaultVideoModel,
 } from '../../constants/model-config';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
+import { getFallbackDefaultModelId } from '../../utils/runtime-model-discovery';
 import type { KnowledgeContextRef } from '../../types/task.types';
 import { normalizeKnowledgeContextRefs } from '../../services/generation-context-service';
+
+function getMediaFallbackModel(
+  type: 'image' | 'video' | 'audio',
+  configuredModel?: string | null
+): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId(type);
+  }
+  if (configuredModel) {
+    return configuredModel;
+  }
+  if (type === 'image') return getDefaultImageModel();
+  if (type === 'video') return getDefaultVideoModel();
+  return getDefaultAudioModel();
+}
 
 /**
  * AI 分析参数
@@ -160,9 +177,9 @@ export const aiAnalyzeTool: MCPTool = {
               contextModel: executionContext.model,
               contextModelRef: modelRef || null,
               fallbackModels: {
-                image: settings.imageModelName || getDefaultImageModel(),
-                video: settings.videoModelName || getDefaultVideoModel(),
-                audio: settings.audioModelName || getDefaultAudioModel(),
+                image: getMediaFallbackModel('image', settings.imageModelName),
+                video: getMediaFallbackModel('video', settings.videoModelName),
+                audio: getMediaFallbackModel('audio', settings.audioModelName),
               },
             }
           );

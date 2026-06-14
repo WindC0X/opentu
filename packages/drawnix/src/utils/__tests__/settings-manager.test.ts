@@ -485,4 +485,140 @@ describe('settings-manager', () => {
       imageApiCompatibility: 'auto',
     });
   });
+
+  it('keeps embedded Creative on a managed unavailable route before bootstrap instead of falling back to legacy credentials', async () => {
+    mockSettingsManagerDeps();
+    Object.assign(window, {
+      location: {
+        search: '',
+        href: 'https://example.com/creative/',
+        pathname: '/creative/',
+      },
+    });
+
+    localStorage.setItem(
+      DRAWNIX_SETTINGS_KEY,
+      JSON.stringify({
+        gemini: {
+          apiKey: 'legacy-key',
+          baseUrl: 'https://api.tu-zi.com/v1',
+          imageModelName: 'gpt-image-2-vip',
+        },
+      })
+    );
+
+    const { resolveInvocationRoute, hasInvocationRouteCredentials } =
+      await import('../settings-manager');
+    const { CREATIVE_MANAGED_PROFILE_ID } = await import(
+      '../../services/creative-mode'
+    );
+
+    const route = resolveInvocationRoute('image', 'gpt-image-2-vip');
+
+    expect(route).toMatchObject({
+      routeType: 'image',
+      modelId: '',
+      profileId: CREATIVE_MANAGED_PROFILE_ID,
+      profileName: 'New API Creative',
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+      source: 'preset',
+    });
+    expect(hasInvocationRouteCredentials('image', 'gpt-image-2-vip')).toBe(
+      false
+    );
+  });
+
+  it('does not use stale requested, preset, or legacy model ids when the embedded managed catalog is empty', async () => {
+    mockSettingsManagerDeps();
+    Object.assign(window, {
+      location: {
+        search: '',
+        href: 'https://example.com/creative/',
+        pathname: '/creative/',
+      },
+    });
+
+    localStorage.setItem(
+      DRAWNIX_SETTINGS_KEY,
+      JSON.stringify({
+        gemini: {
+          apiKey: 'legacy-key',
+          baseUrl: 'https://api.tu-zi.com/v1',
+          imageModelName: 'legacy-image-model',
+        },
+        providerProfiles: [
+          {
+            id: 'new-api-creative',
+            name: 'New API Creative',
+            providerType: 'openai-compatible',
+            baseUrl: '/creative/relay/v1',
+            apiKey: '',
+            authType: 'session-broker',
+            enabled: true,
+            capabilities: {
+              supportsModelsEndpoint: true,
+              supportsText: true,
+              supportsImage: true,
+              supportsVideo: true,
+              supportsAudio: true,
+              supportsTools: true,
+            },
+          },
+        ],
+        providerCatalogs: [
+          {
+            profileId: 'new-api-creative',
+            discoveredAt: Date.now(),
+            discoveredModels: [],
+            selectedModelIds: [],
+            sourceBaseUrl: '/creative/api/models',
+            error: 'creative_session_unavailable',
+          },
+        ],
+        invocationPresets: [
+          {
+            id: 'default',
+            name: 'Default',
+            isDefault: true,
+            text: { defaultModelRef: null },
+            image: {
+              defaultModelRef: {
+                profileId: 'new-api-creative',
+                modelId: 'stale-preset-image',
+              },
+            },
+            video: { defaultModelRef: null },
+            audio: { defaultModelRef: null },
+          },
+        ],
+      })
+    );
+
+    const { resolveInvocationRoute, hasInvocationRouteCredentials } =
+      await import('../settings-manager');
+
+    const route = resolveInvocationRoute('image', {
+      profileId: 'new-api-creative',
+      modelId: 'stale-requested-image',
+    });
+
+    expect(route).toMatchObject({
+      profileId: 'new-api-creative',
+      modelId: '',
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+    });
+    expect(JSON.stringify(route)).not.toMatch(
+      /stale-requested-image|stale-preset-image|legacy-image-model|legacy-key|api\.tu-zi\.com/i
+    );
+    expect(
+      hasInvocationRouteCredentials('image', {
+        profileId: 'new-api-creative',
+        modelId: 'stale-requested-image',
+      })
+    ).toBe(false);
+  });
 });

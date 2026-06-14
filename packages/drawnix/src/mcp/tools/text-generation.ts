@@ -4,16 +4,15 @@
  * 复用现有文本模型执行链，为 AI 输入栏文本模式提供统一工具入口。
  */
 
-import type {
-  MCPExecuteOptions,
-  MCPResult,
-  MCPTool,
-} from '../types';
+import type { MCPExecuteOptions, MCPResult, MCPTool } from '../types';
 import { executorFactory } from '../../services/media-executor';
 import type { ExecutionOptions } from '../../services/media-executor/types';
 import { TaskType } from '../../types/task.types';
 import { geminiSettings, type ModelRef } from '../../utils/settings-manager';
 import { getDefaultTextModel } from '../../constants/model-config';
+import { getFallbackDefaultModelId } from '../../utils/runtime-model-discovery';
+import { resolveCreativeEmbeddedModelForGeneration } from '../../services/creative-embedded-model-guard';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import {
   createQueueTask,
   validatePrompt,
@@ -37,19 +36,33 @@ export interface TextGenerationParams {
 }
 
 export function getCurrentTextModel(): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId('text');
+  }
   const settings = geminiSettings.get();
   return settings?.textModelName || getDefaultTextModel();
 }
 
-function toExecutionOptions(_options?: MCPExecuteOptions): ExecutionOptions | undefined {
+function getTextModelSchemaDescription(): string {
+  const defaultModel = getCurrentTextModel();
+  return defaultModel
+    ? `文本模型 ID，默认使用 ${defaultModel}`
+    : '文本模型 ID，默认使用 New API Creative 推荐文本模型';
+}
+
+function toExecutionOptions(
+  _options?: MCPExecuteOptions
+): ExecutionOptions | undefined {
   return undefined;
 }
 
-function isTextGenerationParams(params: unknown): params is TextGenerationParams {
+function isTextGenerationParams(
+  params: unknown
+): params is TextGenerationParams {
   return (
-    typeof params === 'object'
-    && params !== null
-    && typeof (params as { prompt?: unknown }).prompt === 'string'
+    typeof params === 'object' &&
+    params !== null &&
+    typeof (params as { prompt?: unknown }).prompt === 'string'
   );
 }
 
@@ -61,12 +74,20 @@ async function executeAsync(
   if (promptError) return promptError;
 
   try {
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'text',
+      params.model || null,
+      params.modelRef || null
+    );
+    const model =
+      embeddedModel?.modelId || params.model || getCurrentTextModel();
+    const modelRef = embeddedModel?.modelRef || params.modelRef || null;
     const fallbackExecutor = executorFactory.getFallbackExecutor();
     const result = await fallbackExecutor.generateText(
       {
         prompt: params.prompt,
-        model: params.model || getCurrentTextModel(),
-        modelRef: params.modelRef || null,
+        model,
+        modelRef,
         referenceImages: params.referenceImages,
         params: params.params,
       },
@@ -94,15 +115,25 @@ function getTextQueueConfig(params: TextGenerationParams) {
     resultType: 'text' as const,
     getDefaultModel: getCurrentTextModel,
     maxCount: 1,
-    buildTaskPayload: () => ({
-      prompt: params.prompt,
-      model: params.model || getCurrentTextModel(),
-      modelRef: params.modelRef || null,
-      referenceImages: params.referenceImages,
-      promptMeta: params.promptMeta,
-      knowledgeContextRefs: params.knowledgeContextRefs,
-      ...(params.params ? { params: params.params } : {}),
-    }),
+    buildTaskPayload: () => {
+      const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+        'text',
+        params.model || null,
+        params.modelRef || null
+      );
+      const model =
+        embeddedModel?.modelId || params.model || getCurrentTextModel();
+      const modelRef = embeddedModel?.modelRef || params.modelRef || null;
+      return {
+        prompt: params.prompt,
+        model,
+        modelRef,
+        referenceImages: params.referenceImages,
+        promptMeta: params.promptMeta,
+        knowledgeContextRefs: params.knowledgeContextRefs,
+        ...(params.params ? { params: params.params } : {}),
+      };
+    },
   };
 }
 
@@ -119,7 +150,8 @@ export async function generateText(
 
 export const textGenerationTool: MCPTool = {
   name: 'generate_text',
-  description: '生成纯文本内容，可用于文章、摘要、说明、Markdown 等文本直出场景',
+  description:
+    '生成纯文本内容，可用于文章、摘要、说明、Markdown 等文本直出场景',
   supportedModes: ['async', 'queue'],
   execute: async (
     params: Record<string, unknown>,
@@ -143,7 +175,8 @@ export const textGenerationTool: MCPTool = {
       },
       model: {
         type: 'string',
-        description: '文本模型 ID，默认使用当前文本路由模型',
+        description: getTextModelSchemaDescription(),
+        default: getCurrentTextModel() || undefined,
       },
       referenceImages: {
         type: 'array',

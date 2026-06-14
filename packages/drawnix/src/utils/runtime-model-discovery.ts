@@ -17,6 +17,7 @@ import {
   CREATIVE_MANAGED_PROFILE_ID,
   isCreativeEmbeddedMode,
 } from '../services/creative-mode';
+import { getCreativePolicyModels } from '../services/creative-model-policy-resolver';
 import {
   LEGACY_DEFAULT_PROVIDER_PROFILE_ID,
   providerCatalogsSettings,
@@ -27,7 +28,10 @@ import {
   type ModelRef,
   type ProviderProfile,
 } from './settings-manager';
-import { applySunoAliasPresentation, isSunoLikeModelId } from './suno-model-aliases';
+import {
+  applySunoAliasPresentation,
+  isSunoLikeModelId,
+} from './suno-model-aliases';
 import { sortModelsByDisplayPriority } from './model-sort';
 
 const LEGACY_CACHE_KEY = 'drawnix-runtime-model-discovery';
@@ -1180,7 +1184,8 @@ class RuntimeModelDiscoveryStore {
 
   getPreferredModels(type: ModelType): ModelConfig[] {
     if (isCreativeEmbeddedMode()) {
-      return sortModelsByDisplayPriority(
+      return getCreativePolicyModels(
+        type,
         this.getCatalogState(CREATIVE_MANAGED_PROFILE_ID).models.filter(
           (model) => model.type === type
         )
@@ -1191,7 +1196,8 @@ class RuntimeModelDiscoveryStore {
 
   getSelectableModels(type: ModelType): ModelConfig[] {
     if (isCreativeEmbeddedMode()) {
-      return sortModelsByDisplayPriority(
+      return getCreativePolicyModels(
+        type,
         this.getCatalogState(CREATIVE_MANAGED_PROFILE_ID).models.filter(
           (model) => model.type === type
         )
@@ -1528,6 +1534,7 @@ export function getFallbackDefaultModelId(type: ModelType): string {
   if (preferred.length > 0) {
     return preferred[0].id;
   }
+  if (isCreativeEmbeddedMode()) return '';
   if (type === 'audio') return DEFAULT_AUDIO_MODEL_ID;
   if (type === 'video') return DEFAULT_VIDEO_MODEL_ID;
   if (type === 'text') return DEFAULT_TEXT_MODEL_ID;

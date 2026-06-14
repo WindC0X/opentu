@@ -35,6 +35,7 @@ import {
   getAdapterContextFromSettings,
   resolveAdapterForInvocation,
 } from './model-adapters';
+import { resolveCreativeEmbeddedModelForGeneration } from './creative-embedded-model-guard';
 import { cacheRemoteUrl } from './media-executor/fallback-utils';
 import {
   IMAGE_GENERATION_TIMEOUT_MS,
@@ -132,12 +133,7 @@ function areStorageSyncValuesEqual(left: unknown, right: unknown): boolean {
     return true;
   }
 
-  if (
-    left &&
-    right &&
-    typeof left === 'object' &&
-    typeof right === 'object'
-  ) {
+  if (left && right && typeof left === 'object' && typeof right === 'object') {
     const leftJson = stableStringify(left);
     const rightJson = stableStringify(right);
     return leftJson !== undefined && leftJson === rightJson;
@@ -146,7 +142,10 @@ function areStorageSyncValuesEqual(left: unknown, right: unknown): boolean {
   return false;
 }
 
-function hasStorageTaskChanges(task: Task, storageTask: Partial<Task>): boolean {
+function hasStorageTaskChanges(
+  task: Task,
+  storageTask: Partial<Task>
+): boolean {
   return STORAGE_SYNC_FIELDS.some((field) => {
     if (!(field in storageTask)) {
       return false;
@@ -235,10 +234,7 @@ function trackTaskAnalytics(
 
 function isTrackedTerminalTaskStatus(
   status: TaskStatus
-): status is
-  | TaskStatus.COMPLETED
-  | TaskStatus.FAILED
-  | TaskStatus.CANCELLED {
+): status is TaskStatus.COMPLETED | TaskStatus.FAILED | TaskStatus.CANCELLED {
   return (
     status === TaskStatus.COMPLETED ||
     status === TaskStatus.FAILED ||
@@ -649,25 +645,42 @@ class TaskQueueService {
       if (task.type === TaskType.AUDIO) {
         const requestedModel = task.params.model as string | undefined;
         const requestedModelRef = task.params.modelRef || null;
+        const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+          'audio',
+          requestedModel,
+          requestedModelRef
+        );
+        const effectiveModel = embeddedModel?.modelId || requestedModel;
+        const effectiveModelRef = embeddedModel?.modelRef || requestedModelRef;
+        if (embeddedModel) {
+          task = {
+            ...task,
+            params: {
+              ...task.params,
+              model: effectiveModel,
+              modelRef: effectiveModelRef,
+            },
+          };
+        }
         const adapter = resolveAdapterForInvocation(
           'audio',
-          requestedModel || DEFAULT_AUDIO_MODEL_ID,
-          requestedModelRef
+          effectiveModel || DEFAULT_AUDIO_MODEL_ID,
+          effectiveModelRef
         );
 
         if (!adapter || adapter.kind !== 'audio') {
-          throw new Error(`No audio adapter for model: ${requestedModel}`);
+          throw new Error(`No audio adapter for model: ${effectiveModel}`);
         }
 
         const result = await adapter.generateAudio(
           getAdapterContextFromSettings(
             'audio',
-            requestedModelRef || requestedModel
+            effectiveModelRef || effectiveModel
           ),
           {
             prompt: task.params.prompt,
-            model: requestedModel,
-            modelRef: requestedModelRef,
+            model: effectiveModel,
+            modelRef: effectiveModelRef,
             title: task.params.title,
             tags: task.params.tags,
             mv: task.params.mv,
@@ -895,6 +908,14 @@ class TaskQueueService {
       // Execute based on task type
       switch (task.type) {
         case TaskType.IMAGE: {
+          const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+            'image',
+            task.params.model,
+            task.params.modelRef || null
+          );
+          const effectiveModel = embeddedModel?.modelId || task.params.model;
+          const effectiveModelRef =
+            embeddedModel?.modelRef || task.params.modelRef || null;
           // 从 params.params 中提取额外参数，并补齐新图像契约字段
           const extraParams = {
             ...(((task.params as any).params || {}) as Record<string, unknown>),
@@ -919,8 +940,8 @@ class TaskQueueService {
             {
               taskId: task.id,
               prompt: task.params.prompt,
-              model: task.params.model,
-              modelRef: task.params.modelRef || null,
+              model: effectiveModel,
+              modelRef: effectiveModelRef,
               size: task.params.size,
               resolution: task.params.resolution as
                 | '1k'
@@ -974,6 +995,14 @@ class TaskQueueService {
           break;
         }
         case TaskType.VIDEO: {
+          const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+            'video',
+            task.params.model,
+            task.params.modelRef || null
+          );
+          const effectiveModel = embeddedModel?.modelId || task.params.model;
+          const effectiveModelRef =
+            embeddedModel?.modelRef || task.params.modelRef || null;
           // 从 uploadedImages（UI 层传入的 UploadedVideoImage[]）中提取 URL
           const uploaded = task.params.uploadedImages as
             | Array<{ url?: string }>
@@ -997,8 +1026,8 @@ class TaskQueueService {
             {
               taskId: task.id,
               prompt: task.params.prompt,
-              model: task.params.model,
-              modelRef: task.params.modelRef || null,
+              model: effectiveModel,
+              modelRef: effectiveModelRef,
               duration: (
                 task.params.duration ?? task.params.seconds
               )?.toString(),
@@ -1073,12 +1102,20 @@ class TaskQueueService {
             break;
           }
 
+          const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+            'text',
+            task.params.model,
+            task.params.modelRef || null
+          );
+          const effectiveModel = embeddedModel?.modelId || task.params.model;
+          const effectiveModelRef =
+            embeddedModel?.modelRef || task.params.modelRef || null;
           await executor.generateText(
             {
               taskId: task.id,
               prompt: task.params.prompt,
-              model: task.params.model,
-              modelRef: task.params.modelRef || null,
+              model: effectiveModel,
+              modelRef: effectiveModelRef,
               referenceImages: task.params.referenceImages as
                 | string[]
                 | undefined,
@@ -2083,9 +2120,9 @@ class TaskQueueService {
   }
 
   async findImageTaskByResultUrl(imageUrl: string): Promise<Task | undefined> {
-    const memoryMatch = this
-      .getAllTasks()
-      .find((task) => imageTaskMatchesUrl(task, imageUrl));
+    const memoryMatch = this.getAllTasks().find((task) =>
+      imageTaskMatchesUrl(task, imageUrl)
+    );
     if (memoryMatch) {
       return this.getCompleteTask(memoryMatch.id);
     }
@@ -2158,10 +2195,7 @@ class TaskQueueService {
    *
    * @param taskId - The task ID to retry
    */
-  retryTask(
-    taskId: string,
-    options: { allowCompleted?: boolean } = {}
-  ): void {
+  retryTask(taskId: string, options: { allowCompleted?: boolean } = {}): void {
     const task = this.tasks.get(taskId);
     if (!task) {
       console.warn(`[TaskQueueService] Task ${taskId} not found`);

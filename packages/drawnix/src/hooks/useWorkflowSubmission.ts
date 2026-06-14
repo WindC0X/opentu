@@ -28,6 +28,7 @@ import { PlaitBoard } from '@plait/core';
 import { geminiSettings } from '../utils/settings-manager';
 import { useTaskWorkflowSync } from './useTaskWorkflowSync';
 import { toWorkflowMessageData } from './workflow-message-data';
+import { isCreativeEmbeddedMode } from '../services/creative-mode';
 
 export { toWorkflowMessageData } from './workflow-message-data';
 
@@ -210,6 +211,7 @@ export function useWorkflowSubmission(
           workflowControl.restoreWorkflow?.(recoveredWorkflow);
 
           const globalSettings = geminiSettings.get();
+          const creativeEmbeddedMode = isCreativeEmbeddedMode();
           const retryContext: WorkflowRetryContext = {
             aiContext: {
               rawInput: recoveredWorkflow.context?.userInput || '',
@@ -225,9 +227,16 @@ export function useWorkflowSubmission(
                 isExplicit: true,
               },
               defaultModels: {
-                image: globalSettings.imageModelName || 'gemini-3-pro-image-preview-vip',
-                video: globalSettings.videoModelName || 'veo3.1',
-                audio: globalSettings.audioModelName || 'suno_music',
+                image: creativeEmbeddedMode
+                  ? ''
+                  : globalSettings.imageModelName ||
+                    'gemini-3-pro-image-preview-vip',
+                video: creativeEmbeddedMode
+                  ? ''
+                  : globalSettings.videoModelName || 'veo3.1',
+                audio: creativeEmbeddedMode
+                  ? ''
+                  : globalSettings.audioModelName || 'suno_music',
               } as any,
               defaultModelRefs: undefined,
               params: {
@@ -239,7 +248,7 @@ export function useWorkflowSubmission(
               finalPrompt: recoveredWorkflow.metadata?.prompt || '',
             } as any,
             referenceImages: recoveredWorkflow.context?.referenceImages || [],
-            textModel: globalSettings.textModelName,
+            textModel: creativeEmbeddedMode ? '' : globalSettings.textModelName,
           };
 
           const workflowData = toWorkflowMessageData(recoveredWorkflow, retryContext);
@@ -463,7 +472,8 @@ export function useWorkflowSubmission(
 
     // Build retry context
     const globalSettings = geminiSettings.get();
-    const textModel = globalSettings.textModelName;
+    const creativeEmbeddedMode = isCreativeEmbeddedMode();
+    const textModel = creativeEmbeddedMode ? '' : globalSettings.textModelName;
 
     const finalRetryContext: WorkflowRetryContext = retryContext || {
       aiContext: {
@@ -478,16 +488,20 @@ export function useWorkflowSubmission(
         defaultModels: {
           image:
             parsedInput.defaultModels?.image ||
-            globalSettings.imageModelName ||
-            'gemini-3-pro-image-preview-vip',
+            (creativeEmbeddedMode
+              ? ''
+              : globalSettings.imageModelName ||
+                'gemini-3-pro-image-preview-vip'),
           video:
             parsedInput.defaultModels?.video ||
-            globalSettings.videoModelName ||
-            'veo3.1',
+            (creativeEmbeddedMode
+              ? ''
+              : globalSettings.videoModelName || 'veo3.1'),
           audio:
             parsedInput.defaultModels?.audio ||
-            globalSettings.audioModelName ||
-            'suno_music',
+            (creativeEmbeddedMode
+              ? ''
+              : globalSettings.audioModelName || 'suno_music'),
         },
         defaultModelRefs: parsedInput.defaultModelRefs,
         params: {

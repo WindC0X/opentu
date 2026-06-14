@@ -17,7 +17,15 @@ import React, {
 } from 'react';
 import { copyToClipboard } from '../../utils/runtime-helpers';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, Copy, ExternalLink, Plus, Search, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react';
 import { MessagePlugin } from 'tdesign-react';
 import {
   IMAGE_MODELS,
@@ -70,7 +78,10 @@ type ProviderSettingsIntent =
   | { action: 'create' };
 
 function normalizeSearchText(value?: string | null): string {
-  return (value || '').toLowerCase().replace(/[\s\-_.:/]+/g, '').trim();
+  return (value || '')
+    .toLowerCase()
+    .replace(/[\s\-_.:/]+/g, '')
+    .trim();
 }
 
 const ModelDropdownPriceTag: React.FC<{ model: ModelConfig }> = React.memo(
@@ -92,9 +103,7 @@ const ModelDropdownDescFallback: React.FC<{ model: ModelConfig }> = React.memo(
   ({ model }) => {
     const meta = useModelMeta(model.sourceProfileId, model.id);
     if (!meta?.description) return null;
-    return (
-      <div className="model-dropdown__item-desc">{meta.description}</div>
-    );
+    return <div className="model-dropdown__item-desc">{meta.description}</div>;
   }
 );
 
@@ -244,7 +253,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   onSelect,
   onSelectModel,
   language = 'zh',
-  models = IMAGE_MODELS,
+  models: providedModels,
   placement = 'auto',
   header,
   disabled = false,
@@ -257,6 +266,10 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   showProviderAction = true,
   unavailableModelMarker = null,
 }) => {
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
+  const models = providedModels || (creativeEmbeddedMode ? [] : IMAGE_MODELS);
+  const isEffectivelyDisabled =
+    disabled || (creativeEmbeddedMode && models.length === 0);
   const { setAppState } = useDrawnix();
   const { value: isOpen, setValue: setIsOpen } = useControllableState({
     controlledValue: controlledIsOpen,
@@ -277,7 +290,6 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const providerProfiles = useProviderProfiles();
-  const creativeEmbeddedMode = isCreativeEmbeddedMode();
   const shouldShowProviderAction = showProviderAction && !creativeEmbeddedMode;
   const effectiveProviderProfiles =
     providerProfilesOverride || providerProfiles;
@@ -349,9 +361,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const activeCategory = useMemo(() => {
     if (!activeProvider) return null;
     return (
-      activeProvider.vendorCategories.find(
-        (c) => c.vendor === activeVendor
-      ) ||
+      activeProvider.vendorCategories.find((c) => c.vendor === activeVendor) ||
       activeProvider.vendorCategories[0] ||
       null
     );
@@ -424,9 +434,41 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   // 当外部选中的模型变化时，同步搜索框内容（仅 form 变体）
   useEffect(() => {
     if (variant === 'form' && !isOpen) {
-      setSearchQuery(currentModel?.label || selectedModel);
+      setSearchQuery(
+        currentModel?.label || (creativeEmbeddedMode ? '' : selectedModel)
+      );
     }
-  }, [selectedModel, currentModel, variant, isOpen]);
+  }, [creativeEmbeddedMode, selectedModel, currentModel, variant, isOpen]);
+
+  useEffect(() => {
+    if (!creativeEmbeddedMode || isEffectivelyDisabled || models.length === 0) {
+      return;
+    }
+
+    const selectedKey = selectedSelectionKey || selectedModel;
+    const hasValidSelection =
+      !!selectedKey &&
+      models.some((model) => getModelKey(model) === selectedKey);
+    if (hasValidSelection) {
+      return;
+    }
+
+    const nextModel = models[0];
+    onSelect(
+      nextModel.id,
+      createModelRef(nextModel.sourceProfileId || null, nextModel.id)
+    );
+    onSelectModel?.(nextModel);
+  }, [
+    creativeEmbeddedMode,
+    isEffectivelyDisabled,
+    getModelKey,
+    models,
+    onSelect,
+    onSelectModel,
+    selectedModel,
+    selectedSelectionKey,
+  ]);
 
   // 过滤模型列表
   const filteredModels = useMemo(() => {
@@ -447,11 +489,12 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
         return { model, score };
       })
       .filter(({ score }) => score > 0)
-      .sort((a, b) =>
-        b.score - a.score ||
-        compareModelsByDisplayPriority(a.model, b.model, {
-          fallbackOrderMap: modelOrderMap,
-        })
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          compareModelsByDisplayPriority(a.model, b.model, {
+            fallbackOrderMap: modelOrderMap,
+          })
       );
   }, [getModelProviderName, models, searchQuery, modelOrderMap]);
 
@@ -474,18 +517,14 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
         count: g.totalCount,
         icon: g.providerIconUrl ? (
           <ModelSourceIcon
-            vendor={
-              g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)
-            }
+            vendor={g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)}
             profileName={g.providerName}
             iconUrl={g.providerIconUrl}
             size={16}
           />
         ) : (
           <ModelVendorMark
-            vendor={
-              g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)
-            }
+            vendor={g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)}
             size={16}
           />
         ),
@@ -537,8 +576,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
     const availableProfiles = effectiveProviderProfiles.filter(
       (profile) => profile.id !== LEGACY_DEFAULT_PROVIDER_PROFILE_ID
     );
-    const lastProfile =
-      availableProfiles[availableProfiles.length - 1] || null;
+    const lastProfile = availableProfiles[availableProfiles.length - 1] || null;
     const lastProfileModelCount = lastProfile
       ? providerModelCountMap.get(lastProfile.id) || 0
       : 0;
@@ -566,7 +604,12 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
     );
     setIsOpen(false);
     setAppState((prev) => ({ ...prev, openSettings: true }));
-  }, [effectiveProviderProfiles, providerModelCountMap, setAppState, setIsOpen]);
+  }, [
+    effectiveProviderProfiles,
+    providerModelCountMap,
+    setAppState,
+    setIsOpen,
+  ]);
 
   // 当过滤结果变化时，高亮选中模型或重置到第一项
   useEffect(() => {
@@ -606,7 +649,10 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
       const validVendors = currentProvider.vendorCategories.map(
         (c) => c.vendor
       );
-      if (!activeVendor || !validVendors.includes(activeVendor as ModelVendor)) {
+      if (
+        !activeVendor ||
+        !validVendors.includes(activeVendor as ModelVendor)
+      ) {
         setActiveVendor(validVendors[0] ?? null);
       }
     }
@@ -628,7 +674,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const handleToggle = useCallback(
     (e?: React.MouseEvent) => {
       e?.preventDefault(); // 阻止触发输入框失焦
-      if (disabled) return;
+      if (isEffectivelyDisabled) return;
       const next = !isOpen;
       if (next) {
         setActiveProviderId(selectedProviderHint);
@@ -641,12 +687,15 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
         setSearchQuery('');
       } else if (variant === 'form') {
         // 表单态关闭时恢复当前模型标签
-        setSearchQuery(currentModel?.label || selectedModel);
+        setSearchQuery(
+          currentModel?.label || (creativeEmbeddedMode ? '' : selectedModel)
+        );
       }
       setIsOpen(next);
     },
     [
-      disabled,
+      creativeEmbeddedMode,
+      isEffectivelyDisabled,
       isOpen,
       setIsOpen,
       variant,
@@ -661,7 +710,10 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const handleSelect = useCallback(
     (model: ModelConfig) => {
       closeContextMenu();
-      onSelect(model.id, createModelRef(model.sourceProfileId || null, model.id));
+      onSelect(
+        model.id,
+        createModelRef(model.sourceProfileId || null, model.id)
+      );
       onSelectModel?.(model);
       setIsOpen(false);
       if (variant === 'form') {
@@ -692,7 +744,8 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   const getModelDocsUrl = useCallback(
     (modelId: string): string | undefined => {
       const model = models.find((m) => m.id === modelId);
-      return modelPricingService.getModelPrice(model?.sourceProfileId, modelId)?.docsUrl;
+      return modelPricingService.getModelPrice(model?.sourceProfileId, modelId)
+        ?.docsUrl;
     },
     [models]
   );
@@ -702,13 +755,18 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
       const model = models.find((m) => m.id === modelId);
       if (model?.description) return model.description;
       if (!model?.sourceProfileId) return undefined;
-      return modelPricingService.getModelPrice(model.sourceProfileId, modelId)?.description;
+      return modelPricingService.getModelPrice(model.sourceProfileId, modelId)
+        ?.description;
     },
     [models]
   );
 
   const buildContextMenuItems = useCallback(
-    ({ modelId }: { modelId: string }): ContextMenuEntry<{ modelId: string }>[] => {
+    ({
+      modelId,
+    }: {
+      modelId: string;
+    }): ContextMenuEntry<{ modelId: string }>[] => {
       const desc = getModelDescription(modelId);
       const items: ContextMenuEntry<{ modelId: string }>[] = [
         { key: 'model-id', label: modelId, disabled: true },
@@ -717,7 +775,16 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
         items.push({
           key: 'model-desc',
           label: (
-            <span style={{ fontSize: 11, color: 'var(--td-text-color-secondary)', whiteSpace: 'normal', lineHeight: 1.4, display: 'block', maxWidth: 260 }}>
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--td-text-color-secondary)',
+                whiteSpace: 'normal',
+                lineHeight: 1.4,
+                display: 'block',
+                maxWidth: 260,
+              }}
+            >
               {desc.length > 80 ? desc.slice(0, 80) + '…' : desc}
             </span>
           ),
@@ -731,7 +798,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
           label: language === 'zh' ? '复制模型名' : 'Copy model name',
           icon: <Copy size={14} />,
           onSelect: ({ modelId: id }) => handleCopyModelId(id),
-        },
+        }
       );
       const docsUrl = getModelDocsUrl(modelId);
       if (docsUrl) {
@@ -842,7 +909,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
           aria-label={`${
             currentModel?.shortLabel || currentModel?.label || selectedModel
           } (↑↓ Tab)`}
-          disabled={disabled}
+          disabled={isEffectivelyDisabled}
         >
           {currentModel ? (
             <ModelSourceIcon
@@ -873,7 +940,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
           ) : null}
           <ModelHealthBadge
             modelId={selectedModel}
-            profileId={currentProfile?.id || currentModel?.sourceProfileId || null}
+            profileId={
+              currentProfile?.id || currentModel?.sourceProfileId || null
+            }
           />
           <ChevronDown
             size={14}
@@ -892,6 +961,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
         }`}
         onMouseDown={(e) => {
           e.preventDefault();
+          if (isEffectivelyDisabled) {
+            return;
+          }
           if (!isOpen) {
             setIsOpen(true);
             setSearchQuery('');
@@ -926,6 +998,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
             className="model-dropdown__form-input"
             value={searchQuery}
             onChange={(e) => {
+              if (isEffectivelyDisabled) {
+                return;
+              }
               setSearchQuery(e.target.value);
               if (!isOpen) setIsOpen(true);
             }}
@@ -933,11 +1008,13 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
               placeholder ||
               (language === 'zh' ? '选择或输入模型' : 'Select or enter model')
             }
-            disabled={disabled}
+            disabled={isEffectivelyDisabled}
           />
           <ModelHealthBadge
             modelId={selectedModel}
-            profileId={currentProfile?.id || currentModel?.sourceProfileId || null}
+            profileId={
+              currentProfile?.id || currentModel?.sourceProfileId || null
+            }
           />
           {unavailableMarkerAriaLabel ? (
             <span
@@ -968,7 +1045,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
     <KeyboardDropdown
       isOpen={isOpen}
       setIsOpen={setIsOpen}
-      disabled={disabled}
+      disabled={isEffectivelyDisabled}
       openKeys={['Enter', ' ']}
       onOpenKey={handleOpenKey}
       trackPosition={
@@ -1054,7 +1131,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
                           setSearchQuery('');
                           searchInputRef.current?.focus();
                         }}
-                        aria-label={language === 'zh' ? '清空搜索' : 'Clear search'}
+                        aria-label={
+                          language === 'zh' ? '清空搜索' : 'Clear search'
+                        }
                       >
                         <X size={14} />
                       </button>
@@ -1195,7 +1274,7 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
         return (
           <div
             className={`model-dropdown model-dropdown--variant-${variant} ${
-              disabled ? 'model-dropdown--disabled' : ''
+              isEffectivelyDisabled ? 'model-dropdown--disabled' : ''
             }`}
             ref={containerRef}
             data-testid="model-selector"

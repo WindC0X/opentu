@@ -27,6 +27,7 @@ import {
   TaskExecutionPhase,
 } from '../../types/task.types';
 import { createTaskInvocationRouteSnapshot } from '../task-invocation-route';
+import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
 
 function buildStoredImageAdapterParams(
   options: ImageGenerationOptions
@@ -110,8 +111,23 @@ export async function generateImage(
 
   // 确保 API Key 已解密
   await settingsManager.waitForInitialization();
+  const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+    'image',
+    options.model,
+    options.modelRef || null
+  );
+  const effectiveOptions: ImageGenerationOptions = embeddedModel
+    ? {
+        ...options,
+        model: embeddedModel.modelId,
+        modelRef: embeddedModel.modelRef,
+      }
+    : options;
   if (
-    !hasInvocationRouteCredentials('image', options.modelRef || options.model)
+    !hasInvocationRouteCredentials(
+      'image',
+      effectiveOptions.modelRef || effectiveOptions.model
+    )
   ) {
     throw new Error('未配置 API Key，请在设置中配置');
   }
@@ -121,11 +137,11 @@ export async function generateImage(
   const now = Date.now();
   const persistedTaskParams = buildStoredImageTaskParams(
     sanitizedParams.prompt,
-    options
+    effectiveOptions
   );
   const invocationRoute = createTaskInvocationRouteSnapshot(
     'image',
-    options.modelRef || options.model || null
+    effectiveOptions.modelRef || effectiveOptions.model || null
   );
   await taskStorageWriter.createTask(
     taskId,
@@ -154,22 +170,22 @@ export async function generateImage(
   const executorParams: ImageGenerationParams = {
     taskId,
     prompt: sanitizedParams.prompt,
-    model: options.model,
-    modelRef: options.modelRef || null,
-    size: options.size,
-    resolution: options.resolution,
-    generationMode: options.generationMode,
-    quality: options.quality,
-    referenceImages: options.referenceImages,
-    maskImage: options.maskImage,
-    inputFidelity: options.inputFidelity,
-    background: options.background,
-    outputFormat: options.outputFormat,
-    outputCompression: options.outputCompression,
-    uploadedImages: options.uploadedImages,
-    count: options.count,
-    assetMetadata: options.assetMetadata,
-    params: options.params,
+    model: effectiveOptions.model,
+    modelRef: effectiveOptions.modelRef || null,
+    size: effectiveOptions.size,
+    resolution: effectiveOptions.resolution,
+    generationMode: effectiveOptions.generationMode,
+    quality: effectiveOptions.quality,
+    referenceImages: effectiveOptions.referenceImages,
+    maskImage: effectiveOptions.maskImage,
+    inputFidelity: effectiveOptions.inputFidelity,
+    background: effectiveOptions.background,
+    outputFormat: effectiveOptions.outputFormat,
+    outputCompression: effectiveOptions.outputCompression,
+    uploadedImages: effectiveOptions.uploadedImages,
+    count: effectiveOptions.count,
+    assetMetadata: effectiveOptions.assetMetadata,
+    params: effectiveOptions.params,
   };
 
   // 调用 executor 执行

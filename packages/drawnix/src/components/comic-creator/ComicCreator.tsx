@@ -40,7 +40,12 @@ import {
   type ModelRef,
 } from '../../utils/settings-manager';
 import { promptForApiKey } from '../../utils/gemini-api';
-import { getSelectionKey } from '../../utils/model-selection';
+import {
+  findMatchingSelectableModel,
+  getModelRefFromConfig,
+  getSelectionKey,
+} from '../../utils/model-selection';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import { generateUUID } from '../../utils/runtime-helpers';
 import { taskQueueService } from '../../services/task-queue';
 import { unifiedCacheService } from '../../services/unified-cache-service';
@@ -578,9 +583,11 @@ const ComicCreator: React.FC = () => {
 
   const textModels = useSelectableModels('text');
   const imageModels = useSelectableModels('image');
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
   const geminiTextModels = useMemo(
-    () => textModels.filter(isGeminiTextModel),
-    [textModels]
+    () =>
+      creativeEmbeddedMode ? textModels : textModels.filter(isGeminiTextModel),
+    [creativeEmbeddedMode, textModels]
   );
   const initialTextSelection = useMemo(
     () =>
@@ -848,6 +855,36 @@ const ComicCreator: React.FC = () => {
     },
     [imageModel]
   );
+
+  useEffect(() => {
+    if (!creativeEmbeddedMode) return;
+    if (
+      findMatchingSelectableModel(selectableTextModels, textModel, textModelRef)
+    ) {
+      return;
+    }
+    const nextModel = selectableTextModels[0] || null;
+    const nextRef = getModelRefFromConfig(nextModel);
+    setTextModelState(nextModel?.id || '');
+    setTextModelRef(nextRef);
+    if (nextModel) {
+      writeStoredModelSelection(STORAGE_KEY_TEXT_MODEL, nextModel.id, nextRef);
+    }
+  }, [creativeEmbeddedMode, selectableTextModels, textModel, textModelRef]);
+
+  useEffect(() => {
+    if (!creativeEmbeddedMode) return;
+    if (findMatchingSelectableModel(imageModels, imageModel, imageModelRef)) {
+      return;
+    }
+    const nextModel = imageModels[0] || null;
+    const nextRef = getModelRefFromConfig(nextModel);
+    setImageModelState(nextModel?.id || '');
+    setImageModelRef(nextRef);
+    if (nextModel) {
+      writeStoredModelSelection(STORAGE_KEY_IMAGE_MODEL, nextModel.id, nextRef);
+    }
+  }, [creativeEmbeddedMode, imageModel, imageModelRef, imageModels]);
 
   const handleImageParamChange = useCallback(
     (paramId: string, value: string) => {

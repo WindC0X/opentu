@@ -30,7 +30,11 @@ import { ToolCommunicationService, ToolCommunicationHelper } from '../services/t
 import { ToolMessageType, GenerateImagePayload, GenerateImageResponse, InsertImagePayload } from '../types/tool-communication.types';
 import { taskQueueService } from '../services/task-queue';
 import { TaskType } from '../types/task.types';
-import { geminiSettings } from '../utils/settings-manager';
+import {
+  createModelRef,
+  geminiSettings,
+  resolveInvocationRoute,
+} from '../utils/settings-manager';
 import { insertImageFromUrlAndSelect } from '../data/image';
 import {
   CREATIVE_RELAY_BASE_URL,
@@ -68,17 +72,23 @@ function setupCommunicationHandlers(
 
     // 获取当前的 Gemini 设置
     const settings = geminiSettings.get();
+    const embeddedCreative = isCreativeEmbeddedMode();
+    const imageRoute = embeddedCreative
+      ? resolveInvocationRoute('image')
+      : null;
 
     // 发送初始化配置（包含 API key 等敏感信息）
     helper.initTool(toolId, {
       boardId: (board as any).id || 'default-board',
       theme: 'light', // TODO: 从应用状态获取实际主题
       config: {
-        apiKey: isCreativeEmbeddedMode() ? '' : settings.apiKey,
-        baseUrl: isCreativeEmbeddedMode()
+        apiKey: embeddedCreative ? '' : settings.apiKey,
+        baseUrl: embeddedCreative
           ? CREATIVE_RELAY_BASE_URL
           : settings.baseUrl,
-        imageModel: settings.imageModelName || 'gemini-2.5-flash-image-vip',
+        imageModel: embeddedCreative
+          ? imageRoute?.modelId || ''
+          : settings.imageModelName || 'gemini-2.5-flash-image-vip',
       },
     });
   });
@@ -195,8 +205,21 @@ function setupCommunicationHandlers(
       }
 
       // 获取当前图片模型
-      const settings = geminiSettings.get();
-      generateParams.model = settings.imageModelName || 'gemini-2.5-flash-image-vip';
+      if (isCreativeEmbeddedMode()) {
+        const imageRoute = resolveInvocationRoute('image');
+        if (!imageRoute.modelId) {
+          throw new Error('New API Creative 未提供可用图片模型，请联系管理员启用模型');
+        }
+        generateParams.model = imageRoute.modelId;
+        generateParams.modelRef = createModelRef(
+          imageRoute.profileId,
+          imageRoute.modelId
+        );
+      } else {
+        const settings = geminiSettings.get();
+        generateParams.model =
+          settings.imageModelName || 'gemini-2.5-flash-image-vip';
+      }
 
       // 通过 taskQueueService 创建任务（这样任务会出现在全局任务队列中）
       const task = taskQueueService.createTask(generateParams, TaskType.IMAGE);

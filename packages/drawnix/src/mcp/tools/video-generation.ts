@@ -18,11 +18,14 @@ import type { VideoModel } from '../../types/video.types';
 import { VIDEO_MODEL_CONFIGS } from '../../constants/video-model-config';
 import { getDefaultVideoModel } from '../../constants/model-config';
 import { geminiSettings, type ModelRef } from '../../utils/settings-manager';
+import { getFallbackDefaultModelId } from '../../utils/runtime-model-discovery';
 import { normalizeToClosestVideoSize } from '../../services/media-api/utils';
 import {
   getAdapterContextFromSettings,
   resolveAdapterForInvocation,
 } from '../../services/model-adapters';
+import { resolveCreativeEmbeddedModelForGeneration } from '../../services/creative-embedded-model-guard';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import {
   createQueueTask,
   validatePrompt,
@@ -36,8 +39,22 @@ import {
  * 优先级：设置中的模型 > 默认模型
  */
 export function getCurrentVideoModel(): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId('video');
+  }
   const settings = geminiSettings.get();
   return settings?.videoModelName || getDefaultVideoModel();
+}
+
+function getVideoModelSchemaDefault(): string | undefined {
+  return getCurrentVideoModel() || undefined;
+}
+
+function getVideoModelSchemaDescription(): string {
+  const defaultModel = getVideoModelSchemaDefault();
+  return defaultModel
+    ? `视频生成模型，默认使用 ${defaultModel}`
+    : '视频生成模型，默认使用 New API Creative 推荐视频模型';
 }
 
 /**
@@ -102,7 +119,7 @@ export interface VideoGenerationParams {
 async function executeAsync(params: VideoGenerationParams): Promise<MCPResult> {
   const {
     prompt,
-    model = 'veo3',
+    model,
     modelRef,
     seconds = '8',
     size = '1280x720',
@@ -114,11 +131,18 @@ async function executeAsync(params: VideoGenerationParams): Promise<MCPResult> {
   if (promptError) return promptError;
 
   try {
-    const requestedModel = model as string;
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'video',
+      model as string,
+      modelRef || null
+    );
+    const requestedModel =
+      embeddedModel?.modelId || (model as string) || 'veo3';
+    const requestedModelRef = embeddedModel?.modelRef || modelRef || null;
     const adapter = resolveAdapterForInvocation(
       'video',
       requestedModel,
-      modelRef || null
+      requestedModelRef
     );
 
     if (!adapter || adapter.kind !== 'video') {
@@ -131,12 +155,15 @@ async function executeAsync(params: VideoGenerationParams): Promise<MCPResult> {
 
     const duration = seconds ? Number(seconds) : undefined;
     const result = await adapter.generateVideo(
-      getAdapterContextFromSettings('video', modelRef || requestedModel),
+      getAdapterContextFromSettings(
+        'video',
+        requestedModelRef || requestedModel
+      ),
       {
         prompt,
         size,
         model: requestedModel,
-        modelRef: modelRef || null,
+        modelRef: requestedModelRef,
         duration: Number.isFinite(duration) ? duration : undefined,
         referenceImages,
         params: extraParams,
@@ -158,7 +185,7 @@ async function executeAsync(params: VideoGenerationParams): Promise<MCPResult> {
         url: videoUrl,
         format: result.format || 'mp4',
         prompt,
-        model,
+        model: requestedModel,
         seconds,
         size,
       },
@@ -181,24 +208,34 @@ function getVideoQueueConfig(params: VideoGenerationParams) {
     resultType: 'video' as const,
     getDefaultModel: getCurrentVideoModel,
     logPrefix: 'VideoGenerationTool',
-    buildTaskPayload: () => ({
-      prompt: params.prompt,
-      size: params.size || '16x9',
-      duration: parseInt(params.seconds || modelConfig.defaultDuration, 10),
-      model,
-      modelRef: params.modelRef || null,
-      uploadedImages:
-        uploadedImages && uploadedImages.length > 0
-          ? uploadedImages
-          : undefined,
-      referenceImages:
-        params.referenceImages && params.referenceImages.length > 0
-          ? params.referenceImages
-          : undefined,
-      params: params.params,
-      promptMeta: params.promptMeta,
-      knowledgeContextRefs: params.knowledgeContextRefs,
-    }),
+    buildTaskPayload: () => {
+      const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+        'video',
+        params.model || null,
+        params.modelRef || null
+      );
+      const effectiveModel = (embeddedModel?.modelId || model) as VideoModel;
+      const effectiveModelRef =
+        embeddedModel?.modelRef || params.modelRef || null;
+      return {
+        prompt: params.prompt,
+        size: params.size || '16x9',
+        duration: parseInt(params.seconds || modelConfig.defaultDuration, 10),
+        model: effectiveModel,
+        modelRef: effectiveModelRef,
+        uploadedImages:
+          uploadedImages && uploadedImages.length > 0
+            ? uploadedImages
+            : undefined,
+        referenceImages:
+          params.referenceImages && params.referenceImages.length > 0
+            ? params.referenceImages
+            : undefined,
+        params: params.params,
+        promptMeta: params.promptMeta,
+        knowledgeContextRefs: params.knowledgeContextRefs,
+      };
+    },
     buildResultData: () => ({
       size: params.size || '16x9',
       duration: parseInt(params.seconds || modelConfig.defaultDuration, 10),
@@ -235,8 +272,8 @@ export const videoGenerationTool: MCPTool = {
       },
       model: {
         type: 'string',
-        description: `视频生成模型，默认使用 ${getDefaultVideoModel()}`,
-        default: getDefaultVideoModel(),
+        description: getVideoModelSchemaDescription(),
+        default: getVideoModelSchemaDefault(),
       },
       seconds: {
         type: 'string',

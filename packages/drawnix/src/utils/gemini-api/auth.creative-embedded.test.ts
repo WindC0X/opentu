@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DRAWNIX_SETTINGS_KEY } from '../../constants/storage';
 
@@ -306,5 +307,58 @@ describe('Gemini auth in embedded creative mode', () => {
     expect(JSON.stringify(saveConfig.mock.calls)).not.toMatch(
       /sk-legacy-direct|legacy-upstream\.example/i
     );
+  });
+
+  it('fails closed for direct chat calls when the embedded model catalog is empty', async () => {
+    installSettingsManagerMocks();
+    vi.doMock('../../services/creative-model-preference-sync', () => ({
+      initializeCreativeModelPreferenceSync: vi.fn(async () => undefined),
+    }));
+    const callApiWithRetry = vi.fn(async () => ({
+      choices: [{ message: { role: 'assistant', content: 'should not call' } }],
+    }));
+    vi.doMock('./apiCalls', () => ({
+      callApiWithRetry,
+      callApiStreamRaw: vi.fn(),
+      callGoogleGenerateContentRaw: vi.fn(),
+      callVideoApiStreamRaw: vi.fn(),
+    }));
+
+    const { settingsManager } = await import('../settings-manager');
+    await import('./auth');
+    const {
+      initializeCreativeManagedSessionBroker,
+      resetCreativeManagedSessionBrokerForTests,
+    } = await import('../../services/creative-session-broker');
+    resetCreativeManagedSessionBrokerForTests();
+
+    await settingsManager.waitForInitialization();
+    const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-empty-catalog',
+              nonce: 'nonce-empty-catalog',
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({ data: [] });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    }) as unknown as typeof fetch;
+
+    await initializeCreativeManagedSessionBroker(fetcher);
+    const { sendChatWithGemini } = await import('./services');
+
+    await expect(
+      sendChatWithGemini([
+        { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      ])
+    ).rejects.toThrow(/Creative text model is unavailable/i);
+    expect(callApiWithRetry).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearCreativeSessionAuthMaterial,
@@ -12,18 +13,21 @@ import {
   AI_MODEL_SELECTION_CACHE_KEY,
   AI_MODEL_UNAVAILABLE_SELECTION_MARKERS_KEY,
 } from '../constants/storage';
-import type { ProviderCatalog, ProviderProfile } from '../utils/settings-manager';
+import type {
+  ProviderCatalog,
+  ProviderProfile,
+} from '../utils/settings-manager';
 
 const mocks = vi.hoisted(() => ({
   waitForInitialization: vi.fn(async () => undefined),
   providerProfilesGet: vi.fn<() => ProviderProfile[]>(() => []),
-  providerProfilesUpdate: vi.fn<
-    (profiles: ProviderProfile[]) => Promise<void>
-  >(async () => undefined),
+  providerProfilesUpdate: vi.fn<(profiles: ProviderProfile[]) => Promise<void>>(
+    async () => undefined
+  ),
   providerCatalogsGet: vi.fn<() => ProviderCatalog[]>(() => []),
-  providerCatalogsUpdate: vi.fn<
-    (catalogs: ProviderCatalog[]) => Promise<void>
-  >(async () => undefined),
+  providerCatalogsUpdate: vi.fn<(catalogs: ProviderCatalog[]) => Promise<void>>(
+    async () => undefined
+  ),
   hasInvocationRouteCredentials: vi.fn(() => true),
   updateActiveInvocationRouteModel: vi.fn(async () => undefined),
   initializeCreativeModelPreferenceSync: vi.fn(async () => undefined),
@@ -43,7 +47,10 @@ vi.mock('../utils/settings-manager', () => ({
   },
   hasInvocationRouteCredentials: mocks.hasInvocationRouteCredentials,
   updateActiveInvocationRouteModel: mocks.updateActiveInvocationRouteModel,
-  createModelRef: (profileId: string, modelId: string) => ({ profileId, modelId }),
+  createModelRef: (profileId: string, modelId: string) => ({
+    profileId,
+    modelId,
+  }),
 }));
 
 vi.mock('./creative-model-preference-sync', () => ({
@@ -192,42 +199,48 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
   it('bootstraps a fresh embedded browser without an API key and preserves the full model pool for discovery', async () => {
     mocks.hasInvocationRouteCredentials.mockReturnValue(false);
     const calls: Array<{ endpoint: string; init?: RequestInit }> = [];
-    const fetcher = vi.fn(async (endpoint: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ endpoint: String(endpoint), init });
-      if (String(endpoint) === '/creative/api/bootstrap') {
-        return jsonResponse({
-          data: {
-            defaultModel: 'server-must-not-win',
-            displayPolicy: { defaultVisibleModels: ['server-must-not-win'] },
-            auth: {
-              mode: 'session-broker',
-              csrfToken: 'csrf-fresh',
-              nonce: 'nonce-fresh',
+    const fetcher = vi.fn(
+      async (endpoint: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ endpoint: String(endpoint), init });
+        if (String(endpoint) === '/creative/api/bootstrap') {
+          return jsonResponse({
+            data: {
+              defaultModel: 'server-must-not-win',
+              displayPolicy: { defaultVisibleModels: ['server-must-not-win'] },
+              auth: {
+                mode: 'session-broker',
+                csrfToken: 'csrf-fresh',
+                nonce: 'nonce-fresh',
+              },
+              capabilities: {
+                videoRelayEnabled: true,
+              },
             },
-            capabilities: {
-              videoRelayEnabled: true,
+          });
+        }
+        if (String(endpoint) === '/creative/api/models') {
+          return jsonResponse({
+            uiPolicy: {
+              defaultModelId: 'server-must-not-win',
+              defaultVisibleModelIds: ['server-must-not-win'],
             },
-          },
-        });
+            data: [
+              {
+                id: 'server-must-not-win',
+                type: 'text',
+                baseUrl: 'https://leak.example',
+              },
+              { id: 'gpt-5.5', type: 'text' },
+              { id: 'deepseek-v3.2', type: 'text' },
+              { id: 'gpt-image-2-vip', type: 'image' },
+              { id: 'seedance-1.5-pro', type: 'video' },
+              { id: 'suno_music', type: 'audio' },
+            ],
+          });
+        }
+        throw new Error(`unexpected endpoint ${String(endpoint)}`);
       }
-      if (String(endpoint) === '/creative/api/models') {
-        return jsonResponse({
-          uiPolicy: {
-            defaultModelId: 'server-must-not-win',
-            defaultVisibleModelIds: ['server-must-not-win'],
-          },
-          data: [
-            { id: 'server-must-not-win', type: 'text', baseUrl: 'https://leak.example' },
-            { id: 'gpt-5.5', type: 'text' },
-            { id: 'deepseek-v3.2', type: 'text' },
-            { id: 'gpt-image-2-vip', type: 'image' },
-            { id: 'seedance-1.5-pro', type: 'video' },
-            { id: 'suno_music', type: 'audio' },
-          ],
-        });
-      }
-      throw new Error(`unexpected endpoint ${String(endpoint)}`);
-    }) as unknown as typeof fetch;
+    ) as unknown as typeof fetch;
 
     const result = await initializeCreativeManagedSessionBroker(fetcher);
 
@@ -292,7 +305,9 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
       { profileId: CREATIVE_MANAGED_PROFILE_ID, modelId: 'suno_music' }
     );
     expect(result.models).toHaveLength(6);
-    expect(mocks.initializeCreativeModelPreferenceSync).toHaveBeenCalledTimes(1);
+    expect(mocks.initializeCreativeModelPreferenceSync).toHaveBeenCalledTimes(
+      1
+    );
   });
 
   it('forces managed session-broker routes even when legacy direct credentials already exist', async () => {
@@ -383,40 +398,62 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     const audioModels = ['suno_music', 'audio-extra-1', 'audio-extra-2'].map(
       (id) => ({ id, type: 'audio' })
     );
-    const pool = [...textModels, ...imageModels, ...videoModels, ...audioModels];
+    const pool = [
+      ...textModels,
+      ...imageModels,
+      ...videoModels,
+      ...audioModels,
+    ];
     expect(pool).toHaveLength(30);
 
-    const fetcher = vi.fn(async (endpoint: RequestInfo | URL, init?: RequestInit) => {
-      expect(init).toMatchObject({
-        method: 'GET',
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json' },
-      });
-      if (String(endpoint) === '/creative/api/bootstrap') {
-        return jsonResponse({
-          data: {
-            auth: {
-              mode: 'session-broker',
-              csrfToken: 'csrf-30',
-              nonce: 'nonce-30',
-            },
-            capabilities: {
-              videoRelayEnabled: true,
-            },
-            defaultModel: 'server-owned-default',
-            uiPolicy: { defaultVisibleModelIds: ['server-owned-default'] },
-          },
+    const fetcher = vi.fn(
+      async (endpoint: RequestInfo | URL, init?: RequestInit) => {
+        expect(init).toMatchObject({
+          method: 'GET',
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
         });
+        if (String(endpoint) === '/creative/api/bootstrap') {
+          return jsonResponse({
+            data: {
+              auth: {
+                mode: 'session-broker',
+                csrfToken: 'csrf-30',
+                nonce: 'nonce-30',
+              },
+              capabilities: {
+                videoRelayEnabled: true,
+              },
+              defaultModel: 'server-owned-default',
+              uiPolicy: { defaultVisibleModelIds: ['server-owned-default'] },
+              modelPolicy: {
+                version: 1,
+                defaults: {
+                  text: 'gpt-5.5',
+                },
+                recommended: {
+                  text: [
+                    'deepseek-v3.2',
+                    'gemini-3.1-pro-preview',
+                    'claude-sonnet-4-6',
+                    'gpt-5.4',
+                    'grok-4.2',
+                  ],
+                },
+              },
+            },
+          });
+        }
+        if (String(endpoint) === '/creative/api/models') {
+          return jsonResponse({
+            defaultModelId: 'server-owned-default',
+            defaultVisibleModels: ['server-owned-default'],
+            data: pool,
+          });
+        }
+        throw new Error(`unexpected endpoint ${String(endpoint)}`);
       }
-      if (String(endpoint) === '/creative/api/models') {
-        return jsonResponse({
-          defaultModelId: 'server-owned-default',
-          defaultVisibleModels: ['server-owned-default'],
-          data: pool,
-        });
-      }
-      throw new Error(`unexpected endpoint ${String(endpoint)}`);
-    }) as unknown as typeof fetch;
+    ) as unknown as typeof fetch;
 
     const result = await initializeCreativeManagedSessionBroker(fetcher);
 
@@ -459,7 +496,10 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     );
     expect(mocks.updateActiveInvocationRouteModel).not.toHaveBeenCalledWith(
       'text',
-      { profileId: CREATIVE_MANAGED_PROFILE_ID, modelId: 'server-owned-default' }
+      {
+        profileId: CREATIVE_MANAGED_PROFILE_ID,
+        modelId: 'server-owned-default',
+      }
     );
   });
 
@@ -522,23 +562,26 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
 
   it('marks and falls back when a cloud-synced model vanishes after the creative pool is loaded', async () => {
     mocks.hasInvocationRouteCredentials.mockReturnValue(true);
-    mocks.initializeCreativeModelPreferenceSync.mockImplementationOnce(async () => {
-      localStorage.setItem(
-        AI_MODEL_SELECTION_CACHE_KEY,
-        JSON.stringify({
-          text: {
-            modelId: 'cloud-vanished-model',
-            profileId: 'remote-profile',
-            providerIdHint: 'remote-profile',
-            vendorHint: 'OTHER',
-            updatedAt: 500,
-            apiKey: 'sk-cloud-secret-abcdefghijklmnopqrstuvwxyz',
-            baseUrl: 'https://cloud-secret.example/v1',
-            Authorization: 'Bearer cloud-secret-token-abcdefghijklmnopqrstuvwxyz',
-          },
-        })
-      );
-    });
+    mocks.initializeCreativeModelPreferenceSync.mockImplementationOnce(
+      async () => {
+        localStorage.setItem(
+          AI_MODEL_SELECTION_CACHE_KEY,
+          JSON.stringify({
+            text: {
+              modelId: 'cloud-vanished-model',
+              profileId: 'remote-profile',
+              providerIdHint: 'remote-profile',
+              vendorHint: 'OTHER',
+              updatedAt: 500,
+              apiKey: 'sk-cloud-secret-abcdefghijklmnopqrstuvwxyz',
+              baseUrl: 'https://cloud-secret.example/v1',
+              Authorization:
+                'Bearer cloud-secret-token-abcdefghijklmnopqrstuvwxyz',
+            },
+          })
+        );
+      }
+    );
     const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
       if (String(endpoint) === '/creative/api/bootstrap') {
         return jsonResponse({
@@ -630,9 +673,9 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     const result = await initializeCreativeManagedSessionBroker(fetcher);
 
     expect(result.status).toBe('ready');
-    expect(getFirstProviderProfilesUpdate()[0]?.capabilities?.supportsVideo).toBe(
-      false
-    );
+    expect(
+      getFirstProviderProfilesUpdate()[0]?.capabilities?.supportsVideo
+    ).toBe(false);
     expect(result.models?.map((model) => model.id)).toEqual(
       expect.arrayContaining(['gpt-5.5', 'gpt-image-2-vip', 'suno_music'])
     );
@@ -643,9 +686,9 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
       getFirstProviderCatalogsUpdate()
     );
     expect(creativeCatalog.selectedModelIds).not.toContain('seedance-1.5-pro');
-    expect(creativeCatalog.discoveredModels.some((model) => model.type === 'video')).toBe(
-      false
-    );
+    expect(
+      creativeCatalog.discoveredModels.some((model) => model.type === 'video')
+    ).toBe(false);
     expect(mocks.updateActiveInvocationRouteModel).not.toHaveBeenCalledWith(
       'video',
       expect.anything()

@@ -40,6 +40,7 @@ import {
   createTaskInvocationRouteSnapshot,
   shouldUseStrictTaskInvocationRoute,
 } from './task-invocation-route';
+import { resolveCreativeEmbeddedModelForGeneration } from './creative-embedded-model-guard';
 
 type ImageGenerationMode = 'text_to_image' | 'image_to_image' | 'image_edit';
 type ImageOutputFormat = 'png' | 'jpeg' | 'webp';
@@ -428,6 +429,14 @@ class GenerationAPIService {
         | ModelRef
         | null
         | undefined;
+      const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+        'image',
+        requestedModel,
+        requestedModelRef || null
+      );
+      const effectiveModel = embeddedModel?.modelId || requestedModel;
+      const effectiveModelRef =
+        embeddedModel?.modelRef || requestedModelRef || null;
       const referenceImages = await this.extractReferenceImages(params);
       const shouldUseEditSchema = isImageEditRequest(params, referenceImages);
       const invocationOptions = {
@@ -437,13 +446,13 @@ class GenerationAPIService {
       };
       const adapter = resolveAdapterForInvocation(
         'image',
-        requestedModel || DEFAULT_IMAGE_MODEL_ID,
-        requestedModelRef || null,
+        effectiveModel || DEFAULT_IMAGE_MODEL_ID,
+        effectiveModelRef,
         invocationOptions
       );
 
       if (!adapter || adapter.kind !== 'image') {
-        throw new Error(`No image adapter for model: ${requestedModel}`);
+        throw new Error(`No image adapter for model: ${effectiveModel}`);
       }
 
       // Derive size: use params.size, or convert aspectRatio, or derive ratio for async models
@@ -451,22 +460,22 @@ class GenerationAPIService {
       if (!size) {
         size = this.convertAspectRatioToSize((params as any).aspectRatio);
       }
-      if (!size && isAsyncImageModel(requestedModel)) {
+      if (!size && isAsyncImageModel(effectiveModel)) {
         size = this.deriveAspectRatio(params) || '1:1';
       }
 
       const adapterContext = getAdapterContextFromSettings(
         'image',
-        requestedModelRef || requestedModel,
+        effectiveModelRef || effectiveModel,
         invocationOptions
       );
-      logImageAdapterSelection(taskId, adapter, requestedModel, adapterContext);
+      logImageAdapterSelection(taskId, adapter, effectiveModel, adapterContext);
       const idempotencyKey = createImageIdempotencyKey(taskId);
 
       const result = await adapter.generateImage(adapterContext, {
         prompt: params.prompt,
-        model: requestedModel,
-        modelRef: requestedModelRef || null,
+        model: effectiveModel,
+        modelRef: effectiveModelRef,
         idempotencyKey,
         size,
         generationMode: resolveImageGenerationMode(params, shouldUseEditSchema),
@@ -509,7 +518,7 @@ class GenerationAPIService {
               remoteId,
               invocationRoute: createTaskInvocationRouteSnapshot(
                 'image',
-                requestedModelRef || requestedModel || DEFAULT_IMAGE_MODEL_ID
+                effectiveModelRef || effectiveModel || DEFAULT_IMAGE_MODEL_ID
               ),
               executionPhase: TaskExecutionPhase.POLLING,
             });
@@ -624,14 +633,22 @@ class GenerationAPIService {
         | ModelRef
         | null
         | undefined;
+      const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+        'video',
+        requestedModel,
+        requestedModelRef || null
+      );
+      const effectiveModel = embeddedModel?.modelId || requestedModel;
+      const effectiveModelRef =
+        embeddedModel?.modelRef || requestedModelRef || null;
       const adapter = resolveAdapterForInvocation(
         'video',
-        requestedModel || 'veo3',
-        requestedModelRef || null
+        effectiveModel || 'veo3',
+        effectiveModelRef
       );
 
       if (!adapter || adapter.kind !== 'video') {
-        throw new Error(`No video adapter for model: ${requestedModel}`);
+        throw new Error(`No video adapter for model: ${effectiveModel}`);
       }
 
       taskQueueService.updateTaskStatus(taskId, 'processing' as any, {
@@ -644,12 +661,12 @@ class GenerationAPIService {
       const result = await adapter.generateVideo(
         getAdapterContextFromSettings(
           'video',
-          requestedModelRef || requestedModel
+          effectiveModelRef || effectiveModel
         ),
         {
           prompt: params.prompt,
-          model: requestedModel,
-          modelRef: requestedModelRef || null,
+          model: effectiveModel,
+          modelRef: effectiveModelRef,
           size: (params as any).size,
           duration:
             durationValue !== undefined ? Number(durationValue) : undefined,
@@ -667,7 +684,7 @@ class GenerationAPIService {
                 remoteId: videoId,
                 invocationRoute: createTaskInvocationRouteSnapshot(
                   'video',
-                  requestedModelRef || requestedModel
+                  effectiveModelRef || effectiveModel
                 ),
                 executionPhase: TaskExecutionPhase.POLLING,
               });
@@ -710,14 +727,22 @@ class GenerationAPIService {
         | ModelRef
         | null
         | undefined;
+      const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+        'audio',
+        requestedModel,
+        requestedModelRef || null
+      );
+      const effectiveModel = embeddedModel?.modelId || requestedModel;
+      const effectiveModelRef =
+        embeddedModel?.modelRef || requestedModelRef || null;
       const adapter = resolveAdapterForInvocation(
         'audio',
-        requestedModel || DEFAULT_AUDIO_MODEL_ID,
-        requestedModelRef || null
+        effectiveModel || DEFAULT_AUDIO_MODEL_ID,
+        effectiveModelRef
       );
 
       if (!adapter || adapter.kind !== 'audio') {
-        throw new Error(`No audio adapter for model: ${requestedModel}`);
+        throw new Error(`No audio adapter for model: ${effectiveModel}`);
       }
 
       taskQueueService.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
@@ -727,12 +752,12 @@ class GenerationAPIService {
       const result = await adapter.generateAudio(
         getAdapterContextFromSettings(
           'audio',
-          requestedModelRef || requestedModel
+          effectiveModelRef || effectiveModel
         ),
         {
           prompt: params.prompt,
-          model: requestedModel,
-          modelRef: requestedModelRef || null,
+          model: effectiveModel,
+          modelRef: effectiveModelRef,
           title: params.title,
           tags: params.tags,
           mv: params.mv,
@@ -758,7 +783,7 @@ class GenerationAPIService {
                 remoteId,
                 invocationRoute: createTaskInvocationRouteSnapshot(
                   'audio',
-                  requestedModelRef || requestedModel
+                  effectiveModelRef || effectiveModel
                 ),
                 executionPhase: TaskExecutionPhase.POLLING,
               });

@@ -31,6 +31,11 @@ import {
   setCreativeSessionAuthMaterial,
 } from './creative-mode';
 import { initializeCreativeModelPreferenceSync } from './creative-model-preference-sync';
+import {
+  getCreativePolicyDefaultModelForGenerationType,
+  resetCreativeModelPolicySnapshot,
+  setCreativeModelPolicyFromBootstrap,
+} from './creative-model-policy-resolver';
 
 type CreativeModelEndpointItem = {
   id?: unknown;
@@ -61,13 +66,20 @@ function cloneStaticModel(model: ModelConfig): ModelConfig {
 function inferVendor(modelId: string, owner?: string | null): ModelVendor {
   const lower = `${modelId} ${owner || ''}`.toLowerCase();
   if (lower.includes('gpt') || lower.includes('openai')) return ModelVendor.GPT;
-  if (lower.includes('gemini') || lower.includes('google')) return ModelVendor.GEMINI;
-  if (lower.includes('claude') || lower.includes('anthropic')) return ModelVendor.ANTHROPIC;
+  if (lower.includes('gemini') || lower.includes('google'))
+    return ModelVendor.GEMINI;
+  if (lower.includes('claude') || lower.includes('anthropic'))
+    return ModelVendor.ANTHROPIC;
   if (lower.includes('deepseek')) return ModelVendor.DEEPSEEK;
   if (lower.includes('grok') || lower.includes('xai')) return ModelVendor.GROK;
   if (lower.includes('qwen')) return ModelVendor.QWEN;
-  if (lower.includes('suno') || lower.includes('chirp')) return ModelVendor.SUNO;
-  if (lower.includes('seedance') || lower.includes('seedream') || lower.includes('doubao')) {
+  if (lower.includes('suno') || lower.includes('chirp'))
+    return ModelVendor.SUNO;
+  if (
+    lower.includes('seedance') ||
+    lower.includes('seedream') ||
+    lower.includes('doubao')
+  ) {
     return ModelVendor.DOUBAO;
   }
   if (lower.includes('kling')) return ModelVendor.KLING;
@@ -76,7 +88,10 @@ function inferVendor(modelId: string, owner?: string | null): ModelVendor {
   return ModelVendor.OTHER;
 }
 
-function inferModelType(item: CreativeModelEndpointItem, modelId: string): ModelType {
+function inferModelType(
+  item: CreativeModelEndpointItem,
+  modelId: string
+): ModelType {
   const hints = [
     item.type,
     item.modality,
@@ -91,7 +106,11 @@ function inferModelType(item: CreativeModelEndpointItem, modelId: string): Model
 
   if (hints.includes('image') || hints.includes('/images/')) return 'image';
   if (hints.includes('video') || hints.includes('/videos/')) return 'video';
-  if (hints.includes('audio') || hints.includes('speech') || hints.includes('music')) {
+  if (
+    hints.includes('audio') ||
+    hints.includes('speech') ||
+    hints.includes('music')
+  ) {
     return 'audio';
   }
   return 'text';
@@ -100,7 +119,8 @@ function inferModelType(item: CreativeModelEndpointItem, modelId: string): Model
 function normalizeCreativeModel(
   item: CreativeModelEndpointItem
 ): ModelConfig | null {
-  const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : null;
+  const id =
+    typeof item.id === 'string' && item.id.trim() ? item.id.trim() : null;
   if (!id) {
     return null;
   }
@@ -169,9 +189,10 @@ function getCreativeBootstrapAuth(payload: unknown): {
   nonce: string;
 } {
   const sanitized = stripCreativeServerUiPolicy(payload);
-  const data = isRecord(sanitized) && isRecord(sanitized.data)
-    ? sanitized.data
-    : sanitized;
+  const data =
+    isRecord(sanitized) && isRecord(sanitized.data)
+      ? sanitized.data
+      : sanitized;
   const auth = isRecord(data) && isRecord(data.auth) ? data.auth : null;
   const mode = normalizeAuthString(auth?.mode);
 
@@ -242,7 +263,8 @@ function applyCreativeBootstrapAssetSyncConfig(payload: unknown): void {
     readBooleanFlag(features?.assetSyncEnabled) ??
     false;
   const disabledReason =
-    (typeof assetSync?.disabledReason === 'string' && assetSync.disabledReason) ||
+    (typeof assetSync?.disabledReason === 'string' &&
+      assetSync.disabledReason) ||
     (typeof assets?.disabledReason === 'string' && assets.disabledReason) ||
     (typeof features?.assetSyncDisabledReason === 'string' &&
       features.assetSyncDisabledReason) ||
@@ -344,7 +366,9 @@ async function upsertManagedCatalog(models: ModelConfig[]): Promise<void> {
   const catalogs = providerCatalogsSettings.get();
   const nextCatalog = buildCatalog(models);
   await providerCatalogsSettings.update([
-    ...catalogs.filter((item) => item.profileId !== CREATIVE_MANAGED_PROFILE_ID),
+    ...catalogs.filter(
+      (item) => item.profileId !== CREATIVE_MANAGED_PROFILE_ID
+    ),
     nextCatalog,
   ]);
 }
@@ -361,7 +385,9 @@ async function upsertManagedUnavailableCatalog(): Promise<void> {
     error: 'creative_session_unavailable',
   };
   await providerCatalogsSettings.update([
-    ...catalogs.filter((item) => item.profileId !== CREATIVE_MANAGED_PROFILE_ID),
+    ...catalogs.filter(
+      (item) => item.profileId !== CREATIVE_MANAGED_PROFILE_ID
+    ),
     nextCatalog,
   ]);
 }
@@ -398,13 +424,15 @@ async function applyManagedDefaults(models: ModelConfig[]): Promise<void> {
   }
 }
 
-function reconcilePersistedCreativeModelSelections(models: ModelConfig[]): void {
+function reconcilePersistedCreativeModelSelections(
+  models: ModelConfig[]
+): void {
   reconcilePersistedModelSelectionsWithAvailableModels(models, {
-    text: getCreativeDefaultModel('text', models),
-    agent: getCreativeDefaultModel('text', models),
-    image: getCreativeDefaultModel('image', models),
-    video: getCreativeDefaultModel('video', models),
-    audio: getCreativeDefaultModel('audio', models),
+    text: getCreativePolicyDefaultModelForGenerationType('text', models),
+    agent: getCreativePolicyDefaultModelForGenerationType('agent', models),
+    image: getCreativePolicyDefaultModelForGenerationType('image', models),
+    video: getCreativePolicyDefaultModelForGenerationType('video', models),
+    audio: getCreativePolicyDefaultModelForGenerationType('audio', models),
   });
 }
 
@@ -419,16 +447,18 @@ async function initializeCreativeManagedSessionBrokerInternal(
 
   try {
     clearCreativeSessionAuthMaterial();
-    // Bootstrap is intentionally fetched for session/user readiness, but any
-    // model display policy fields returned by the server are discarded.
     const bootstrapPayload = await fetchCreativeJson(
       CREATIVE_BOOTSTRAP_ENDPOINT,
       fetcher
     );
+    setCreativeModelPolicyFromBootstrap(bootstrapPayload);
     applyCreativeBootstrapAuthMaterial(bootstrapPayload);
     applyCreativeBootstrapAssetSyncConfig(bootstrapPayload);
     const capabilities = getCreativeBootstrapCapabilities(bootstrapPayload);
-    const modelsPayload = await fetchCreativeJson(CREATIVE_MODELS_ENDPOINT, fetcher);
+    const modelsPayload = await fetchCreativeJson(
+      CREATIVE_MODELS_ENDPOINT,
+      fetcher
+    );
     const models = filterModelsByCreativeCapabilities(
       extractModelItems(modelsPayload)
         .map(normalizeCreativeModel)
@@ -461,13 +491,16 @@ async function initializeCreativeManagedSessionBrokerInternal(
       assetSyncEnabled: false,
       disabledReason: 'bootstrap_error',
     });
+    resetCreativeModelPolicySnapshot();
     const message = error instanceof Error ? error.message : String(error);
     try {
       await ensureManagedUnavailableProfile();
     } catch (fallbackError) {
       console.warn(
         '[CreativeSessionBroker] failed to install managed unavailable profile:',
-        fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+        fallbackError instanceof Error
+          ? fallbackError.message
+          : String(fallbackError)
       );
     }
     console.warn('[CreativeSessionBroker] initialization failed:', message);
@@ -482,7 +515,8 @@ async function initializeCreativeManagedSessionBrokerInternal(
 export function initializeCreativeManagedSessionBroker(
   fetcher: typeof fetch = fetch
 ): Promise<CreativeBootstrapResult> {
-  initializationPromise ||= initializeCreativeManagedSessionBrokerInternal(fetcher);
+  initializationPromise ||=
+    initializeCreativeManagedSessionBrokerInternal(fetcher);
   return initializationPromise;
 }
 

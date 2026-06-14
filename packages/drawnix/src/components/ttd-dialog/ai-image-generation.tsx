@@ -78,6 +78,7 @@ import {
   getSelectionKey,
 } from '../../utils/model-selection';
 import { KnowledgeNoteContextSelector } from '../shared';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 interface AIImageGenerationProps {
   initialPrompt?: string;
@@ -193,6 +194,7 @@ const AIImageGeneration = ({
   onDraftChange,
 }: AIImageGenerationProps = {}) => {
   const imageModels = useSelectableModels('image');
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
   const initialRoute = resolveInvocationRoute('image');
   const initialMatchedModel =
     findMatchingSelectableModel(
@@ -205,26 +207,28 @@ const AIImageGeneration = ({
       initialRoute.modelId,
       createModelRef(initialRoute.profileId, initialRoute.modelId)
     );
+  const initialFallbackModel = creativeEmbeddedMode
+    ? ''
+    : 'gemini-2.5-flash-image-vip';
+  const initialModelId =
+    initialMatchedModel?.id || imageModels[0]?.id || initialFallbackModel;
+  const initialModelRef =
+    getModelRefFromConfig(initialMatchedModel) ||
+    (initialRoute.modelId
+      ? createModelRef(initialRoute.profileId, initialRoute.modelId)
+      : null);
   const [currentModel, setCurrentModel] = useState(
-    initialMatchedModel?.id ||
-      imageModels[0]?.id ||
-      'gemini-2.5-flash-image-vip'
+    initialModelId
   );
   const [currentModelRef, setCurrentModelRef] = useState<ModelRef | null>(
-    getModelRefFromConfig(initialMatchedModel) ||
-      createModelRef(initialRoute.profileId, initialRoute.modelId)
+    initialModelRef
   );
   const initialSelectionKey = getSelectionKey(
-    initialMatchedModel?.id ||
-      imageModels[0]?.id ||
-      'gemini-2.5-flash-image-vip',
-    getModelRefFromConfig(initialMatchedModel) ||
-      createModelRef(initialRoute.profileId, initialRoute.modelId)
+    initialModelId,
+    initialModelRef
   );
   const initialScopedPreferences = loadScopedAIImageToolPreferences(
-    initialMatchedModel?.id ||
-      imageModels[0]?.id ||
-      'gemini-2.5-flash-image-vip',
+    initialModelId,
     initialSelectionKey
   );
   const [prompt, setPrompt] = useState(initialPrompt);
@@ -466,7 +470,7 @@ const AIImageGeneration = ({
       const nextModel =
         newSettings.imageModelName ||
         visibleImageModels[0]?.id ||
-        'gemini-2.5-flash-image-vip';
+        (creativeEmbeddedMode ? '' : 'gemini-2.5-flash-image-vip');
       if (nextModel !== currentModel) {
         setCurrentModel(nextModel);
         const matchedModel = findMatchingSelectableModel(
@@ -479,10 +483,21 @@ const AIImageGeneration = ({
     };
     geminiSettings.addListener(handleSettingsChange);
     return () => geminiSettings.removeListener(handleSettingsChange);
-  }, [currentModel, currentModelRef, visibleImageModels]);
+  }, [
+    creativeEmbeddedMode,
+    currentModel,
+    currentModelRef,
+    visibleImageModels,
+  ]);
 
   useEffect(() => {
-    if (visibleImageModels.length === 0) return;
+    if (visibleImageModels.length === 0) {
+      if (creativeEmbeddedMode && currentModel) {
+        setCurrentModel('');
+        setCurrentModelRef(null);
+      }
+      return;
+    }
     const matchedModel = findMatchingSelectableModel(
       visibleImageModels,
       currentModel,
@@ -505,7 +520,7 @@ const AIImageGeneration = ({
         return nextRef;
       });
     }
-  }, [currentModel, currentModelRef, visibleImageModels]);
+  }, [creativeEmbeddedMode, currentModel, currentModelRef, visibleImageModels]);
 
   // Keep local模型状态与头部下拉（受控 selectedModel）同步，避免展示过期的参数列表
   useEffect(() => {
@@ -711,6 +726,14 @@ const AIImageGeneration = ({
           language === 'zh'
             ? '请输入图像描述'
             : 'Please enter image description'
+        );
+        return;
+      }
+      if (creativeEmbeddedMode && !currentModel) {
+        setError(
+          language === 'zh'
+            ? 'New API Creative 未提供可用图片模型，请联系管理员启用模型'
+            : 'No image model is available in New API Creative. Ask an administrator to enable one.'
         );
         return;
       }
@@ -1074,7 +1097,10 @@ const AIImageGeneration = ({
             type="image"
             isGenerating={isGenerating}
             hasGenerated={false}
-            canGenerate={!!(prompt && prompt.trim())}
+            canGenerate={
+              !!(prompt && prompt.trim()) &&
+              (!creativeEmbeddedMode || !!currentModel)
+            }
             onGenerate={handleGenerate}
             onReset={handleReset}
             leftContent={

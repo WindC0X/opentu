@@ -39,7 +39,11 @@ import type { ReferenceImage } from '../../ttd-dialog/shared';
 import { ModelDropdown } from '../../ai-input-bar/ModelDropdown';
 import { ParametersDropdown } from '../../ai-input-bar/ParametersDropdown';
 import { useSelectableModels } from '../../../hooks/use-runtime-models';
-import { getSelectionKey } from '../../../utils/model-selection';
+import {
+  findMatchingSelectableModel,
+  getModelRefFromConfig,
+  getSelectionKey,
+} from '../../../utils/model-selection';
 import type { ModelRef } from '../../../utils/settings-manager';
 import type { VideoModel } from '../../../types/video.types';
 import { useDrawnix, DialogType } from '../../../hooks/use-drawnix';
@@ -67,6 +71,7 @@ import {
 } from '../../../utils/workflow-generation-utils';
 import { analytics } from '../../../utils/posthog-analytics';
 import { markAssetAsCharacter } from '../../../services/character-asset-metadata-service';
+import { isCreativeEmbeddedMode } from '../../../services/creative-mode';
 
 const STORAGE_KEY_IMAGE_MODEL = 'mv-creator:image-model';
 const STORAGE_KEY_VIDEO_MODEL = 'mv-creator:gen-video-model';
@@ -199,6 +204,7 @@ export const GeneratePage: React.FC<GeneratePageProps> = ({
   const [charLibraryTarget, setCharLibraryTarget] = useState<string | null>(null);
   const imageModels = useSelectableModels('image');
   const videoModels = useSelectableModels('video');
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
   const [imageModel, setImageModelState] = useState(
     () => readStoredModelSelection(STORAGE_KEY_IMAGE_MODEL, '').modelId
   );
@@ -364,6 +370,38 @@ export const GeneratePage: React.FC<GeneratePageProps> = ({
       )
     );
   }, [aspectRatio]);
+
+  useEffect(() => {
+    if (!creativeEmbeddedMode) return;
+    if (findMatchingSelectableModel(imageModels, imageModel, imageModelRef)) {
+      return;
+    }
+    const nextModel = imageModels[0] || null;
+    const nextRef = getModelRefFromConfig(nextModel);
+    setImageModel(nextModel?.id || '', nextRef);
+  }, [
+    creativeEmbeddedMode,
+    imageModel,
+    imageModelRef,
+    imageModels,
+    setImageModel,
+  ]);
+
+  useEffect(() => {
+    if (!creativeEmbeddedMode) return;
+    if (findMatchingSelectableModel(videoModels, videoModel, videoModelRef)) {
+      return;
+    }
+    const nextModel = videoModels[0] || null;
+    const nextRef = getModelRefFromConfig(nextModel);
+    setVideoModel(nextModel?.id || '', nextRef);
+  }, [
+    creativeEmbeddedMode,
+    setVideoModel,
+    videoModel,
+    videoModelRef,
+    videoModels,
+  ]);
 
   const handleImageParamChange = useCallback((paramId: string, value: string) => {
     setImageSelectedParams((prev) => {

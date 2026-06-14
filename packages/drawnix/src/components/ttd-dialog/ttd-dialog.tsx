@@ -39,6 +39,7 @@ import {
 import { getSelectionKey } from '../../utils/model-selection';
 import { WinBoxWindow } from '../winbox';
 import type { VideoModel } from '../../types/video.types';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 // 懒加载批量出图组件
 const BatchImageGeneration = lazy(() => import('./batch-image-generation'));
@@ -83,18 +84,19 @@ const TTDDialogComponent = ({
   const syncSelectedModelsFromRoutes = useCallback(() => {
     const imageRoute = resolveInvocationRoute('image');
     const videoRoute = resolveInvocationRoute('video');
+    const creativeEmbeddedMode = isCreativeEmbeddedMode();
 
     const nextImageModel =
-      imageRoute.modelId || 'gemini-3-pro-image-preview-vip';
-    const nextImageModelRef = createModelRef(
-      imageRoute.profileId,
-      nextImageModel
-    );
-    const nextVideoModel = videoRoute.modelId || 'veo3';
-    const nextVideoModelRef = createModelRef(
-      videoRoute.profileId,
-      nextVideoModel
-    );
+      imageRoute.modelId ||
+      (creativeEmbeddedMode ? '' : 'gemini-3-pro-image-preview-vip');
+    const nextImageModelRef = nextImageModel
+      ? createModelRef(imageRoute.profileId, nextImageModel)
+      : null;
+    const nextVideoModel =
+      videoRoute.modelId || (creativeEmbeddedMode ? '' : 'veo3');
+    const nextVideoModelRef = nextVideoModel
+      ? createModelRef(videoRoute.profileId, nextVideoModel)
+      : null;
 
     setSelectedImageModel((prev) =>
       prev === nextImageModel ? prev : nextImageModel

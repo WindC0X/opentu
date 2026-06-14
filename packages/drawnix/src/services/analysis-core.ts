@@ -13,6 +13,7 @@ import { validateAndEnsureConfig } from '../utils/gemini-api/auth';
 import type { GeminiConfig } from '../utils/gemini-api/types';
 import { collectJsonSources } from '../utils/llm-json-extractor';
 import { resolveInvocationPlanFromRoute } from './provider-routing';
+import { resolveCreativeEmbeddedModelForGeneration } from './creative-embedded-model-guard';
 
 /**
  * 构建 google.generateContent 协议的配置
@@ -23,14 +24,21 @@ export async function buildGenerateContentConfig(
 ): Promise<GeminiConfig> {
   await settingsManager.waitForInitialization();
 
-  const routeModel = modelRef || model || null;
+  const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+    'text',
+    model || null,
+    modelRef || null
+  );
+  const effectiveModel = embeddedModel?.modelId || model;
+  const effectiveModelRef = embeddedModel?.modelRef || modelRef || null;
+  const routeModel = effectiveModelRef || effectiveModel || null;
   const route = resolveInvocationRoute('text', routeModel);
   const plan = resolveInvocationPlanFromRoute('text', routeModel);
 
   const config: GeminiConfig = {
     apiKey: route.apiKey,
     baseUrl: route.baseUrl,
-    modelName: model || route.modelId || 'gemini-2.5-pro',
+    modelName: effectiveModel || route.modelId || 'gemini-2.5-pro',
     authType: plan?.provider.authType || 'bearer',
     providerType: plan?.provider.providerType || 'custom',
     extraHeaders: plan?.provider.extraHeaders,

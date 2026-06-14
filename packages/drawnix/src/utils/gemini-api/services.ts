@@ -41,6 +41,7 @@ import {
   type LLMApiLog,
 } from '../../services/media-executor/llm-api-logger';
 import { normalizeImageDataUrl, truncate } from '@aitu/utils';
+import { resolveCreativeEmbeddedModelForGeneration } from '../../services/creative-embedded-model-guard';
 
 function inferAuthTypeFromRoute(
   route: ReturnType<typeof resolveInvocationRoute>
@@ -77,8 +78,18 @@ function buildRuntimeConfig(
     | Partial<typeof DEFAULT_CONFIG>
     | Partial<typeof VIDEO_DEFAULT_CONFIG>
 ) {
-  const route = resolveInvocationRoute(routeType, routeModel);
-  const plan = resolveInvocationPlanFromRoute(routeType, routeModel);
+  const requestedModel =
+    typeof routeModel === 'string' ? routeModel : routeModel?.modelId || null;
+  const requestedModelRef =
+    typeof routeModel === 'string' ? null : routeModel || null;
+  const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+    routeType,
+    requestedModel,
+    requestedModelRef
+  );
+  const effectiveRouteModel = embeddedModel?.modelRef || routeModel;
+  const route = resolveInvocationRoute(routeType, effectiveRouteModel);
+  const plan = resolveInvocationPlanFromRoute(routeType, effectiveRouteModel);
 
   return {
     route,

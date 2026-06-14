@@ -66,6 +66,7 @@ import {
   executeImageViaAdapter,
   executeVideoViaAdapter,
 } from './fallback-adapter-routes';
+import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
 import { IMAGE_GENERATION_TIMEOUT_MS } from '../../constants/TASK_CONSTANTS';
 import {
   assertTaskInvocationRouteAvailable,
@@ -200,21 +201,30 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         ? GPT_IMAGE_EDIT_REQUEST_SCHEMAS
         : undefined,
     };
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'image',
+      model,
+      modelRef || null
+    );
+    const effectiveModel = embeddedModel?.modelId || model;
+    const effectiveModelRef = embeddedModel?.modelRef || modelRef || null;
 
-    const config = this.getConfig({ imageModel: modelRef || model });
+    const config = this.getConfig({
+      imageModel: effectiveModelRef || effectiveModel,
+    });
 
     // 更新任务状态为 processing
     await taskStorageWriter.updateStatus(taskId, 'processing');
     options?.onProgress?.({ progress: 0, phase: 'submitting' });
 
     const startTime = Date.now();
-    const modelName = model || config.imageConfig.modelName;
+    const modelName = effectiveModel || config.imageConfig.modelName;
 
     // 专用 adapter 路由（mj-imagine 等非 gemini 模型）
     const imageAdapter = resolveAdapterForInvocation(
       'image',
       modelName,
-      modelRef || null,
+      effectiveModelRef,
       invocationOptions
     );
     if (imageAdapter && imageAdapter.kind === 'image') {
@@ -224,7 +234,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         {
           prompt,
           model: modelName,
-          modelRef: modelRef || null,
+          modelRef: effectiveModelRef,
           size,
           resolution: params.resolution,
           quality,
@@ -254,7 +264,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         {
           prompt,
           model: modelName,
-          modelRef: modelRef || null,
+          modelRef: effectiveModelRef,
           size,
           referenceImages,
           maskImage: params.maskImage,
@@ -566,20 +576,29 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     const {
       taskId,
       prompt,
-      model = 'veo3',
+      model,
       modelRef,
       duration,
       size = '1280x720',
     } = params;
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'video',
+      model,
+      modelRef || null
+    );
+    const effectiveModel = embeddedModel?.modelId || model || 'veo3';
+    const effectiveModelRef = embeddedModel?.modelRef || modelRef || null;
     const invocationRoute = createTaskInvocationRouteSnapshot(
       'video',
-      modelRef || model
+      effectiveModelRef || effectiveModel
     );
-    const config = this.getConfig({ videoModel: modelRef || model });
+    const config = this.getConfig({
+      videoModel: effectiveModelRef || effectiveModel,
+    });
     const startTime = Date.now();
     const durationEncodedInModel = (m?: string | null) =>
       Boolean(m && m.startsWith('sora-2-'));
-    const shouldSkipSeconds = durationEncodedInModel(model);
+    const shouldSkipSeconds = durationEncodedInModel(effectiveModel);
     const secondsToSend = shouldSkipSeconds ? undefined : duration ?? '8';
 
     await taskStorageWriter.updateStatus(taskId, 'processing');
@@ -588,8 +607,8 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     // 专用 adapter 路由（kling 等非 gemini 模型）
     const videoAdapter = resolveAdapterForInvocation(
       'video',
-      model,
-      modelRef || null
+      effectiveModel,
+      effectiveModelRef
     );
     if (videoAdapter && videoAdapter.kind === 'video') {
       return executeVideoViaAdapter(
@@ -597,8 +616,8 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         videoAdapter,
         {
           prompt,
-          model,
-          modelRef: modelRef || null,
+          model: effectiveModel,
+          modelRef: effectiveModelRef,
           size,
           duration,
           referenceImages: params.referenceImages,
@@ -620,7 +639,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
 
     const logId = startLLMApiLog({
       endpoint: '/v1/videos',
-      model,
+      model: effectiveModel,
       taskType: 'video',
       prompt,
       taskId,
@@ -662,7 +681,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       const videoId = await submitVideoGeneration(
         {
           prompt,
-          model,
+          model: effectiveModel,
           size,
           duration: secondsToSend,
           referenceImages,
@@ -788,12 +807,19 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       modelRef,
       systemPrompt,
     } = params;
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'text',
+      textModel || model || null,
+      modelRef || null
+    );
+    const effectiveModel = embeddedModel?.modelId || textModel || model;
+    const effectiveModelRef = embeddedModel?.modelRef || modelRef || null;
     const config = this.getConfig({
-      textModel: modelRef || textModel || model,
+      textModel: effectiveModelRef || effectiveModel,
     });
     const startTime = Date.now();
     // 优先使用用户选择的模型
-    const modelName = textModel || model || config.textConfig.modelName;
+    const modelName = effectiveModel || config.textConfig.modelName;
     // 合并图片参数
     const allImages = referenceImages || images || [];
 
@@ -947,10 +973,17 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       params: extraParams,
     } = params;
     const startTime = Date.now();
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'text',
+      model,
+      modelRef || null
+    );
+    const effectiveModel = embeddedModel?.modelId || model;
+    const effectiveModelRef = embeddedModel?.modelRef || modelRef || null;
     const config = this.getConfig({
-      textModel: modelRef || model,
+      textModel: effectiveModelRef || effectiveModel,
     });
-    const modelName = model || config.textConfig.modelName;
+    const modelName = effectiveModel || config.textConfig.modelName;
     const normalizedPrompt = prompt.trim();
     const messages: UnifiedGeminiMessage[] = [
       {

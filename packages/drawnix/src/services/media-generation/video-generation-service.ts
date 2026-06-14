@@ -27,6 +27,7 @@ import {
   TaskExecutionPhase,
 } from '../../types/task.types';
 import { createTaskInvocationRouteSnapshot } from '../task-invocation-route';
+import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
 
 /**
  * 生成视频
@@ -49,8 +50,23 @@ export async function generateVideo(
 
   // 确保 API Key 已解密
   await settingsManager.waitForInitialization();
+  const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+    'video',
+    options.model,
+    options.modelRef || null
+  );
+  const effectiveOptions: VideoGenerationOptions = embeddedModel
+    ? {
+        ...options,
+        model: embeddedModel.modelId,
+        modelRef: embeddedModel.modelRef,
+      }
+    : options;
   if (
-    !hasInvocationRouteCredentials('video', options.modelRef || options.model)
+    !hasInvocationRouteCredentials(
+      'video',
+      effectiveOptions.modelRef || effectiveOptions.model
+    )
   ) {
     throw new Error('未配置 API Key，请在设置中配置');
   }
@@ -60,22 +76,22 @@ export async function generateVideo(
   const now = Date.now();
   const invocationRoute = createTaskInvocationRouteSnapshot(
     'video',
-    options.modelRef || options.model || 'veo3'
+    effectiveOptions.modelRef || effectiveOptions.model || 'veo3'
   );
   await taskStorageWriter.createTask(
     taskId,
     'video',
     {
       prompt: sanitizedParams.prompt,
-      model: options.model || 'veo3',
-      modelRef: options.modelRef || null,
+      model: effectiveOptions.model || 'veo3',
+      modelRef: effectiveOptions.modelRef || null,
       duration:
-        typeof options.duration === 'string'
-          ? parseInt(options.duration, 10)
-          : options.duration,
-      size: options.size,
-      params: options.params,
-      promptMeta: options.promptMeta,
+        typeof effectiveOptions.duration === 'string'
+          ? parseInt(effectiveOptions.duration, 10)
+          : effectiveOptions.duration,
+      size: effectiveOptions.size,
+      params: effectiveOptions.params,
+      promptMeta: effectiveOptions.promptMeta,
     },
     invocationRoute
   );
@@ -87,11 +103,11 @@ export async function generateVideo(
     status: QueueTaskStatus.PROCESSING,
     params: {
       prompt: sanitizedParams.prompt,
-      model: options.model || 'veo3',
-      modelRef: options.modelRef || null,
-      size: options.size,
-      params: options.params,
-      promptMeta: options.promptMeta,
+      model: effectiveOptions.model || 'veo3',
+      modelRef: effectiveOptions.modelRef || null,
+      size: effectiveOptions.size,
+      params: effectiveOptions.params,
+      promptMeta: effectiveOptions.promptMeta,
     },
     createdAt: now,
     updatedAt: now,
@@ -108,14 +124,14 @@ export async function generateVideo(
   const executorParams: VideoGenerationParams = {
     taskId,
     prompt: sanitizedParams.prompt,
-    model: options.model || 'veo3',
-    modelRef: options.modelRef || null,
-    duration: options.duration?.toString(),
-    size: options.size || '1280x720',
-    inputReference: options.inputReference,
-    inputReferences: options.inputReferences,
-    referenceImages: options.referenceImages,
-    params: options.params,
+    model: effectiveOptions.model || 'veo3',
+    modelRef: effectiveOptions.modelRef || null,
+    duration: effectiveOptions.duration?.toString(),
+    size: effectiveOptions.size || '1280x720',
+    inputReference: effectiveOptions.inputReference,
+    inputReferences: effectiveOptions.inputReferences,
+    referenceImages: effectiveOptions.referenceImages,
+    params: effectiveOptions.params,
   };
 
   // 调用 executor 执行

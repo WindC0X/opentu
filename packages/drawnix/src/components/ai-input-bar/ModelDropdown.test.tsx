@@ -145,13 +145,13 @@ describe('ModelDropdown', () => {
         onSelect={vi.fn()}
       />
     );
-    const wrapper = container.querySelector(
-      '.model-dropdown'
-    ) as HTMLElement;
+    const wrapper = container.querySelector('.model-dropdown') as HTMLElement;
     mockRect(wrapper, { top: 520, left: 42, bottom: 552, width: 180 });
 
     fireEvent.mouseDown(
-      container.querySelector('.model-dropdown__trigger--minimal') as HTMLElement
+      container.querySelector(
+        '.model-dropdown__trigger--minimal'
+      ) as HTMLElement
     );
 
     const menu = document.body.querySelector(
@@ -268,12 +268,12 @@ describe('ModelDropdown', () => {
       /defaultModel|defaultVisible|displayPolicy/i
     );
     expect(defaultModel?.id).toBe('gpt-5.5');
-    expect(getCreativeDefaultVisibleModels('text', fullPool).map((model) => model.id)).toEqual([
-      'gpt-5.5',
-      'deepseek-v3.2',
-      'gemini-3.1-pro-preview',
-    ]);
-    expect(getCreativeMoreModels('text', fullPool).map((model) => model.id)).toEqual(
+    expect(
+      getCreativeDefaultVisibleModels('text', fullPool).map((model) => model.id)
+    ).toEqual(['gpt-5.5', 'deepseek-v3.2', 'gemini-3.1-pro-preview']);
+    expect(
+      getCreativeMoreModels('text', fullPool).map((model) => model.id)
+    ).toEqual(
       expect.arrayContaining(['server-owned-default', 'long-tail-model'])
     );
 
@@ -291,20 +291,24 @@ describe('ModelDropdown', () => {
     mockRect(wrapper, { top: 120, left: 24, bottom: 152, width: 240 });
 
     fireEvent.mouseDown(
-      container.querySelector('.model-dropdown__trigger--minimal') as HTMLElement
+      container.querySelector(
+        '.model-dropdown__trigger--minimal'
+      ) as HTMLElement
     );
 
     expect(container.textContent).toContain('#g55');
     expect(document.body.textContent).not.toContain('Server Owned Default');
 
     fireEvent.change(
-      document.body.querySelector('.model-dropdown__search-input') as HTMLInputElement,
+      document.body.querySelector(
+        '.model-dropdown__search-input'
+      ) as HTMLInputElement,
       { target: { value: 'server-owned-default' } }
     );
 
-    const serverOption = screen.getByText('Server Default').closest(
-      '.model-dropdown__item'
-    ) as HTMLElement;
+    const serverOption = screen
+      .getByText('Server Default')
+      .closest('.model-dropdown__item') as HTMLElement;
     expect(serverOption?.textContent).toContain('#server-owned-default');
 
     fireEvent.click(serverOption);
@@ -368,23 +372,25 @@ describe('ModelDropdown', () => {
     const triggerMarker = screen.getByLabelText(
       'Previous model stale-server-model is unavailable; switched to gpt-5.5'
     );
-    expect(triggerMarker.classList.contains('model-dropdown__unavailable-marker')).toBe(
-      true
-    );
+    expect(
+      triggerMarker.classList.contains('model-dropdown__unavailable-marker')
+    ).toBe(true);
     expect(triggerMarker.textContent).toBe('Switched');
 
     const wrapper = container.querySelector('.model-dropdown') as HTMLElement;
     mockRect(wrapper, { top: 120, left: 24, bottom: 152, width: 240 });
     fireEvent.mouseDown(
-      container.querySelector('.model-dropdown__trigger--minimal') as HTMLElement
+      container.querySelector(
+        '.model-dropdown__trigger--minimal'
+      ) as HTMLElement
     );
 
     const menuNotice = screen.getByText(
       'Previous model stale-server-model is unavailable. Using gpt-5.5 instead.'
     );
-    expect(menuNotice.classList.contains('model-dropdown__unavailable-notice')).toBe(
-      true
-    );
+    expect(
+      menuNotice.classList.contains('model-dropdown__unavailable-notice')
+    ).toBe(true);
   });
 
   it('does not fall back to OpenTU static model config for a missing embedded model selection', () => {
@@ -405,5 +411,41 @@ describe('ModelDropdown', () => {
 
     expect(trigger?.textContent).toContain('#img');
     expect(trigger?.textContent).not.toContain('#gpt2');
+    expect((trigger as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('reconciles an embedded stale selection to the first managed model', () => {
+    window.history.pushState({}, '', '/creative/');
+    const managedImageModel: ModelConfig = {
+      id: 'managed-image',
+      label: 'Managed Image',
+      shortCode: 'mimg',
+      type: 'image',
+      vendor: ModelVendor.GPT,
+      sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+      sourceProfileName: 'New API Creative',
+      selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::managed-image`,
+    };
+    const onSelect = vi.fn();
+    const onSelectModel = vi.fn();
+
+    render(
+      <ModelDropdown
+        selectedModel="gpt-image-2"
+        models={[managedImageModel]}
+        onSelect={onSelect}
+        onSelectModel={onSelectModel}
+        showProviderAction={false}
+      />
+    );
+
+    expect(onSelect).toHaveBeenCalledWith(
+      'managed-image',
+      expect.objectContaining({
+        profileId: CREATIVE_MANAGED_PROFILE_ID,
+        modelId: 'managed-image',
+      })
+    );
+    expect(onSelectModel).toHaveBeenCalledWith(managedImageModel);
   });
 });

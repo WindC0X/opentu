@@ -23,6 +23,9 @@ import type { VideoModel } from '../types/video.types';
 import type { GenerationType } from '../utils/ai-input-parser';
 import { applyForcedSunoParams } from '../utils/suno-model-aliases';
 import { getEffectiveVideoCompatibleParams } from './video-binding-utils';
+import { isCreativeEmbeddedMode } from './creative-mode';
+import { getSelectableModels } from '../utils/runtime-model-discovery';
+import { getCreativePolicyDefaultModelForGenerationType } from './creative-model-policy-resolver';
 
 type PersistedParams = Record<string, string>;
 
@@ -422,6 +425,14 @@ function saveAIInputVideoParams(
 }
 
 function getDefaultModelForGenerationType(type: GenerationType): string {
+  if (isCreativeEmbeddedMode()) {
+    const modelType = type === 'agent' ? 'text' : type;
+    const defaultModel = getCreativePolicyDefaultModelForGenerationType(
+      type,
+      getSelectableModels(modelType)
+    );
+    return defaultModel?.id || '';
+  }
   if (type === 'video') return getDefaultVideoModel();
   if (type === 'audio') return getDefaultAudioModel();
   if (type === 'text' || type === 'agent') return DEFAULT_TEXT_MODEL;

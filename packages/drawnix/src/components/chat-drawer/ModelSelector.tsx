@@ -37,6 +37,7 @@ import {
 } from '../../utils/model-selection';
 import { createModelRef, type ModelRef } from '../../utils/settings-manager';
 import { getPinnedSelectableModel } from '../../utils/runtime-model-discovery';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 export interface ModelSelectorProps {
   className?: string;
@@ -73,9 +74,7 @@ const ModelDescFallback: React.FC<{ model: ModelConfig }> = React.memo(
   ({ model }) => {
     const meta = useModelMeta(model.sourceProfileId, model.id);
     if (!meta?.description) return null;
-    return (
-      <div className="model-selector__item-desc">{meta.description}</div>
-    );
+    return <div className="model-selector__item-desc">{meta.description}</div>;
   }
 );
 
@@ -102,7 +101,9 @@ function getItemInitial(model: ModelConfig): string {
 export const ModelSelector: React.FC<ModelSelectorProps> = React.memo(
   ({ className, value, valueRef, onChange, variant = 'capsule' }) => {
     const baseSelectableModels = useSelectableModels('text');
-    const defaultModelId = baseSelectableModels[0]?.id || DEFAULT_TEXT_MODEL_ID;
+    const defaultModelId =
+      baseSelectableModels[0]?.id ||
+      (isCreativeEmbeddedMode() ? '' : DEFAULT_TEXT_MODEL_ID);
     const [internalModel, setInternalModel] = useState<string>(defaultModelId);
     const [internalModelRef, setInternalModelRef] = useState<ModelRef | null>(
       () => createModelRef(null, defaultModelId)

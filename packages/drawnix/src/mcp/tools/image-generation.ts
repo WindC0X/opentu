@@ -23,6 +23,7 @@ import {
   IMAGE_PARAMS,
 } from '../../constants/model-config';
 import { geminiSettings, type ModelRef } from '../../utils/settings-manager';
+import { getFallbackDefaultModelId } from '../../utils/runtime-model-discovery';
 import { normalizeToClosestImageSize } from '../../services/media-api/utils';
 import {
   getAdapterContextFromSettings,
@@ -32,6 +33,8 @@ import {
   GPT_IMAGE_EDIT_REQUEST_SCHEMAS,
   isGPTImageEditRequestSchema,
 } from '../../services/model-adapters';
+import { resolveCreativeEmbeddedModelForGeneration } from '../../services/creative-embedded-model-guard';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import {
   createQueueTask,
   validatePrompt,
@@ -45,8 +48,22 @@ import {
  * 优先级：设置中的模型 > 默认模型
  */
 export function getCurrentImageModel(): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId('image');
+  }
   const settings = geminiSettings.get();
   return settings?.imageModelName || getDefaultImageModel();
+}
+
+function getImageModelSchemaDefault(): string | undefined {
+  return getCurrentImageModel() || undefined;
+}
+
+function getImageModelSchemaDescription(): string {
+  const defaultModel = getImageModelSchemaDefault();
+  return defaultModel
+    ? `图片生成模型，默认使用 ${defaultModel}`
+    : '图片生成模型，默认使用 New API Creative 推荐图片模型';
 }
 
 /**
@@ -174,14 +191,21 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
   if (promptError) return promptError;
 
   try {
-    const requestedModel = params.model || getCurrentImageModel();
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'image',
+      params.model || null,
+      modelRef || null
+    );
+    const requestedModel =
+      embeddedModel?.modelId || params.model || getCurrentImageModel();
+    const requestedModelRef = embeddedModel?.modelRef || modelRef || null;
     const preferredRequestSchema = shouldUseEditSchema(params)
       ? GPT_IMAGE_EDIT_REQUEST_SCHEMAS
       : undefined;
     const adapter = resolveAdapterForInvocation(
       'image',
       requestedModel,
-      modelRef || null,
+      requestedModelRef,
       {
         preferredRequestSchema,
       }
@@ -196,13 +220,17 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
     }
 
     const result = await adapter.generateImage(
-      getAdapterContextFromSettings('image', modelRef || requestedModel, {
-        preferredRequestSchema,
-      }),
+      getAdapterContextFromSettings(
+        'image',
+        requestedModelRef || requestedModel,
+        {
+          preferredRequestSchema,
+        }
+      ),
       {
         prompt,
         model: requestedModel,
-        modelRef: modelRef || null,
+        modelRef: requestedModelRef,
         size: size || '1x1',
         generationMode:
           params.generationMode ||
@@ -256,6 +284,14 @@ function getImageQueueConfig(params: ImageGenerationParams) {
     logPrefix: 'ImageGenerationTool',
     buildTaskPayload: () => {
       const adapterParams = buildQueueAdapterParams(params);
+      const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+        'image',
+        params.model || null,
+        params.modelRef || null
+      );
+      const model =
+        embeddedModel?.modelId || params.model || getCurrentImageModel();
+      const modelRef = embeddedModel?.modelRef || params.modelRef || null;
       return {
         prompt: params.prompt,
         size: params.size || '1x1',
@@ -273,8 +309,8 @@ function getImageQueueConfig(params: ImageGenerationParams) {
         background: params.background,
         outputFormat: params.outputFormat,
         outputCompression: params.outputCompression,
-        model: params.model || getCurrentImageModel(),
-        modelRef: params.modelRef || null,
+        model,
+        modelRef,
         targetFrameId: params.targetFrameId,
         targetFrameDimensions: params.targetFrameDimensions,
         pptSlideImage: params.pptSlideImage,
@@ -376,8 +412,8 @@ export const imageGenerationTool: MCPTool = {
       },
       model: {
         type: 'string',
-        description: `图片生成模型，默认使用 ${getDefaultImageModel()}`,
-        default: getDefaultImageModel(),
+        description: getImageModelSchemaDescription(),
+        default: getImageModelSchemaDefault(),
       },
       count: {
         type: 'number',

@@ -69,6 +69,7 @@ import {
   getSelectionKey,
 } from '../../utils/model-selection';
 import { KnowledgeNoteContextSelector } from '../shared';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 function areStringMapsEqual(
   a: Record<string, string>,
@@ -235,6 +236,7 @@ const AIVideoGeneration = ({
   onDraftChange,
 }: AIVideoGenerationProps = {}) => {
   const videoModels = useSelectableModels('video');
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
   const [prompt, setPrompt] = useState(initialPrompt);
   const [knowledgeContextRefs, setKnowledgeContextRefs] = useState<
     KnowledgeContextRef[]
@@ -273,29 +275,28 @@ const AIVideoGeneration = ({
       initialPreferredModelId,
       initialPreferredModelRef
     );
+  const initialFallbackModel = creativeEmbeddedMode
+    ? ''
+    : normalizeVideoModel('veo3');
+  const initialModelId =
+    (initialMatchedModel?.id as string | undefined) ||
+    videoModels[0]?.id ||
+    initialFallbackModel;
   const initialResolvedModelRef = resolveVideoModelRef(
     videoModels,
-    (initialMatchedModel?.id as VideoModel) || initialPreferredModelId,
+    initialModelId,
     getModelRefFromConfig(initialMatchedModel) || initialPreferredModelRef
   );
-  const [currentModel, setCurrentModel] = useState<VideoModel>(
-    (initialMatchedModel?.id as VideoModel) ||
-      videoModels[0]?.id ||
-      normalizeVideoModel('veo3')
-  );
+  const [currentModel, setCurrentModel] = useState<string>(initialModelId);
   const [currentModelRef, setCurrentModelRef] = useState<ModelRef | null>(
     initialResolvedModelRef
   );
   const initialVideoSelectionKey = getSelectionKey(
-    ((initialMatchedModel?.id as VideoModel) ||
-      videoModels[0]?.id ||
-      normalizeVideoModel('veo3')) as VideoModel,
+    initialModelId,
     initialResolvedModelRef
   );
   const initialScopedVideoPreferences = loadScopedAIVideoToolPreferences(
-    ((initialMatchedModel?.id as VideoModel) ||
-      videoModels[0]?.id ||
-      normalizeVideoModel('veo3')) as VideoModel,
+    initialModelId as VideoModel,
     initialVideoSelectionKey
   );
   const visibleVideoModels = React.useMemo(() => {
@@ -504,10 +505,12 @@ const AIVideoGeneration = ({
     []
   );
   const storyboardConfig = React.useMemo(
-    () => getStoryboardModeConfig(currentModel),
+    () => getStoryboardModeConfig(currentModel as VideoModel),
     [currentModel]
   );
-  const modelSupportsStoryboard = supportsStoryboardMode(currentModel);
+  const modelSupportsStoryboard = supportsStoryboardMode(
+    currentModel as VideoModel
+  );
 
   // Use generation history from task queue
   const { videoHistory } = useGenerationHistory();
@@ -548,7 +551,8 @@ const AIVideoGeneration = ({
     }
 
     const handleSettingsChange = (newSettings: any) => {
-      const newModel = newSettings.videoModelName || 'veo3';
+      const newModel =
+        newSettings.videoModelName || (creativeEmbeddedMode ? '' : 'veo3');
       if (newModel !== currentModel) {
         setCurrentModel(newModel);
         const nextModelRef = resolveVideoModelRef(
@@ -562,6 +566,7 @@ const AIVideoGeneration = ({
     geminiSettings.addListener(handleSettingsChange);
     return () => geminiSettings.removeListener(handleSettingsChange);
   }, [
+    creativeEmbeddedMode,
     currentModel,
     currentModelRef,
     isModelControlled,
@@ -571,7 +576,13 @@ const AIVideoGeneration = ({
   ]);
 
   useEffect(() => {
-    if (visibleVideoModels.length === 0) return;
+    if (visibleVideoModels.length === 0) {
+      if (creativeEmbeddedMode && currentModel) {
+        setCurrentModel('');
+        setCurrentModelRef(null);
+      }
+      return;
+    }
     const matchedModel = findMatchingSelectableModel(
       visibleVideoModels,
       currentModel,
@@ -601,7 +612,7 @@ const AIVideoGeneration = ({
       }
       return nextModelRef;
     });
-  }, [currentModel, currentModelRef, visibleVideoModels]);
+  }, [creativeEmbeddedMode, currentModel, currentModelRef, visibleVideoModels]);
 
   // Sync model from selectedModel prop (from parent component)
   useEffect(() => {
@@ -1041,6 +1052,14 @@ const AIVideoGeneration = ({
           return;
         }
       }
+      if (creativeEmbeddedMode && !currentModel) {
+        setError(
+          language === 'zh'
+            ? 'New API Creative 未提供可用视频模型，请联系管理员启用模型'
+            : 'No video model is available in New API Creative. Ask an administrator to enable one.'
+        );
+        return;
+      }
 
       if (
         imageUploadConfig.required &&
@@ -1401,9 +1420,10 @@ const AIVideoGeneration = ({
             isGenerating={isGenerating}
             hasGenerated={false}
             canGenerate={
-              storyboardEnabled
+              (storyboardEnabled
                 ? storyboardScenes.length > 0
-                : !!(prompt && prompt.trim())
+                : !!(prompt && prompt.trim())) &&
+              (!creativeEmbeddedMode || !!currentModel)
             }
             onGenerate={handleGenerate}
             onReset={handleReset}

@@ -8,10 +8,13 @@ import type { MCPExecuteOptions, MCPResult, MCPTool } from '../types';
 import { TaskType, type KnowledgeContextRef } from '../../types/task.types';
 import { geminiSettings, type ModelRef } from '../../utils/settings-manager';
 import { getDefaultAudioModel } from '../../constants/model-config';
+import { getFallbackDefaultModelId } from '../../utils/runtime-model-discovery';
 import {
   audioAPIService,
   extractAudioGenerationResult,
 } from '../../services/audio-api-service';
+import { resolveCreativeEmbeddedModelForGeneration } from '../../services/creative-embedded-model-guard';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import {
   createQueueTask,
   validatePrompt,
@@ -46,8 +49,18 @@ export interface AudioGenerationParams {
 }
 
 export function getCurrentAudioModel(): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId('audio');
+  }
   const settings = geminiSettings.get();
   return settings?.audioModelName || getDefaultAudioModel();
+}
+
+function getAudioModelSchemaDescription(): string {
+  const defaultModel = getCurrentAudioModel();
+  return defaultModel
+    ? `音频能力模型 ID，默认 ${defaultModel}`
+    : '音频能力模型 ID，默认使用 New API Creative 推荐音频模型';
 }
 
 async function executeAsync(params: AudioGenerationParams): Promise<MCPResult> {
@@ -55,9 +68,17 @@ async function executeAsync(params: AudioGenerationParams): Promise<MCPResult> {
   if (promptError) return promptError;
 
   try {
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'audio',
+      params.model || null,
+      params.modelRef || null
+    );
+    const model =
+      embeddedModel?.modelId || params.model || getCurrentAudioModel();
+    const modelRef = embeddedModel?.modelRef || params.modelRef || null;
     const response = await audioAPIService.generateAudioWithPolling({
-      model: params.model || getCurrentAudioModel(),
-      modelRef: params.modelRef || null,
+      model,
+      modelRef,
       prompt: params.prompt,
       sunoAction: params.sunoAction,
       notifyHook: params.notifyHook,
@@ -90,7 +111,8 @@ async function executeAsync(params: AudioGenerationParams): Promise<MCPResult> {
         lyricsTags: result.lyricsTags,
         duration: result.duration,
         imageUrl: result.imageUrl,
-        format: result.format || (result.resultKind === 'lyrics' ? 'lyrics' : 'mp3'),
+        format:
+          result.format || (result.resultKind === 'lyrics' ? 'lyrics' : 'mp3'),
         providerTaskId: result.providerTaskId,
         primaryClipId: result.primaryClipId,
         clipIds: result.clipIds,
@@ -114,33 +136,43 @@ function getAudioQueueConfig(params: AudioGenerationParams) {
     resultType: 'audio' as const,
     getDefaultModel: getCurrentAudioModel,
     maxCount: 1,
-    buildTaskPayload: () => ({
-      prompt: params.prompt,
-      model: params.model || getCurrentAudioModel(),
-      modelRef: params.modelRef || null,
-      sunoAction: params.sunoAction,
-      notifyHook: params.notifyHook,
-      title: params.title,
-      tags: params.tags,
-      mv: params.mv,
-      continueClipId: params.continueClipId,
-      continueTaskId: params.continueTaskId,
-      continueAt: params.continueAt,
-      infillStartS: params.infillStartS,
-      infillEndS: params.infillEndS,
-      promptMeta: params.promptMeta,
-      knowledgeContextRefs: params.knowledgeContextRefs,
-      ...((params.params || params.continueSource)
-        ? {
-            params: {
-              ...(params.params || {}),
-              ...(params.continueSource
-                ? { continueSource: params.continueSource }
-                : {}),
-            },
-          }
-        : {}),
-    }),
+    buildTaskPayload: () => {
+      const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+        'audio',
+        params.model || null,
+        params.modelRef || null
+      );
+      const model =
+        embeddedModel?.modelId || params.model || getCurrentAudioModel();
+      const modelRef = embeddedModel?.modelRef || params.modelRef || null;
+      return {
+        prompt: params.prompt,
+        model,
+        modelRef,
+        sunoAction: params.sunoAction,
+        notifyHook: params.notifyHook,
+        title: params.title,
+        tags: params.tags,
+        mv: params.mv,
+        continueClipId: params.continueClipId,
+        continueTaskId: params.continueTaskId,
+        continueAt: params.continueAt,
+        infillStartS: params.infillStartS,
+        infillEndS: params.infillEndS,
+        promptMeta: params.promptMeta,
+        knowledgeContextRefs: params.knowledgeContextRefs,
+        ...(params.params || params.continueSource
+          ? {
+              params: {
+                ...(params.params || {}),
+                ...(params.continueSource
+                  ? { continueSource: params.continueSource }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+    },
     buildResultData: () => ({
       mv: params.mv,
     }),
@@ -171,7 +203,8 @@ export const audioGenerationTool: MCPTool = {
       },
       model: {
         type: 'string',
-        description: '音频能力模型 ID，默认 suno_music',
+        description: getAudioModelSchemaDescription(),
+        default: getCurrentAudioModel() || undefined,
       },
       title: {
         type: 'string',
@@ -191,7 +224,8 @@ export const audioGenerationTool: MCPTool = {
       },
       mv: {
         type: 'string',
-        description: 'Suno 版本字段，如 chirp-v5-5、chirp-v5、chirp-v4-5、chirp-v4、chirp-v3-5',
+        description:
+          'Suno 版本字段，如 chirp-v5-5、chirp-v5、chirp-v4-5、chirp-v4、chirp-v3-5',
       },
       continueClipId: {
         type: 'string',

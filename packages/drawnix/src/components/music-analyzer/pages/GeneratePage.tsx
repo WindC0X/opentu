@@ -10,7 +10,11 @@ import { TaskType, type KnowledgeContextRef } from '../../../types/task.types';
 import { ModelDropdown } from '../../ai-input-bar/ModelDropdown';
 import { KnowledgeNoteContextSelector } from '../../shared';
 import { useSelectableModels } from '../../../hooks/use-runtime-models';
-import { getSelectionKey } from '../../../utils/model-selection';
+import {
+  findMatchingSelectableModel,
+  getModelRefFromConfig,
+  getSelectionKey,
+} from '../../../utils/model-selection';
 import type { ModelRef } from '../../../utils/settings-manager';
 import { getCompatibleParams, getDefaultAudioModel } from '../../../constants/model-config';
 import {
@@ -18,6 +22,7 @@ import {
   writeStoredModelSelection,
 } from '../utils';
 import { analytics } from '../../../utils/posthog-analytics';
+import { isCreativeEmbeddedMode } from '../../../services/creative-mode';
 
 const STORAGE_KEY_AUDIO_MODEL = 'music-analyzer:audio-model';
 
@@ -178,6 +183,26 @@ export const GeneratePage: React.FC<GeneratePageProps> = ({
       }),
     [audioModels]
   );
+  const selectableAudioModels = sunoModels.length > 0 ? sunoModels : audioModels;
+  useEffect(() => {
+    if (!isCreativeEmbeddedMode()) return;
+    if (
+      findMatchingSelectableModel(
+        selectableAudioModels,
+        selectedModel,
+        selectedModelRef
+      )
+    ) {
+      return;
+    }
+    const nextModel = selectableAudioModels[0] || null;
+    const nextRef = getModelRefFromConfig(nextModel);
+    setSelectedModelState(nextModel?.id || '');
+    setSelectedModelRef(nextRef);
+    if (nextModel) {
+      writeStoredModelSelection(STORAGE_KEY_AUDIO_MODEL, nextModel.id, nextRef);
+    }
+  }, [selectableAudioModels, selectedModel, selectedModelRef]);
   const mvParam = useMemo(
     () => getCompatibleParams(selectedModel).find((param) => param.id === 'mv'),
     [selectedModel]
@@ -401,7 +426,7 @@ export const GeneratePage: React.FC<GeneratePageProps> = ({
           selectedModel={selectedModel}
           selectedSelectionKey={getSelectionKey(selectedModel, selectedModelRef)}
           onSelect={setSelectedModel}
-          models={sunoModels.length > 0 ? sunoModels : audioModels}
+          models={selectableAudioModels}
           variant="form"
           placement="down"
           placeholder="选择音频生成模型"

@@ -13,7 +13,12 @@ import { taskQueueService } from '../task-queue';
 import { TaskType } from '../../types/task.types';
 import { geminiSettings } from '../../utils/settings-manager';
 import { getDefaultImageModel } from '../../constants/model-config';
-import { getPreferredModels } from '../../utils/runtime-model-discovery';
+import {
+  getFallbackDefaultModelId,
+  getPreferredModels,
+} from '../../utils/runtime-model-discovery';
+import { isCreativeEmbeddedMode } from '../creative-mode';
+import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
 
 /**
  * 灵感图参数
@@ -37,6 +42,9 @@ export interface InspirationBoardParams {
  * 获取当前图片模型
  */
 function getCurrentImageModel(): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId('image');
+  }
   const settings = geminiSettings.get();
   return (
     settings.imageModelName ||
@@ -85,9 +93,6 @@ export function createInspirationBoardTask(
   // 构建生图提示词
   const prompt = buildInspirationBoardPrompt(theme, validImageCount);
 
-  // 确定使用的模型
-  const actualModel = model || getCurrentImageModel();
-
   // 将参考图片转换为 uploadedImages 格式
   const uploadedImages = referenceImages?.map((url, index) => ({
     type: 'url' as const,
@@ -96,6 +101,13 @@ export function createInspirationBoardTask(
   }));
 
   try {
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'image',
+      model || null,
+      null
+    );
+    const actualModel =
+      embeddedModel?.modelId || model || getCurrentImageModel();
     let task;
 
     // 如果是重试，复用原有任务
@@ -112,6 +124,7 @@ export function createInspirationBoardTask(
           prompt,
           size: imageSize,
           model: actualModel,
+          modelRef: embeddedModel?.modelRef || null,
           uploadedImages:
             uploadedImages && uploadedImages.length > 0
               ? uploadedImages

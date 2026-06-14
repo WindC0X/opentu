@@ -1,4 +1,8 @@
-import { createModelRef, type ModelRef } from '../../../utils/settings-manager';
+import type { ModelRef } from '../../../utils/settings-manager';
+import {
+  CREATIVE_MANAGED_PROFILE_ID,
+  isCreativeEmbeddedMode,
+} from '../../../services/creative-mode';
 
 export interface StoredModelSelection {
   modelId: string;
@@ -10,10 +14,13 @@ export function readStoredModelSelection(
   fallbackModel: string,
   fallbackModelRef: ModelRef | null = null
 ): StoredModelSelection {
+  const embeddedCreative = isCreativeEmbeddedMode();
+  const safeFallbackModel = embeddedCreative ? '' : fallbackModel;
+  const safeFallbackModelRef = embeddedCreative ? null : fallbackModelRef;
   try {
     const raw = localStorage.getItem(key);
     if (!raw) {
-      return { modelId: fallbackModel, modelRef: fallbackModelRef };
+      return { modelId: safeFallbackModel, modelRef: safeFallbackModelRef };
     }
 
     const parsed = JSON.parse(raw) as {
@@ -22,9 +29,19 @@ export function readStoredModelSelection(
     };
 
     if (typeof parsed.modelId === 'string' && parsed.modelId.trim()) {
+      const modelId = parsed.modelId.trim();
+      if (
+        embeddedCreative &&
+        parsed.profileId !== CREATIVE_MANAGED_PROFILE_ID
+      ) {
+        return { modelId: safeFallbackModel, modelRef: safeFallbackModelRef };
+      }
       return {
-        modelId: parsed.modelId.trim(),
-        modelRef: createModelRef(parsed.profileId || null, parsed.modelId),
+        modelId,
+        modelRef: {
+          profileId: parsed.profileId || null,
+          modelId,
+        },
       };
     }
   } catch {
@@ -38,9 +55,13 @@ export function readStoredModelSelection(
     // localStorage 不可用时静默降级
   }
 
+  if (embeddedCreative) {
+    return { modelId: safeFallbackModel, modelRef: safeFallbackModelRef };
+  }
+
   return {
-    modelId: legacyModelId || fallbackModel,
-    modelRef: legacyModelId ? null : fallbackModelRef,
+    modelId: legacyModelId || safeFallbackModel,
+    modelRef: legacyModelId ? null : safeFallbackModelRef,
   };
 }
 

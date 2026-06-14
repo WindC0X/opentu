@@ -31,6 +31,7 @@ import { HoverTip } from '../shared/hover';
 import { useProviderProfiles } from '../../hooks/use-provider-profiles';
 import { groupModelsByProvider } from '../../utils/model-grouping';
 import { sortModelsByDisplayPriority } from '../../utils/model-sort';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 export interface ModelSelectorProps {
   /** 是否可见 */
@@ -62,8 +63,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   onSelect,
   onClose,
   language = 'zh',
-  models = IMAGE_VIDEO_MODELS,
+  models: providedModels,
 }) => {
+  const models =
+    providedModels || (isCreativeEmbeddedMode() ? [] : IMAGE_VIDEO_MODELS);
   const panelRef = useRef<HTMLDivElement>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
@@ -100,9 +103,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const activeCategory = useMemo(() => {
     if (!activeProvider) return null;
     return (
-      activeProvider.vendorCategories.find(
-        (c) => c.vendor === activeVendor
-      ) ||
+      activeProvider.vendorCategories.find((c) => c.vendor === activeVendor) ||
       activeProvider.vendorCategories[0] ||
       null
     );
@@ -137,18 +138,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         count: g.totalCount,
         icon: g.providerIconUrl ? (
           <ModelSourceIcon
-            vendor={
-              g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)
-            }
+            vendor={g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)}
             profileName={g.providerName}
             iconUrl={g.providerIconUrl}
             size={14}
           />
         ) : (
           <ModelVendorMark
-            vendor={
-              g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)
-            }
+            vendor={g.vendorCategories[0]?.vendor || ('OTHER' as ModelVendor)}
             size={14}
           />
         ),
@@ -492,14 +489,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                         profileId={model.sourceProfileId || null}
                       />
                     </div>
-                  <div className="ai-model-selector__item-desc">
-                    {model.description}
+                    <div className="ai-model-selector__item-desc">
+                      {model.description}
+                    </div>
                   </div>
+                  {isSelected && (
+                    <Check
+                      size={16}
+                      className="ai-model-selector__item-check"
+                    />
+                  )}
                 </div>
-                {isSelected && (
-                  <Check size={16} className="ai-model-selector__item-check" />
-                )}
-              </div>
               </HoverTip>
             );
           })}

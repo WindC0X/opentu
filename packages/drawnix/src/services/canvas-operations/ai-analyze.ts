@@ -4,7 +4,11 @@
  * 调用文本模型分析用户意图，返回需要执行的后续工作流步骤
  */
 
-import type { MCPExecuteOptions, AgentExecutionContext, WorkflowStepInfo } from '../../mcp/types';
+import type {
+  MCPExecuteOptions,
+  AgentExecutionContext,
+  WorkflowStepInfo,
+} from '../../mcp/types';
 import {
   getDefaultAudioModel,
   getDefaultImageModel,
@@ -13,8 +17,34 @@ import {
 } from '../../constants/model-config';
 import { agentExecutor } from '../agent';
 import { geminiSettings, type ModelRef } from '../../utils/settings-manager';
-import { getPreferredModels } from '../../utils/runtime-model-discovery';
+import {
+  getFallbackDefaultModelId,
+  getPreferredModels,
+} from '../../utils/runtime-model-discovery';
 import { applyMediaModelDefaultsToArgs } from '../agent/media-model-routing';
+import { isCreativeEmbeddedMode } from '../creative-mode';
+
+function getCanvasFallbackModel(
+  type: 'text' | 'image' | 'video' | 'audio',
+  configuredModel?: string | null
+): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId(type);
+  }
+  if (configuredModel) {
+    return configuredModel;
+  }
+  return (
+    getPreferredModels(type)[0]?.id ||
+    (type === 'image'
+      ? getDefaultImageModel()
+      : type === 'video'
+      ? getDefaultVideoModel()
+      : type === 'audio'
+      ? getDefaultAudioModel()
+      : getDefaultTextModel())
+  );
+}
 
 /**
  * AI 分析参数
@@ -45,18 +75,33 @@ export interface AIAnalyzeResult {
 /**
  * 根据工具名称生成描述
  */
-function getToolDescription(toolName: string, args?: Record<string, unknown>): string {
+function getToolDescription(
+  toolName: string,
+  args?: Record<string, unknown>
+): string {
   switch (toolName) {
     case 'generate_image':
-      return `生成图片: ${((args?.prompt as string) || '').substring(0, 30)}...`;
+      return `生成图片: ${((args?.prompt as string) || '').substring(
+        0,
+        30
+      )}...`;
     case 'generate_video':
-      return `生成视频: ${((args?.prompt as string) || '').substring(0, 30)}...`;
+      return `生成视频: ${((args?.prompt as string) || '').substring(
+        0,
+        30
+      )}...`;
     case 'generate_audio':
-      return `生成音频: ${((args?.prompt as string) || '').substring(0, 30)}...`;
+      return `生成音频: ${((args?.prompt as string) || '').substring(
+        0,
+        30
+      )}...`;
     case 'generate_ppt':
       return `生成PPT: ${((args?.topic as string) || '').substring(0, 30)}...`;
     case 'generate_grid_image':
-      return `生成宫格图: ${((args?.theme as string) || '').substring(0, 30)}...`;
+      return `生成宫格图: ${((args?.theme as string) || '').substring(
+        0,
+        30
+      )}...`;
     case 'insert_svg':
       return `插入SVG矢量图`;
     case 'canvas_insertion':
@@ -87,7 +132,9 @@ export async function analyzeWithAI(
   try {
     const settings = geminiSettings.get();
     const result = await agentExecutor.execute(context, {
-      model: context.model.id || settings.textModelName || getPreferredModels('text')[0]?.id || getDefaultTextModel(),
+      model:
+        context.model.id ||
+        getCanvasFallbackModel('text', settings.textModelName),
       modelRef: modelRef || null,
       onChunk: (chunk) => {
         options?.onChunk?.(chunk);
@@ -103,25 +150,18 @@ export async function analyzeWithAI(
             contextModel: context.model,
             contextModelRef: modelRef || null,
             fallbackModels: {
-              image:
-                settings.imageModelName ||
-                getPreferredModels('image')[0]?.id ||
-                getDefaultImageModel(),
-              video:
-                settings.videoModelName ||
-                getPreferredModels('video')[0]?.id ||
-                getDefaultVideoModel(),
-              audio:
-                settings.audioModelName ||
-                getPreferredModels('audio')[0]?.id ||
-                getDefaultAudioModel(),
+              image: getCanvasFallbackModel('image', settings.imageModelName),
+              video: getCanvasFallbackModel('video', settings.videoModelName),
+              audio: getCanvasFallbackModel('audio', settings.audioModelName),
             },
           }
         );
 
         // 创建新的工作流步骤
         const newStep: WorkflowStepInfo = {
-          id: `step-tool-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          id: `step-tool-${Date.now()}-${Math.random()
+            .toString(36)
+            .substring(2, 6)}`,
           mcp: toolCall.name,
           args: toolArgs,
           description: getToolDescription(toolCall.name, toolArgs),

@@ -7,6 +7,11 @@ import {
   type ModelType,
 } from '../constants/model-config';
 import { sortModelsByDisplayPriority } from '../utils/model-sort';
+import { isCreativeEmbeddedMode } from './creative-mode';
+import {
+  getCreativePolicyDefaultModel,
+  getCreativePolicyVisibleModels,
+} from './creative-model-policy-resolver';
 
 export const CREATIVE_MODEL_POLICY_FIELDS = [
   'defaultModel',
@@ -40,12 +45,7 @@ const DEFAULT_VISIBLE_MODEL_IDS: Record<ModelType, string[]> = {
     'gemini-3.1-flash-image-preview',
     'doubao-seedream-4-0-250828',
   ],
-  video: [
-    DEFAULT_VIDEO_MODEL_ID,
-    'seedance-1.0-pro-fast',
-    'veo3',
-    'sora-2',
-  ],
+  video: [DEFAULT_VIDEO_MODEL_ID, 'seedance-1.0-pro-fast', 'veo3', 'sora-2'],
   audio: [DEFAULT_AUDIO_MODEL_ID],
 };
 
@@ -92,6 +92,10 @@ export function getCreativeDefaultModel(
     return null;
   }
 
+  if (isCreativeEmbeddedMode()) {
+    return getCreativePolicyDefaultModel(type, fullPool);
+  }
+
   const preferredIds = [
     DEFAULT_MODEL_ID_BY_TYPE[type],
     ...DEFAULT_VISIBLE_MODEL_IDS[type],
@@ -111,6 +115,11 @@ export function getCreativeDefaultVisibleModels(
   fullPool: ModelConfig[]
 ): ModelConfig[] {
   const typedPool = fullPool.filter((model) => model.type === type);
+
+  if (isCreativeEmbeddedMode()) {
+    return getCreativePolicyVisibleModels(type, fullPool);
+  }
+
   const byId = new Map(typedPool.map((model) => [model.id, model]));
   const visible = DEFAULT_VISIBLE_MODEL_IDS[type]
     .map((modelId) => byId.get(modelId))

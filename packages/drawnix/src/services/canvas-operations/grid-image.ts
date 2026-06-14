@@ -14,7 +14,12 @@ import { taskQueueService } from '../task-queue';
 import { TaskType } from '../../types/task.types';
 import { geminiSettings } from '../../utils/settings-manager';
 import { getDefaultImageModel } from '../../constants/model-config';
-import { getPreferredModels } from '../../utils/runtime-model-discovery';
+import {
+  getFallbackDefaultModelId,
+  getPreferredModels,
+} from '../../utils/runtime-model-discovery';
+import { isCreativeEmbeddedMode } from '../creative-mode';
+import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
 
 /**
  * 宫格图参数
@@ -42,6 +47,9 @@ export interface GridImageParams {
  * 获取当前图片模型
  */
 function getCurrentImageModel(): string {
+  if (isCreativeEmbeddedMode()) {
+    return getFallbackDefaultModelId('image');
+  }
   const settings = geminiSettings.get();
   return (
     settings.imageModelName ||
@@ -75,9 +83,6 @@ export function createGridImageTask(
     model,
   } = params;
 
-  // 获取实际使用的模型
-  const actualModel = model || getCurrentImageModel();
-
   if (!theme || typeof theme !== 'string') {
     return {
       success: false,
@@ -103,6 +108,13 @@ export function createGridImageTask(
   }));
 
   try {
+    const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
+      'image',
+      model || null,
+      null
+    );
+    const actualModel =
+      embeddedModel?.modelId || model || getCurrentImageModel();
     let task;
 
     // 如果是重试，复用原有任务
@@ -119,6 +131,7 @@ export function createGridImageTask(
           prompt,
           size: imageSize,
           model: actualModel,
+          modelRef: embeddedModel?.modelRef || null,
           uploadedImages:
             uploadedImages && uploadedImages.length > 0
               ? uploadedImages

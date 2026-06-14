@@ -9,6 +9,8 @@ import { DRAWNIX_SETTINGS_KEY } from '../constants/storage';
 import { configIndexedDBWriter } from './config-indexeddb-writer';
 import {
   CREATIVE_MANAGED_PROFILE_ID,
+  CREATIVE_MANAGED_PROFILE_NAME,
+  CREATIVE_RELAY_BASE_URL,
   isCreativeEmbeddedMode,
 } from '../services/creative-mode';
 import type { GeminiConfig } from './gemini-api/types';
@@ -1420,7 +1422,9 @@ class SettingsManager {
       const imageRoute = this.resolveInvocationRoute('image');
       const videoRoute = this.resolveInvocationRoute('video');
       const isEmbeddedCreative = isCreativeEmbeddedMode();
-      const getPersistableBaseUrl = (route: ResolvedInvocationRoute): string => {
+      const getPersistableBaseUrl = (
+        route: ResolvedInvocationRoute
+      ): string => {
         if (!isEmbeddedCreative) {
           return route.baseUrl;
         }
@@ -1795,20 +1799,25 @@ class SettingsManager {
     }
 
     const profile = this.getProviderProfileById(CREATIVE_MANAGED_PROFILE_ID);
-    if (
-      !profile ||
-      profile.enabled === false ||
-      profile.authType !== 'session-broker' ||
-      !profile.baseUrl?.trim()
-    ) {
-      return null;
-    }
-
-    const profileModels = this.getSelectedModelsForProfile(profile.id, routeType);
+    const profileId = profile?.id || CREATIVE_MANAGED_PROFILE_ID;
+    const profileName = profile?.name || CREATIVE_MANAGED_PROFILE_NAME;
+    const sessionBrokerProfileReady =
+      !!profile &&
+      profile.enabled !== false &&
+      profile.authType === 'session-broker' &&
+      !!profile.baseUrl?.trim();
+    const profileModels = profile
+      ? this.getSelectedModelsForProfile(profile.id, routeType)
+      : [];
     const availableModelIds = new Set(profileModels.map((model) => model.id));
-    const requestedModelId = requestedModelRef?.modelId || null;
+    const requestedModelId =
+      requestedModelRef?.modelId &&
+      (!requestedModelRef.profileId ||
+        requestedModelRef.profileId === profileId)
+        ? requestedModelRef.modelId
+        : null;
     const presetModelId =
-      presetModelRef?.profileId === profile.id ? presetModelRef.modelId : null;
+      presetModelRef?.profileId === profileId ? presetModelRef.modelId : null;
     const modelId =
       (requestedModelId && availableModelIds.has(requestedModelId)
         ? requestedModelId
@@ -1817,17 +1826,17 @@ class SettingsManager {
         ? presetModelId
         : null) ||
       profileModels[0]?.id ||
-      requestedModelId ||
-      presetModelRef?.modelId ||
-      this.getLegacyModelId(routeType);
+      '';
 
     return {
       routeType,
       modelId,
-      profileId: profile.id,
-      profileName: profile.name,
-      providerType: profile.providerType,
-      baseUrl: profile.baseUrl.trim(),
+      profileId,
+      profileName,
+      providerType: profile?.providerType || 'openai-compatible',
+      baseUrl: sessionBrokerProfileReady
+        ? profile.baseUrl.trim()
+        : CREATIVE_RELAY_BASE_URL,
       apiKey: '',
       authType: 'session-broker',
       source: 'preset',
@@ -1976,7 +1985,7 @@ class SettingsManager {
   ): boolean {
     const route = this.resolveInvocationRoute(routeType, requestedModelId);
     if (route.authType === 'session-broker') {
-      return Boolean(route.baseUrl);
+      return Boolean(route.baseUrl && route.modelId);
     }
     return Boolean(route.baseUrl && route.apiKey);
   }

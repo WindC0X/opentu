@@ -14,7 +14,11 @@ import {
   PromptOptimizeButton,
 } from '../../shared';
 import { useSelectableModels } from '../../../hooks/use-runtime-models';
-import { getSelectionKey } from '../../../utils/model-selection';
+import {
+  findMatchingSelectableModel,
+  getModelRefFromConfig,
+  getSelectionKey,
+} from '../../../utils/model-selection';
 import type { ModelRef } from '../../../utils/settings-manager';
 import { taskQueueService } from '../../../services/task-queue';
 import { quickInsert } from '../../../mcp/tools/canvas-insertion';
@@ -47,6 +51,7 @@ import {
 } from '../../../services/music-analysis-service';
 import { getDefaultAudioModel } from '../../../constants/model-config';
 import { analytics } from '../../../utils/posthog-analytics';
+import { isCreativeEmbeddedMode } from '../../../services/creative-mode';
 
 const DEFAULT_ANALYSIS_MODEL = 'gemini-2.5-pro';
 const STORAGE_KEY_MODEL = 'music-analyzer:model';
@@ -331,15 +336,56 @@ export const CreatePage: React.FC<CreatePageProps> = ({
   ]);
 
   const allTextModels = useSelectableModels('text');
+  const creativeEmbeddedMode = isCreativeEmbeddedMode();
   const analysisModels = useMemo(
-    () => allTextModels.filter((item) => /^gemini/i.test(item.id)),
-    [allTextModels]
+    () =>
+      creativeEmbeddedMode
+        ? allTextModels
+        : allTextModels.filter((item) => /^gemini/i.test(item.id)),
+    [allTextModels, creativeEmbeddedMode]
   );
   const audioModels = useSelectableModels('audio');
   const lyricsDraftModels = useMemo(
     () => collectLyricsDraftModels(allTextModels, audioModels),
     [allTextModels, audioModels]
   );
+  useEffect(() => {
+    if (!creativeEmbeddedMode) return;
+    if (findMatchingSelectableModel(analysisModels, selectedModel, selectedModelRef)) {
+      return;
+    }
+    const nextModel = analysisModels[0] || null;
+    const nextRef = getModelRefFromConfig(nextModel);
+    setSelectedModelState(nextModel?.id || '');
+    setSelectedModelRef(nextRef);
+    if (nextModel) {
+      writeStoredModelSelection(STORAGE_KEY_MODEL, nextModel.id, nextRef);
+    }
+  }, [analysisModels, creativeEmbeddedMode, selectedModel, selectedModelRef]);
+  useEffect(() => {
+    if (!creativeEmbeddedMode) return;
+    if (
+      findMatchingSelectableModel(
+        lyricsDraftModels,
+        selectedLyricsModel,
+        selectedLyricsModelRef
+      )
+    ) {
+      return;
+    }
+    const nextModel = lyricsDraftModels[0] || null;
+    const nextRef = getModelRefFromConfig(nextModel);
+    setSelectedLyricsModelState(nextModel?.id || '');
+    setSelectedLyricsModelRef(nextRef);
+    if (nextModel) {
+      writeStoredModelSelection(STORAGE_KEY_LYRICS_MODEL, nextModel.id, nextRef);
+    }
+  }, [
+    creativeEmbeddedMode,
+    lyricsDraftModels,
+    selectedLyricsModel,
+    selectedLyricsModelRef,
+  ]);
   const normalizedAnalysis = useMemo(
     () =>
       existingRecord?.analysis
