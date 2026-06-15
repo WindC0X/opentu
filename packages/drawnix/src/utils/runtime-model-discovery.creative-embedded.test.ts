@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelVendor, type ModelConfig } from '../constants/model-config';
 
 const mocks = vi.hoisted(() => {
@@ -20,11 +20,43 @@ const mocks = vi.hoisted(() => {
     sourceProfileName: 'default 分组',
     selectionKey: 'legacy-default::legacy-image-model',
   };
+  const mixedCaseStaticImageModel: ModelConfig = {
+    id: 'Gpt-image-2',
+    label: 'Gpt-image-2',
+    shortCode: 'gpt2',
+    type: 'image',
+    vendor: 'GPT' as ModelVendor,
+    sourceProfileId: 'new-api-creative',
+    sourceProfileName: 'New API Creative',
+    selectionKey: 'new-api-creative::Gpt-image-2',
+  };
+
+  const managedCatalog = {
+    profileId: 'new-api-creative',
+    discoveredAt: Date.now(),
+    discoveredModels: [managedImageModel],
+    selectedModelIds: [managedImageModel.id],
+    sourceBaseUrl: '/creative/api/models',
+    error: null,
+  };
+  const legacyCatalog = {
+    profileId: 'legacy-default',
+    discoveredAt: Date.now(),
+    discoveredModels: [legacyImageModel],
+    selectedModelIds: [legacyImageModel.id],
+    sourceBaseUrl: 'https://api.tu-zi.com/v1',
+    error: null,
+  };
 
   return {
     managedImageModel,
     legacyImageModel,
+    mixedCaseStaticImageModel,
+    managedCatalog,
+    legacyCatalog,
+    catalogs: [legacyCatalog, managedCatalog],
     isCreativeEmbeddedMode: vi.fn(() => true),
+    reloadFromStorage: vi.fn(),
   };
 });
 
@@ -51,24 +83,7 @@ vi.mock('./settings-manager', () => ({
     addListener: vi.fn(),
   },
   providerCatalogsSettings: {
-    get: () => [
-      {
-        profileId: 'legacy-default',
-        discoveredAt: Date.now(),
-        discoveredModels: [mocks.legacyImageModel],
-        selectedModelIds: [mocks.legacyImageModel.id],
-        sourceBaseUrl: 'https://api.tu-zi.com/v1',
-        error: null,
-      },
-      {
-        profileId: 'new-api-creative',
-        discoveredAt: Date.now(),
-        discoveredModels: [mocks.managedImageModel],
-        selectedModelIds: [mocks.managedImageModel.id],
-        sourceBaseUrl: '/creative/api/models',
-        error: null,
-      },
-    ],
+    get: () => mocks.catalogs,
     update: vi.fn(async () => undefined),
     addListener: vi.fn(),
   },
@@ -77,10 +92,20 @@ vi.mock('./settings-manager', () => ({
   },
   settingsManager: {
     addListener: vi.fn(),
+    reloadFromStorage: mocks.reloadFromStorage,
   },
 }));
 
 describe('runtimeModelDiscovery in embedded Creative mode', () => {
+  beforeEach(() => {
+    mocks.catalogs = [mocks.legacyCatalog, mocks.managedCatalog];
+    mocks.isCreativeEmbeddedMode.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('uses the new-api managed catalog as the selectable model source and does not append OpenTU static defaults', async () => {
     vi.resetModules();
     const { runtimeModelDiscovery } = await import('./runtime-model-discovery');
@@ -135,6 +160,94 @@ describe('runtimeModelDiscovery in embedded Creative mode', () => {
       expect.objectContaining({
         id: 'newapi-image-model',
         sourceProfileId: 'new-api-creative',
+      }),
+    ]);
+  });
+
+  it('can reload the settings-manager instance owned by runtime discovery before refreshing catalogs', async () => {
+    vi.resetModules();
+    mocks.reloadFromStorage.mockClear();
+    const { runtimeModelDiscovery } = await import('./runtime-model-discovery');
+
+    runtimeModelDiscovery.refreshFromSettings({ reloadFromStorage: true });
+
+    expect(mocks.reloadFromStorage).toHaveBeenCalledTimes(1);
+    expect(runtimeModelDiscovery.getSelectableModels('image')).toEqual([
+      expect.objectContaining({
+        id: 'newapi-image-model',
+        sourceProfileId: 'new-api-creative',
+      }),
+    ]);
+  });
+
+  it('keeps the executable managed model id when enriching a case-insensitive static model match', async () => {
+    mocks.catalogs = [
+      mocks.legacyCatalog,
+      {
+        ...mocks.managedCatalog,
+        discoveredModels: [mocks.mixedCaseStaticImageModel],
+        selectedModelIds: [mocks.mixedCaseStaticImageModel.id],
+      },
+    ];
+    vi.resetModules();
+    const { runtimeModelDiscovery } = await import('./runtime-model-discovery');
+
+    const managedState = runtimeModelDiscovery.getState('new-api-creative');
+    const selectableImages = runtimeModelDiscovery.getSelectableModels('image');
+
+    expect(managedState.discoveredModels).toEqual([
+      expect.objectContaining({
+        id: 'Gpt-image-2',
+        shortCode: 'gpt2',
+        imageDefaults: expect.objectContaining({ aspectRatio: 'auto' }),
+      }),
+    ]);
+    expect(managedState.selectedModelIds).toEqual(['Gpt-image-2']);
+    expect(managedState.models.map((model) => model.id)).toEqual([
+      'Gpt-image-2',
+    ]);
+    expect(selectableImages).toEqual([
+      expect.objectContaining({
+        id: 'Gpt-image-2',
+        shortCode: 'gpt2',
+        selectionKey: 'new-api-creative::Gpt-image-2',
+      }),
+    ]);
+  });
+
+  it('uses static presentation metadata when direct discovery adapts a case-insensitive static model id', async () => {
+    vi.resetModules();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            data: [
+              {
+                id: 'Gpt-image-2',
+                object: 'model',
+                owned_by: 'openai',
+                supported_endpoint_types: ['openai-image'],
+              },
+            ],
+          }),
+      }))
+    );
+    const { runtimeModelDiscovery } = await import('./runtime-model-discovery');
+
+    const discovered = await runtimeModelDiscovery.discover(
+      'new-api-creative',
+      '/creative/relay/v1',
+      'test-key'
+    );
+
+    expect(discovered).toEqual([
+      expect.objectContaining({
+        id: 'Gpt-image-2',
+        label: 'gpt-image-2',
+        shortCode: 'gpt2',
+        imageDefaults: expect.objectContaining({ aspectRatio: 'auto' }),
       }),
     ]);
   });

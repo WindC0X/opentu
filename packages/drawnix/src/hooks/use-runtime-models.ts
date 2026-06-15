@@ -8,6 +8,11 @@ import {
   type RuntimeModelDiscoveryState,
 } from '../utils/runtime-model-discovery';
 import { LEGACY_DEFAULT_PROVIDER_PROFILE_ID } from '../utils/settings-manager';
+import {
+  CREATIVE_MANAGED_CATALOG_UPDATED_EVENT,
+  CREATIVE_MANAGED_PROFILE_ID,
+  isCreativeEmbeddedMode,
+} from '../services/creative-mode';
 
 export function useRuntimeModelDiscoveryState(
   profileId = LEGACY_DEFAULT_PROVIDER_PROFILE_ID
@@ -17,10 +22,26 @@ export function useRuntimeModelDiscoveryState(
   );
 
   useEffect(() => {
-    setState(runtimeModelDiscovery.getState(profileId));
-    return runtimeModelDiscovery.subscribe(() => {
+    const refresh = () => {
+      runtimeModelDiscovery.refreshFromSettings({
+        reloadFromStorage: isCreativeEmbeddedMode(),
+      });
+      setState(runtimeModelDiscovery.getState(profileId));
+    };
+    const unsubscribe = runtimeModelDiscovery.subscribe(() => {
       setState(runtimeModelDiscovery.getState(profileId));
     });
+    // Creative's startup/session broker and deferred UI can live in different
+    // build chunks with separate in-memory module instances. Rehydrate from
+    // localStorage both on mount and when the broker announces that the managed
+    // catalog was persisted, so selectors do not stay on an empty discovery
+    // store after a successful /creative/api/models bootstrap.
+    refresh();
+    window.addEventListener(CREATIVE_MANAGED_CATALOG_UPDATED_EVENT, refresh);
+    return () => {
+      window.removeEventListener(CREATIVE_MANAGED_CATALOG_UPDATED_EVENT, refresh);
+      unsubscribe();
+    };
   }, [profileId]);
 
   return state;
@@ -38,7 +59,11 @@ function areModelListsEqual(a: ModelConfig[], b: ModelConfig[]): boolean {
 }
 
 export function usePreferredModels(modelType: ModelType): ModelConfig[] {
-  const state = useRuntimeModelDiscoveryState();
+  const state = useRuntimeModelDiscoveryState(
+    isCreativeEmbeddedMode()
+      ? CREATIVE_MANAGED_PROFILE_ID
+      : LEGACY_DEFAULT_PROVIDER_PROFILE_ID
+  );
   const prevRef = useRef<ModelConfig[]>([]);
   return useMemo(() => {
     const next = getPreferredModels(modelType);
@@ -49,7 +74,11 @@ export function usePreferredModels(modelType: ModelType): ModelConfig[] {
 }
 
 export function useSelectableModels(modelType: ModelType): ModelConfig[] {
-  const state = useRuntimeModelDiscoveryState();
+  const state = useRuntimeModelDiscoveryState(
+    isCreativeEmbeddedMode()
+      ? CREATIVE_MANAGED_PROFILE_ID
+      : LEGACY_DEFAULT_PROVIDER_PROFILE_ID
+  );
   const prevRef = useRef<ModelConfig[]>([]);
   return useMemo(() => {
     const next = getSelectableModels(modelType);

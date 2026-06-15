@@ -31,9 +31,13 @@ import { ToolList } from './ToolList';
 import { CustomToolDialog } from '../custom-tool-dialog/CustomToolDialog';
 import { BaseDrawer } from '../side-drawer';
 import { useConfirmDialog } from '../dialog/ConfirmDialog';
-import { needsApiKeyConfiguration } from '../../utils/url-template';
+import {
+  hasApiKeyTemplate,
+  needsApiKeyConfiguration,
+} from '../../utils/url-template';
 import { geminiSettings } from '../../utils/settings-manager';
 import { DRAWER_PIN_KEYS } from '../../utils/drawer-pin';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import './toolbox-drawer.scss';
 
 export interface ToolboxDrawerProps {
@@ -46,6 +50,21 @@ export interface ToolboxDrawerProps {
 // Storage key for drawer width
 export const TOOLBOX_DRAWER_WIDTH_KEY = 'toolbox-drawer-width';
 
+function isApiKeyTemplateTool(tool: ToolDefinition): boolean {
+  const toolUrl = (tool as { url?: unknown }).url;
+  return typeof toolUrl === 'string' && hasApiKeyTemplate(toolUrl);
+}
+
+function filterEmbeddedCreativeTools(
+  tools: ToolDefinition[],
+  embeddedCreative: boolean
+): ToolDefinition[] {
+  if (!embeddedCreative) {
+    return tools;
+  }
+  return tools.filter((tool) => !isApiKeyTemplateTool(tool));
+}
+
 /**
  * 工具箱抽屉组件
  */
@@ -54,6 +73,7 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
   onOpenChange,
 }) => {
   const { board, appState, setAppState } = useDrawnix();
+  const embeddedCreative = isCreativeEmbeddedMode();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [customToolDialogVisible, setCustomToolDialogVisible] = useState(false);
@@ -191,7 +211,28 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
     (tool: ToolDefinition) => {
       // 检查 URL 是否需要 API Key 配置
       const toolUrl = (tool as any).url;
-      if (toolUrl && needsApiKeyConfiguration(toolUrl)) {
+      if (toolUrl) {
+        if (embeddedCreative && hasApiKeyTemplate(toolUrl)) {
+          analytics.trackUIInteraction({
+            area: 'toolbox',
+            action: 'api_key_tool_blocked_embedded',
+            control: 'insert_tool',
+            source: 'toolbox_drawer',
+            metadata: {
+              toolId: tool.id,
+              toolName: tool.name,
+              category: tool.category,
+              usageType: 'insert',
+              isCustomTool: !isBuiltInToolId(tool.id),
+            },
+          });
+          MessagePlugin.info('嵌入模式下不支持浏览器凭证模板工具');
+          return;
+        }
+        if (!needsApiKeyConfiguration(toolUrl)) {
+          executeToolInsert(tool);
+          return;
+        }
         const isCustomTool = !isBuiltInToolId(tool.id);
         analytics.trackUIInteraction({
           area: 'toolbox',
@@ -216,7 +257,7 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
       // 直接执行插入
       executeToolInsert(tool);
     },
-    [executeToolInsert, setAppState]
+    [embeddedCreative, executeToolInsert, setAppState]
   );
 
   /**
@@ -270,7 +311,28 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
     (tool: ToolDefinition) => {
       // 检查 URL 是否需要 API Key 配置
       const toolUrl = (tool as any).url;
-      if (toolUrl && needsApiKeyConfiguration(toolUrl)) {
+      if (toolUrl) {
+        if (embeddedCreative && hasApiKeyTemplate(toolUrl)) {
+          analytics.trackUIInteraction({
+            area: 'toolbox',
+            action: 'api_key_tool_blocked_embedded',
+            control: 'open_tool_window',
+            source: 'toolbox_drawer',
+            metadata: {
+              toolId: tool.id,
+              toolName: tool.name,
+              category: tool.category,
+              usageType: 'window',
+              isCustomTool: !isBuiltInToolId(tool.id),
+            },
+          });
+          MessagePlugin.info('嵌入模式下不支持浏览器凭证模板工具');
+          return;
+        }
+        if (!needsApiKeyConfiguration(toolUrl)) {
+          executeToolOpenWindow(tool);
+          return;
+        }
         const isCustomTool = !isBuiltInToolId(tool.id);
         analytics.trackUIInteraction({
           area: 'toolbox',
@@ -295,18 +357,24 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
       // 直接执行打开窗口
       executeToolOpenWindow(tool);
     },
-    [executeToolOpenWindow, setAppState]
+    [embeddedCreative, executeToolOpenWindow, setAppState]
   );
 
   /**
    * 获取所有工具（搜索 + 分类过滤）
    */
   const filteredTools = useMemo(() => {
-    let tools = toolboxService.getAvailableTools();
+    let tools = filterEmbeddedCreativeTools(
+      toolboxService.getAvailableTools(),
+      embeddedCreative
+    );
 
     // 搜索过滤
     if (searchQuery.trim()) {
-      tools = toolboxService.searchTools(searchQuery);
+      tools = filterEmbeddedCreativeTools(
+        toolboxService.searchTools(searchQuery),
+        embeddedCreative
+      );
     }
 
     // 分类过滤
@@ -315,13 +383,16 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
     }
 
     return tools;
-  }, [searchQuery, selectedCategory, refreshKey]);
+  }, [embeddedCreative, searchQuery, selectedCategory, refreshKey]);
 
   /**
    * 获取分类列表（应包含所有可用分类，不受当前筛选影响）
    */
   const allCategories = useMemo(() => {
-    const tools = toolboxService.getAvailableTools();
+    const tools = filterEmbeddedCreativeTools(
+      toolboxService.getAvailableTools(),
+      embeddedCreative
+    );
     const cats = new Set<string>();
     tools.forEach((tool) => {
       if (tool.category) {
@@ -329,13 +400,20 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
       }
     });
     return sortToolCategories(Array.from(cats));
-  }, [refreshKey]);
+  }, [embeddedCreative, refreshKey]);
 
   /**
    * 按分类分组
    */
   const toolsByCategory = useMemo(() => {
-    const categorized = toolboxService.getToolsByCategory();
+    const categorized = Object.fromEntries(
+      Object.entries(toolboxService.getToolsByCategory())
+        .map(([category, tools]) => [
+          category,
+          filterEmbeddedCreativeTools(tools, embeddedCreative),
+        ])
+        .filter(([, tools]) => tools.length > 0)
+    ) as Record<string, ToolDefinition[]>;
 
     // 如果有搜索或分类过滤，使用过滤后的结果
     if (searchQuery || selectedCategory) {
@@ -351,7 +429,7 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
     }
 
     return categorized;
-  }, [filteredTools, searchQuery, selectedCategory]);
+  }, [embeddedCreative, filteredTools, searchQuery, selectedCategory]);
 
   const handleSearchBlur = useCallback(() => {
     const query = searchQuery.trim();
@@ -376,6 +454,16 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
    * 处理添加自定义工具按钮点击
    */
   const handleAddCustomTool = useCallback(() => {
+    if (embeddedCreative) {
+      analytics.trackUIInteraction({
+        area: 'toolbox',
+        action: 'custom_tool_blocked_embedded',
+        control: 'add_custom_tool',
+        source: 'toolbox_drawer',
+      });
+      MessagePlugin.info('嵌入模式下不支持添加浏览器自定义工具');
+      return;
+    }
     analytics.trackUIInteraction({
       area: 'toolbox',
       action: 'open_custom_tool_dialog',
@@ -383,7 +471,7 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
       source: 'toolbox_drawer',
     });
     setCustomToolDialogVisible(true);
-  }, []);
+  }, [embeddedCreative]);
 
   /**
    * 处理删除工具
@@ -454,7 +542,7 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
   }, []);
 
   // Header actions
-  const headerActions = (
+  const headerActions = embeddedCreative ? null : (
     <Button
       variant="outline"
       size="small"
@@ -556,6 +644,7 @@ export const ToolboxDrawer: React.FC<ToolboxDrawerProps> = ({
           visible={customToolDialogVisible}
           onClose={handleDialogClose}
           onSuccess={handleCustomToolSaved}
+          forbidApiKeyTemplates={embeddedCreative}
         />
       )}
       {confirmDialog}

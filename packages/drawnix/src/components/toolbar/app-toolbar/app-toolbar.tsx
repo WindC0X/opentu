@@ -2,6 +2,7 @@ import { useBoard } from '@plait-board/react-board';
 import Stack from '../../stack';
 import { ToolButton } from '../../tool-button';
 import {
+  GithubIcon,
   MenuIcon,
   RedoIcon,
   UndoIcon,
@@ -15,7 +16,6 @@ import { Island } from '../../island';
 import { Popover, PopoverContent, PopoverTrigger } from '../../popover/popover';
 import { useState } from 'react';
 import { CleanBoard, OpenFile, SaveAsImage, SaveToFile, Settings, BackupRestore, CloudSync, DebugPanel, QuickCommands, UserManual, VersionInfo, CleanInvalidLinks } from './app-menu-items';
-import { GithubIcon } from '../../icons';
 import { LanguageSwitcherMenu } from './language-switcher-menu';
 import Menu from '../../menu/menu';
 import MenuSeparator from '../../menu/menu-separator';
@@ -24,6 +24,7 @@ import { Z_INDEX } from '../../../constants/z-index';
 import { ToolbarSectionProps } from '../toolbar.types';
 import { useToolbarConfig } from '../../../hooks/use-toolbar-config';
 import { ToolbarContextMenu } from '../toolbar-context-menu';
+import { isCreativeEmbeddedMode } from '../../../services/creative-mode';
 
 export interface AppToolbarProps extends ToolbarSectionProps {
   onOpenBackupRestore?: () => void;
@@ -43,6 +44,7 @@ export const AppToolbar: React.FC<AppToolbarProps> = ({
   const [appMenuOpen, setAppMenuOpen] = useState(false);
   const isUndoDisabled = board.history.undos.length <= 0;
   const isRedoDisabled = board.history.redos.length <= 0;
+  const creativeEmbedded = isCreativeEmbeddedMode();
 
   // 检查撤销/重做按钮是否可见
   const showUndo = isButtonVisible('undo');
@@ -99,15 +101,21 @@ export const AppToolbar: React.FC<AppToolbarProps> = ({
                 onOpenBackupRestore?.();
               }} />
               <DebugPanel />
-              <CloudSync onOpenCloudSync={() => {
-                setAppMenuOpen(false);
-                onOpenCloudSync?.();
-              }} />
+              {!creativeEmbedded && (
+                <CloudSync onOpenCloudSync={() => {
+                  setAppMenuOpen(false);
+                  onOpenCloudSync?.();
+                }} />
+              )}
               <Settings />
               <MenuSeparator />
               <QuickCommands />
-              <UserManual />
-              <VersionInfo />
+              {!creativeEmbedded && (
+                <>
+                  <UserManual />
+                  <VersionInfo />
+                </>
+              )}
             </Menu>
           </PopoverContent>
         </Popover>
@@ -164,18 +172,20 @@ export const AppToolbar: React.FC<AppToolbarProps> = ({
         'app-toolbar--icon-only': iconMode,
       })}>
         {content}
-        <ToolButton
-          type="icon"
-          icon={<GithubIcon />}
-          visible={true}
-          tooltip={t('menu.github')}
-          tooltipPlacement="right"
-          aria-label={t('menu.github')}
-          data-track="toolbar_click_github"
-          onPointerUp={() => {
-            window.open('https://github.com/ljquan/aitu', '_blank');
-          }}
-        />
+        {!creativeEmbedded && (
+          <ToolButton
+            type="icon"
+            icon={<GithubIcon />}
+            visible={true}
+            tooltip={t('menu.github')}
+            tooltipPlacement="right"
+            aria-label={t('menu.github')}
+            data-track="toolbar_click_github"
+            onPointerUp={() => {
+              window.open('https://github.com/ljquan/aitu', '_blank');
+            }}
+          />
+        )}
       </div>
     );
   }

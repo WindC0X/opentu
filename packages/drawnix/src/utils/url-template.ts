@@ -46,6 +46,15 @@ export function extractTemplateVariables(url: string): string[] {
 }
 
 /**
+ * 检查 URL 是否语法上包含 ${apiKey} 模板变量。
+ * 与 needsApiKeyConfiguration 不同，这个函数不关心当前是否已经保存了 API Key。
+ */
+export function hasApiKeyTemplate(url: string): boolean {
+  if (!url) return false;
+  return extractTemplateVariables(url).includes('apiKey');
+}
+
+/**
  * 检查哪些模板变量的值缺失
  * @param url URL 字符串
  * @returns 缺失值的变量列表

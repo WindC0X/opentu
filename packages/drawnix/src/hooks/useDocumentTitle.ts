@@ -7,21 +7,29 @@
 
 import { useEffect, useCallback } from 'react';
 import { workspaceService } from '../services/workspace-service';
+import { isCreativeEmbeddedMode } from '../services/creative-mode';
 
 // 默认标题前缀
 const TITLE_PREFIX = 'Opentu';
+const EMBEDDED_TITLE_PREFIX = 'New API Creative';
 // 默认标题（无项目时）
 const DEFAULT_TITLE = 'Opentu - AI应用平台';
+const EMBEDDED_DEFAULT_TITLE = 'New API Creative';
 
 /**
  * 设置页面标题
  * @param boardName 画板名称，如果为空则使用默认标题
  */
 function setDocumentTitle(boardName?: string): void {
+  const isEmbeddedCreative = isCreativeEmbeddedMode();
+  const prefix = isEmbeddedCreative ? EMBEDDED_TITLE_PREFIX : TITLE_PREFIX;
+
   if (boardName && boardName.trim()) {
-    document.title = `${TITLE_PREFIX} - ${boardName.trim()}`;
+    document.title = `${prefix} - ${boardName.trim()}`;
   } else {
-    document.title = DEFAULT_TITLE;
+    document.title = isEmbeddedCreative
+      ? EMBEDDED_DEFAULT_TITLE
+      : DEFAULT_TITLE;
   }
 }
 

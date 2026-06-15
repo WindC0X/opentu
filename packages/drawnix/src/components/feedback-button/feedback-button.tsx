@@ -12,23 +12,32 @@ import { PlaitBoard } from '@plait/core';
 import { Z_INDEX } from '../../constants/z-index';
 import { WeComIcon } from '../icons';
 import { ToolButton } from '../tool-button';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import './feedback-button.scss';
 
 const QR_CODE_URL = 'https://tuziai.oss-cn-shenzhen.aliyuncs.com/aitu/AiTu.png';
 const SERVICE_QR_CODE_URL = 'https://tuziai.oss-cn-shenzhen.aliyuncs.com/linkme.png';
 
 export const FeedbackButton: React.FC = () => {
+  const embeddedCreative = isCreativeEmbeddedMode();
   const board = useBoard();
   const container = PlaitBoard.getBoardContainer(board);
   const [open, setOpen] = useState(false);
 
   // 预加载图片
   useEffect(() => {
+    if (embeddedCreative) {
+      return;
+    }
     const img1 = new Image();
     img1.src = QR_CODE_URL;
     const img2 = new Image();
     img2.src = SERVICE_QR_CODE_URL;
-  }, []);
+  }, [embeddedCreative]);
+
+  if (embeddedCreative) {
+    return null;
+  }
 
   return (
     <Popover placement="right-end" sideOffset={12} open={open} onOpenChange={setOpen}>

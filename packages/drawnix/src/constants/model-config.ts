@@ -1338,15 +1338,37 @@ export const ALL_MODELS: ModelConfig[] = [
 
 let runtimeModels: ModelConfig[] = [];
 
+function normalizeModelIdForLookup(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+function findModelById(
+  models: ModelConfig[],
+  modelId: string
+): ModelConfig | undefined {
+  const exact = models.find((model) => model.id === modelId);
+  if (exact) {
+    return exact;
+  }
+  const normalizedId = normalizeModelIdForLookup(modelId);
+  return models.find(
+    (model) => normalizeModelIdForLookup(model.id) === normalizedId
+  );
+}
+
 function mergeModels(
   staticModels: ModelConfig[],
   discoveredModels: ModelConfig[]
 ): ModelConfig[] {
   const merged = [...discoveredModels];
-  const seen = new Set(discoveredModels.map((model) => model.id));
+  const seen = new Set(
+    discoveredModels.map((model) => normalizeModelIdForLookup(model.id))
+  );
   for (const model of staticModels) {
-    if (!seen.has(model.id)) {
+    const normalizedId = normalizeModelIdForLookup(model.id);
+    if (!seen.has(normalizedId)) {
       merged.push(model);
+      seen.add(normalizedId);
     }
   }
   return merged;
@@ -1372,8 +1394,8 @@ export function getStaticModelsByType(type: ModelType): ModelConfig[] {
 
 export function getStaticModelConfig(modelId: string): ModelConfig | undefined {
   return (
-    ALL_MODELS.find((model) => model.id === modelId) ||
-    HIDDEN_VIDEO_MODELS.find((model) => model.id === modelId)
+    findModelById(ALL_MODELS, modelId) ||
+    findModelById(HIDDEN_VIDEO_MODELS, modelId)
   );
 }
 
@@ -1393,7 +1415,7 @@ export function getModelsByType(type: ModelType): ModelConfig[] {
  */
 export function getModelConfig(modelId: string): ModelConfig | undefined {
   return (
-    runtimeModels.find((model) => model.id === modelId) ||
+    findModelById(runtimeModels, modelId) ||
     getStaticModelConfig(modelId)
   );
 }
@@ -2610,9 +2632,15 @@ export function getCompatibleParams(modelId: string): ParamConfig[] {
     // 检查模型类型是否匹配
     if (param.modelType !== modelConfig.type) return false;
     // 检查是否在兼容 ID 列表（空数组表示所有模型都兼容）
+    const lookupIds = new Set([
+      normalizeModelIdForLookup(modelId),
+      normalizeModelIdForLookup(modelConfig.id),
+    ]);
     const idMatched =
       param.compatibleModels.length === 0 ||
-      param.compatibleModels.includes(modelId);
+      param.compatibleModels.some((compatibleModelId) =>
+        lookupIds.has(normalizeModelIdForLookup(compatibleModelId))
+      );
     // 检查标签兼容（可选）
     const tagMatched = param.compatibleTags
       ? param.compatibleTags.some((tag) => modelTags.has(tag.toLowerCase()))

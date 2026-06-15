@@ -867,6 +867,8 @@ export const SettingsDialog = ({
 
   const isSelectedSessionBrokerProfile =
     selectedProfile?.authType === 'session-broker';
+  const isCreativeEmbeddedSessionBrokerProfile =
+    creativeEmbeddedMode && isSelectedSessionBrokerProfile;
   const canManageModels =
     !!selectedProfile &&
     (isSelectedSessionBrokerProfile || !!selectedProfile.apiKey.trim());
@@ -1620,7 +1622,7 @@ export const SettingsDialog = ({
     if (selectedProfile.authType === 'session-broker') {
       if (runtimeState.discoveredModels.length === 0) {
         MessagePlugin.warning(
-          '托管会话模型由 opentu 自动同步，无需 API Key；请刷新页面重试。'
+          '托管会话模型由 New API Creative 自动同步，无需浏览器凭证；请刷新页面重试。'
         );
         return;
       }
@@ -2109,9 +2111,12 @@ export const SettingsDialog = ({
                     </span>
                     {isCompactLayout ? (
                       <span className="settings-dialog__provider-meta">
-                        <span>
-                          {PROVIDER_TYPE_META[profile.providerType].label}
-                        </span>
+                        {creativeEmbeddedMode &&
+                        isManagedProviderProfile(profile.id) ? null : (
+                          <span>
+                            {PROVIDER_TYPE_META[profile.providerType].label}
+                          </span>
+                        )}
                         <span>{profile.enabled ? '启用' : '停用'}</span>
                       </span>
                     ) : null}
@@ -2274,7 +2279,9 @@ export const SettingsDialog = ({
     const draftState = getProviderDraftState(selectedProfile, initialProfiles);
     const totalModels =
       selectedCounts.image + selectedCounts.video + selectedCounts.text;
-    const selectedProfileHomepageUrl = getProviderHomepageUrl(selectedProfile);
+    const selectedProfileHomepageUrl = isCreativeEmbeddedSessionBrokerProfile
+      ? null
+      : getProviderHomepageUrl(selectedProfile);
 
     return (
       <div
@@ -2331,9 +2338,11 @@ export const SettingsDialog = ({
                   {selectedProfile.name}
                 </h3>
                 <div className="settings-dialog__inline-meta">
-                  <span>
-                    {PROVIDER_TYPE_META[selectedProfile.providerType].label}
-                  </span>
+                  {isCreativeEmbeddedSessionBrokerProfile ? null : (
+                    <span>
+                      {PROVIDER_TYPE_META[selectedProfile.providerType].label}
+                    </span>
+                  )}
                   <span>{selectedProfile.enabled ? '启用' : '停用'}</span>
                   <span>{totalModels} 个模型</span>
                   <span>{draftState === 'saved' ? '已保存' : '未保存'}</span>
@@ -2360,247 +2369,124 @@ export const SettingsDialog = ({
           </div>
 
           <div className="settings-dialog__grid">
-            <div className="settings-dialog__field settings-dialog__field--column">
-              <label className="settings-dialog__label settings-dialog__label--stacked">
-                名称
-              </label>
-              <input
-                type="text"
-                className="settings-dialog__input"
-                value={selectedProfile.name}
-                onChange={(event) =>
-                  updateProfile(selectedProfile.id, (profile) => ({
-                    ...profile,
-                    name: event.target.value,
-                  }))
-                }
-              />
-            </div>
-
-            <div className="settings-dialog__field settings-dialog__field--column">
-              <label className="settings-dialog__label settings-dialog__label--stacked">
-                接口类型
-              </label>
-              <select
-                className="settings-dialog__select"
-                value={selectedProfile.providerType}
-                onChange={(event) =>
-                  updateProfile(selectedProfile.id, (profile) => {
-                    const providerType = event.target
-                      .value as ProviderProfile['providerType'];
-                    const previousDefaultAuth = inferAuthTypeForProviderType(
-                      profile.providerType
-                    );
-                    const nextDefaultAuth =
-                      inferAuthTypeForProviderType(providerType);
-
-                    return {
-                      ...profile,
-                      providerType,
-                      authType:
-                        profile.authType === previousDefaultAuth
-                          ? nextDefaultAuth
-                          : profile.authType,
-                    };
-                  })
-                }
-              >
-                {PROVIDER_TYPE_OPTIONS.map((providerType) => (
-                  <option key={providerType} value={providerType}>
-                    {PROVIDER_TYPE_META[providerType].label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
-              <label className="settings-dialog__label settings-dialog__label--stacked">
-                图片接口格式
-              </label>
-              <select
-                className="settings-dialog__select"
-                value={
-                  selectedProfile.imageApiCompatibility ||
-                  DEFAULT_PROVIDER_IMAGE_API_COMPATIBILITY
-                }
-                onChange={(event) =>
-                  updateProfile(selectedProfile.id, (profile) => ({
-                    ...profile,
-                    imageApiCompatibility: event.target
-                      .value as ImageApiCompatibility,
-                  }))
-                }
-              >
-                {IMAGE_API_COMPATIBILITY_OPTIONS.map((compatibility) => (
-                  <option key={compatibility} value={compatibility}>
-                    {IMAGE_API_COMPATIBILITY_META[compatibility].label}
-                  </option>
-                ))}
-              </select>
-              <span className="settings-dialog__field-hint">
-                {selectedImageApiCompatibilityHint}
-              </span>
-            </div>
-
-            <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
-              <label className="settings-dialog__label settings-dialog__label--stacked">
-                图标 URL
-              </label>
-              <input
-                type="url"
-                className="settings-dialog__input"
-                value={selectedProfile.iconUrl || ''}
-                onChange={(event) =>
-                  updateProfile(selectedProfile.id, (profile) => ({
-                    ...profile,
-                    iconUrl: event.target.value,
-                  }))
-                }
-                placeholder="可选，留空时自动生成默认图标"
-              />
-              <span className="settings-dialog__field-hint">
-                支持填写远程图片地址；未填写时将根据供应商名称生成默认图标。
-              </span>
-            </div>
-
-            <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
-              <label className="settings-dialog__label settings-dialog__label--stacked">
-                API 地址
-              </label>
-              <input
-                type="text"
-                className="settings-dialog__input"
-                value={selectedProfile.baseUrl}
-                disabled={isSelectedSessionBrokerProfile}
-                onChange={(event) =>
-                  updateProfile(selectedProfile.id, (profile) => ({
-                    ...profile,
-                    baseUrl: event.target.value,
-                  }))
-                }
-                placeholder={TUZI_PROVIDER_DEFAULT_BASE_URL}
-              />
-              {isSelectedSessionBrokerProfile ? (
-                <span className="settings-dialog__field-hint">
-                  托管会话固定通过 opentu /creative
-                  中继访问，不会向浏览器暴露上游 Base URL。
-                </span>
-              ) : null}
-            </div>
-
-            <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
-              <div className="settings-dialog__label-with-tooltip settings-dialog__label-with-tooltip--left">
-                <label className="settings-dialog__label settings-dialog__label--stacked">
-                  {isSelectedSessionBrokerProfile
-                    ? 'API Key（托管会话无需填写）'
-                    : 'API Key'}
-                </label>
-                <HoverTip
-                  content={
-                    <div style={{ maxWidth: 480 }}>
-                      您可以从以下地址获取 API Key:
-                      <br />
-                      <a
-                        href="https://api.tu-zi.com/token"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          color: '#F39C12',
-                          textDecoration: 'none',
-                          display: 'inline-block',
-                          marginBottom: 8,
-                        }}
-                      >
-                        api.tu-zi.com/token
-                      </a>
-                      <div
-                        style={{
-                          position: 'relative',
-                          width: '100%',
-                          paddingTop: '56.25%',
-                          marginTop: 8,
-                          borderRadius: 8,
-                          overflow: 'hidden',
-                          backgroundColor: '#000',
-                          boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
-                        }}
-                      >
-                        <iframe
-                          title="Bilibili tutorial video"
-                          src="//player.bilibili.com/player.html?isOutside=true&aid=116171584049629&bvid=BV1k4PqzPEKz&cid=36455319822&p=1"
-                          allowFullScreen={true}
-                          style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            height: '100%',
-                            border: 0,
-                          }}
-                        ></iframe>
-                      </div>
-                    </div>
-                  }
-                  placement="top"
-                  theme="light"
-                  showArrow={false}
-                  overlayStyle={{ maxWidth: 'none' }}
-                >
-                  <InfoCircleIcon className="settings-dialog__tooltip-icon" />
-                </HoverTip>
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '8px',
-                  alignItems: 'center',
-                  width: '100%',
-                  flexDirection: isCompactLayout ? 'column' : 'row',
-                }}
-              >
-                <div
-                  className="settings-dialog__secret-input-wrap"
-                  style={{ flex: isCompactLayout ? 'none' : 1 }}
-                >
+            {!isCreativeEmbeddedSessionBrokerProfile && (
+              <>
+                <div className="settings-dialog__field settings-dialog__field--column">
+                  <label className="settings-dialog__label settings-dialog__label--stacked">
+                    名称
+                  </label>
                   <input
-                    type={isApiKeyVisible ? 'text' : 'password'}
-                    className="settings-dialog__input settings-dialog__secret-input"
-                    value={
-                      isSelectedSessionBrokerProfile
-                        ? ''
-                        : selectedProfile.apiKey
-                    }
-                    disabled={isSelectedSessionBrokerProfile}
+                    type="text"
+                    className="settings-dialog__input"
+                    value={selectedProfile.name}
                     onChange={(event) =>
                       updateProfile(selectedProfile.id, (profile) => ({
                         ...profile,
-                        apiKey: event.target.value,
+                        name: event.target.value,
                       }))
                     }
-                    autoComplete="off"
                   />
-                  <HoverTip
-                    content={isApiKeyVisible ? '隐藏 API Key' : '查看 API Key'}
-                    showArrow={false}
-                  >
-                    <button
-                      type="button"
-                      className="settings-dialog__secret-toggle"
-                      aria-label={
-                        isApiKeyVisible ? '隐藏 API Key' : '查看 API Key'
-                      }
-                      disabled={isSelectedSessionBrokerProfile}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => setIsApiKeyVisible((visible) => !visible)}
-                    >
-                      {isApiKeyVisible ? (
-                        <EyeOff size={16} />
-                      ) : (
-                        <Eye size={16} />
-                      )}
-                    </button>
-                  </HoverTip>
                 </div>
+
+                <div className="settings-dialog__field settings-dialog__field--column">
+                  <label className="settings-dialog__label settings-dialog__label--stacked">
+                    接口类型
+                  </label>
+                  <select
+                    className="settings-dialog__select"
+                    value={selectedProfile.providerType}
+                    onChange={(event) =>
+                      updateProfile(selectedProfile.id, (profile) => {
+                        const providerType = event.target
+                          .value as ProviderProfile['providerType'];
+                        const previousDefaultAuth =
+                          inferAuthTypeForProviderType(profile.providerType);
+                        const nextDefaultAuth =
+                          inferAuthTypeForProviderType(providerType);
+
+                        return {
+                          ...profile,
+                          providerType,
+                          authType:
+                            profile.authType === previousDefaultAuth
+                              ? nextDefaultAuth
+                              : profile.authType,
+                        };
+                      })
+                    }
+                  >
+                    {PROVIDER_TYPE_OPTIONS.map((providerType) => (
+                      <option key={providerType} value={providerType}>
+                        {PROVIDER_TYPE_META[providerType].label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+
+            {!isCreativeEmbeddedSessionBrokerProfile && (
+              <>
+                <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
+                  <label className="settings-dialog__label settings-dialog__label--stacked">
+                    图片接口格式
+                  </label>
+                  <select
+                    className="settings-dialog__select"
+                    value={
+                      selectedProfile.imageApiCompatibility ||
+                      DEFAULT_PROVIDER_IMAGE_API_COMPATIBILITY
+                    }
+                    onChange={(event) =>
+                      updateProfile(selectedProfile.id, (profile) => ({
+                        ...profile,
+                        imageApiCompatibility: event.target
+                          .value as ImageApiCompatibility,
+                      }))
+                    }
+                  >
+                    {IMAGE_API_COMPATIBILITY_OPTIONS.map((compatibility) => (
+                      <option key={compatibility} value={compatibility}>
+                        {IMAGE_API_COMPATIBILITY_META[compatibility].label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-dialog__field-hint">
+                    {selectedImageApiCompatibilityHint}
+                  </span>
+                </div>
+
+                <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
+                  <label className="settings-dialog__label settings-dialog__label--stacked">
+                    图标 URL
+                  </label>
+                  <input
+                    type="url"
+                    className="settings-dialog__input"
+                    value={selectedProfile.iconUrl || ''}
+                    onChange={(event) =>
+                      updateProfile(selectedProfile.id, (profile) => ({
+                        ...profile,
+                        iconUrl: event.target.value,
+                      }))
+                    }
+                    placeholder="可选，留空时自动生成默认图标"
+                  />
+                  <span className="settings-dialog__field-hint">
+                    支持填写远程图片地址；未填写时将根据供应商名称生成默认图标。
+                  </span>
+                </div>
+              </>
+            )}
+
+            {isCreativeEmbeddedSessionBrokerProfile ? (
+              <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
+                <label className="settings-dialog__label settings-dialog__label--stacked">
+                  New API Creative 托管会话
+                </label>
+                <span className="settings-dialog__field-hint">
+                  当前 /creative 由 new-api 管理模型池、渠道路由、接口地址和上游凭证；浏览器内不配置供应商密钥。
+                </span>
                 <button
                   type="button"
                   className="settings-dialog__button settings-dialog__button--fetch"
@@ -2622,29 +2508,203 @@ export const SettingsDialog = ({
                       />
                       同步中
                     </>
-                  ) : isSelectedSessionBrokerProfile ? (
-                    '查看模型池'
                   ) : (
-                    '获取模型'
+                    '查看模型池'
                   )}
                 </button>
               </div>
-              {isSelectedSessionBrokerProfile ? (
-                <span className="settings-dialog__field-hint">
-                  全新浏览器打开 /creative 时使用托管会话，不需要在浏览器内配置
-                  API Key；完整模型池可在“查看模型池”中检索。
-                </span>
-              ) : null}
-            </div>
+            ) : (
+              <>
+                <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
+                  <label className="settings-dialog__label settings-dialog__label--stacked">
+                    API 地址
+                  </label>
+                  <input
+                    type="text"
+                    className="settings-dialog__input"
+                    value={selectedProfile.baseUrl}
+                    disabled={isSelectedSessionBrokerProfile}
+                    onChange={(event) =>
+                      updateProfile(selectedProfile.id, (profile) => ({
+                        ...profile,
+                        baseUrl: event.target.value,
+                      }))
+                    }
+                    placeholder={TUZI_PROVIDER_DEFAULT_BASE_URL}
+                  />
+	                  {isSelectedSessionBrokerProfile ? (
+	                    <span className="settings-dialog__field-hint">
+	                      托管会话固定通过 new-api /creative
+	                      中继访问，不会向浏览器暴露上游接口地址。
+	                    </span>
+	                  ) : null}
+                </div>
+
+                <div className="settings-dialog__field settings-dialog__field--column settings-dialog__field--full">
+                  <div className="settings-dialog__label-with-tooltip settings-dialog__label-with-tooltip--left">
+                    <label className="settings-dialog__label settings-dialog__label--stacked">
+                      {isSelectedSessionBrokerProfile
+                        ? 'API Key（托管会话无需填写）'
+                        : 'API Key'}
+                    </label>
+                    <HoverTip
+                      content={
+                        <div style={{ maxWidth: 480 }}>
+                          您可以从以下地址获取 API Key:
+                          <br />
+                          <a
+                            href="https://api.tu-zi.com/token"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              color: '#F39C12',
+                              textDecoration: 'none',
+                              display: 'inline-block',
+                              marginBottom: 8,
+                            }}
+                          >
+                            api.tu-zi.com/token
+                          </a>
+                          <div
+                            style={{
+                              position: 'relative',
+                              width: '100%',
+                              paddingTop: '56.25%',
+                              marginTop: 8,
+                              borderRadius: 8,
+                              overflow: 'hidden',
+                              backgroundColor: '#000',
+                              boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+                            }}
+                          >
+                            <iframe
+                              title="Bilibili tutorial video"
+                              src="//player.bilibili.com/player.html?isOutside=true&aid=116171584049629&bvid=BV1k4PqzPEKz&cid=36455319822&p=1"
+                              allowFullScreen={true}
+                              style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: '100%',
+                                height: '100%',
+                                border: 0,
+                              }}
+                            ></iframe>
+                          </div>
+                        </div>
+                      }
+                      placement="top"
+                      theme="light"
+                      showArrow={false}
+                      overlayStyle={{ maxWidth: 'none' }}
+                    >
+                      <InfoCircleIcon className="settings-dialog__tooltip-icon" />
+                    </HoverTip>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '8px',
+                      alignItems: 'center',
+                      width: '100%',
+                      flexDirection: isCompactLayout ? 'column' : 'row',
+                    }}
+                  >
+                    <div
+                      className="settings-dialog__secret-input-wrap"
+                      style={{ flex: isCompactLayout ? 'none' : 1 }}
+                    >
+                      <input
+                        type={isApiKeyVisible ? 'text' : 'password'}
+                        className="settings-dialog__input settings-dialog__secret-input"
+                        value={
+                          isSelectedSessionBrokerProfile
+                            ? ''
+                            : selectedProfile.apiKey
+                        }
+                        disabled={isSelectedSessionBrokerProfile}
+                        onChange={(event) =>
+                          updateProfile(selectedProfile.id, (profile) => ({
+                            ...profile,
+                            apiKey: event.target.value,
+                          }))
+                        }
+                        autoComplete="off"
+                      />
+                      <HoverTip
+                        content={
+                          isApiKeyVisible ? '隐藏 API Key' : '查看 API Key'
+                        }
+                        showArrow={false}
+                      >
+                        <button
+                          type="button"
+                          className="settings-dialog__secret-toggle"
+                          aria-label={
+                            isApiKeyVisible ? '隐藏 API Key' : '查看 API Key'
+                          }
+                          disabled={isSelectedSessionBrokerProfile}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() =>
+                            setIsApiKeyVisible((visible) => !visible)
+                          }
+                        >
+                          {isApiKeyVisible ? (
+                            <EyeOff size={16} />
+                          ) : (
+                            <Eye size={16} />
+                          )}
+                        </button>
+                      </HoverTip>
+                    </div>
+                    <button
+                      type="button"
+                      className="settings-dialog__button settings-dialog__button--fetch"
+                      style={{
+                        whiteSpace: 'nowrap',
+                        height: isCompactLayout ? '42px' : '32px',
+                        width: isCompactLayout ? '100%' : 'auto',
+                      }}
+                      onClick={handleFetchModels}
+                      disabled={
+                        !canManageModels || runtimeState.status === 'loading'
+                      }
+                    >
+                      {runtimeState.status === 'loading' ? (
+                        <>
+                          <Loader2
+                            size={15}
+                            className="settings-dialog__button-spinner"
+                          />
+                          同步中
+                        </>
+                      ) : isSelectedSessionBrokerProfile ? (
+                        '查看模型池'
+                      ) : (
+                        '获取模型'
+                      )}
+                    </button>
+                  </div>
+	                  {isSelectedSessionBrokerProfile ? (
+	                    <span className="settings-dialog__field-hint">
+	                      全新浏览器打开 /creative 时使用托管会话，不需要在浏览器内配置
+	                      供应商凭证；完整模型池可在“查看模型池”中检索。
+	                    </span>
+	                  ) : null}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
-        <PricingFieldGroup
-          profile={selectedProfile}
-          onUpdateProfile={(updater) =>
-            updateProfile(selectedProfile.id, updater)
-          }
-        />
+        {!isCreativeEmbeddedSessionBrokerProfile && (
+          <PricingFieldGroup
+            profile={selectedProfile}
+            onUpdateProfile={(updater) =>
+              updateProfile(selectedProfile.id, updater)
+            }
+          />
+        )}
 
         {selectedProfile.id === LEGACY_DEFAULT_PROVIDER_PROFILE_ID ? (
           <div className="settings-dialog__section settings-dialog__section--compact">
@@ -2741,14 +2801,22 @@ export const SettingsDialog = ({
       displayModels.length > 0 &&
       filteredModels.length === 0 &&
       Boolean(modelSearch);
+    const shouldShowSessionBrokerEmptyState =
+      isSessionBrokerProvider && displayModels.length === 0;
     const shouldShowErrorState =
-      runtimeState.status === 'error' && displayModels.length === 0;
+      runtimeState.status === 'error' &&
+      displayModels.length === 0 &&
+      !shouldShowSessionBrokerEmptyState;
     const shouldShowHintState =
       (!canManageModels || isSessionBrokerProvider) &&
       displayModels.length === 0;
     const modelActionUnavailableHint = isSessionBrokerProvider
-      ? '托管会话无需 API Key；请等待 opentu 模型池同步完成'
+      ? '托管会话无需浏览器凭证；请等待 New API Creative 模型池同步完成'
       : '请先保存供应商配置并确保 API Key 可用';
+    const sessionBrokerEmptyMessage =
+      runtimeState.status === 'error'
+        ? '托管会话暂不可用；请返回控制台登录，或等待管理员同步 New API Creative 模型池。'
+        : '托管会话模型由 New API Creative 自动同步，无需浏览器凭证；同步完成后可在这里检索和浏览。';
 
     return (
       <div className="settings-dialog__section">
@@ -2988,6 +3056,10 @@ export const SettingsDialog = ({
           <div className="settings-dialog__model-empty">
             没有匹配的模型，试试搜索品牌名或更完整的模型 ID。
           </div>
+        ) : shouldShowSessionBrokerEmptyState ? (
+          <div className="settings-dialog__model-empty">
+            {sessionBrokerEmptyMessage}
+          </div>
         ) : shouldShowErrorState ? (
           <div className="settings-dialog__model-empty settings-dialog__model-empty--error">
             <AlertTriangle size={16} />
@@ -2996,7 +3068,7 @@ export const SettingsDialog = ({
         ) : shouldShowHintState ? (
           <div className="settings-dialog__model-empty">
             {isSessionBrokerProvider
-              ? '托管会话模型由 opentu 自动同步，无需 API Key；同步完成后可在这里检索和浏览。'
+              ? sessionBrokerEmptyMessage
               : '填写 API Key 后即可获取模型，获取完成后可在这里检索和浏览。'}
           </div>
         ) : (

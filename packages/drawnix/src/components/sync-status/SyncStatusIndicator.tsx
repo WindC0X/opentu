@@ -16,6 +16,7 @@ import { useGitHubSyncOptional } from '../../contexts/GitHubSyncContext';
 import { SyncSettings } from '../sync-settings';
 import './sync-status.scss';
 import { HoverTip } from '../shared';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 /**
  * 同步状态指示器
@@ -23,6 +24,10 @@ import { HoverTip } from '../shared';
 export function SyncStatusIndicator() {
   const syncContext = useGitHubSyncOptional();
   const [showSettings, setShowSettings] = useState(false);
+
+  if (isCreativeEmbeddedMode()) {
+    return null;
+  }
 
   // 如果没有同步上下文，不显示
   if (!syncContext) {

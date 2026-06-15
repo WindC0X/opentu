@@ -54,15 +54,18 @@ export function getCreativeDocumentCloudSyncStatusLabel(
       : '同步冲突';
   }
   if (status.syncing || status.syncState === 'syncing') {
-    return '正在同步';
+    return '正在同步到云端…';
   }
   if (status.saveState === 'cloud-saved') {
-    return '云端已保存';
+    return '已同步到云端';
   }
   if (status.saveState === 'local-saved') {
-    return status.pendingMutationCount > 0
-      ? `本地已保存 · 待同步 ${status.pendingMutationCount}`
-      : '本地已保存';
+    if (status.pendingMutationCount > 0) {
+      return status.assetSyncEnabled
+        ? `已保存到此浏览器 · 等待云同步 ${status.pendingMutationCount}`
+        : '云同步不可用 · 已保存到此浏览器';
+    }
+    return '已保存到此浏览器';
   }
   return '云同步就绪';
 }
@@ -126,7 +129,7 @@ export const CreativeDocumentCloudSyncBadge: React.FC<
       data-testid="creative-document-sync-status"
       role="status"
       aria-live="polite"
-      aria-label={`创作云同步状态：${label}`}
+      aria-label={`创作保存状态：${label}`}
       style={style}
     >
       {label}

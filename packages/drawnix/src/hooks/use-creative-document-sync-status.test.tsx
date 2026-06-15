@@ -4,6 +4,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CreativeDocumentCloudSyncBadge,
+  getCreativeDocumentCloudSyncStatusLabel,
 } from '../components/creative-document-sync-status/CreativeDocumentCloudSyncBadge';
 import { useCreativeDocumentCloudSyncStatus } from './use-creative-document-sync-status';
 import {
@@ -217,10 +218,25 @@ describe('CreativeDocumentCloudSyncBadge', () => {
     });
 
     const badge = screen.getByTestId('creative-document-sync-status');
-    expect(badge.textContent).toContain('本地已保存');
+    expect(badge.textContent).toContain('已保存到此浏览器');
     expect(badge.textContent).not.toMatch(
       /Campaign Board|private canvas text|leak/i
     );
     service.stop();
+  });
+
+  it('explains pending browser-only saves when cloud asset sync is disabled', () => {
+    const status: CreativeDocumentCloudSyncStatus = {
+      ...getCreativeDocumentCloudSyncStatusSnapshot(null),
+      saveState: 'local-saved',
+      syncState: 'pending',
+      pendingMutationCount: 1,
+      pendingSnapshotCount: 1,
+      assetSyncEnabled: false,
+    };
+
+    expect(getCreativeDocumentCloudSyncStatusLabel(status)).toBe(
+      '云同步不可用 · 已保存到此浏览器'
+    );
   });
 });

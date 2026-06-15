@@ -289,6 +289,23 @@ class SettingsManager {
   }
 
   /**
+   * Reload the in-memory settings snapshot from localStorage.
+   *
+   * Embedded Creative can load deferred chunks after another chunk has already
+   * persisted the managed new-api catalog. Those chunks may hold a separate
+   * settings-manager module instance with a stale in-memory snapshot, so model
+   * discovery needs a safe way to rehydrate non-secret catalog state.
+   */
+  public reloadFromStorage(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const oldSettings = this.cloneValue(this.settings);
+    this.settings = this.loadSettings();
+    this.notifySettingsChange(oldSettings, this.settings, '');
+  }
+
+  /**
    * 初始化加密功能
    */
   private async initializeCrypto(): Promise<void> {

@@ -93,6 +93,76 @@ const PRECACHE_ALWAYS_INCLUDE = new Set([
   '/manifest.json',
   '/favicon.ico',
 ]);
+const MANIFEST_BASE_PATH = normalizeManifestBasePath(
+  process.env.VITE_BASE_URL || './'
+);
+const EMBEDDED_CREATIVE_BASE_PATH = '/creative';
+
+function normalizeManifestBasePath(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed || trimmed === '.' || trimmed === './') {
+    return '';
+  }
+
+  let pathname = trimmed;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      pathname = new URL(trimmed).pathname;
+    } catch {
+      return '';
+    }
+  }
+
+  if (!pathname.startsWith('/')) {
+    return '';
+  }
+
+  const normalized = pathname.replace(/\/+$/, '');
+  return normalized === '' || normalized === '/' ? '' : normalized;
+}
+
+function withManifestBasePath(url: string): string {
+  if (!MANIFEST_BASE_PATH || !url.startsWith('/')) {
+    return url;
+  }
+  if (url === MANIFEST_BASE_PATH || url.startsWith(`${MANIFEST_BASE_PATH}/`)) {
+    return url;
+  }
+  return `${MANIFEST_BASE_PATH}${url}`;
+}
+
+function isEmbeddedCreativeBuild(): boolean {
+  return MANIFEST_BASE_PATH === EMBEDDED_CREATIVE_BASE_PATH;
+}
+
+function stripManifestBasePath(url: string): string {
+  if (
+    MANIFEST_BASE_PATH &&
+    (url === MANIFEST_BASE_PATH || url.startsWith(`${MANIFEST_BASE_PATH}/`))
+  ) {
+    const stripped = url.slice(MANIFEST_BASE_PATH.length);
+    return stripped.startsWith('/') ? stripped : `/${stripped}`;
+  }
+  return url;
+}
+
+function toPublicManifestEntry(entry: ManifestEntry): ManifestEntry {
+  return {
+    ...entry,
+    url: withManifestBasePath(entry.url),
+  };
+}
+
+function toPublicManifestGroups(
+  groups: Record<IdlePrefetchGroup, ManifestEntry[]>
+): Record<IdlePrefetchGroup, ManifestEntry[]> {
+  return Object.fromEntries(
+    Object.entries(groups).map(([group, entries]) => [
+      group,
+      entries.map(toPublicManifestEntry),
+    ])
+  ) as Record<IdlePrefetchGroup, ManifestEntry[]>;
+}
 
 function isFileDescriptorLimitError(error: unknown): boolean {
   return (
@@ -262,7 +332,7 @@ function normalizeStaticUrlCandidate(candidate: string): string | null {
   }
 
   if (withoutQuery.startsWith('/')) {
-    return withoutQuery;
+    return stripManifestBasePath(withoutQuery);
   }
 
   return `/${withoutQuery}`;
@@ -789,6 +859,10 @@ function precacheManifestPlugin(): Plugin {
       sequential: true,
       order: 'post',
       async handler() {
+        if (isEmbeddedCreativeBuild()) {
+          return;
+        }
+
         const outDir = path.resolve(__dirname, '../../dist/apps/web');
         const indexHtmlPath = path.join(outDir, 'index.html');
         const precacheUrls = await collectHtmlShellPrecacheUrls(indexHtmlPath);
@@ -805,7 +879,7 @@ function precacheManifestPlugin(): Plugin {
         const manifestContent = {
           version: appVersion,
           timestamp: new Date().toISOString(),
-          files: manifest,
+          files: manifest.map(toPublicManifestEntry),
         };
 
         await writeFileWithFdRetry(
@@ -867,7 +941,7 @@ function idlePrefetchManifestPlugin(): Plugin {
             ) as { files?: Array<{ url?: string }> };
             for (const entry of precacheManifest.files || []) {
               if (typeof entry.url === 'string' && entry.url.length > 0) {
-                precachedUrls.add(entry.url);
+                precachedUrls.add(stripManifestBasePath(entry.url));
               }
             }
           } catch (error) {
@@ -926,7 +1000,7 @@ function idlePrefetchManifestPlugin(): Plugin {
               version: appVersion,
               timestamp: new Date().toISOString(),
               defaults: [...IDLE_PREFETCH_DEFAULTS],
-              groups,
+              groups: toPublicManifestGroups(groups),
             },
             null,
             2
@@ -946,6 +1020,10 @@ function deferEntryAssetsPlugin(): Plugin {
       sequential: true,
       order: 'post',
       async handler() {
+        if (isEmbeddedCreativeBuild()) {
+          return;
+        }
+
         const outDir = path.resolve(__dirname, '../../dist/apps/web');
         const indexHtmlPath = path.join(outDir, 'index.html');
 
@@ -990,6 +1068,10 @@ function rewriteEntryAssetsToCDNPlugin(): Plugin {
       sequential: true,
       order: 'post',
       async handler() {
+        if (isEmbeddedCreativeBuild()) {
+          return;
+        }
+
         const outDir = path.resolve(__dirname, '../../dist/apps/web');
         const indexHtmlPath = path.join(outDir, 'index.html');
 
@@ -1067,6 +1149,10 @@ function rewriteManifestAssetsToCDNPlugin(): Plugin {
       sequential: true,
       order: 'post',
       async handler() {
+        if (isEmbeddedCreativeBuild()) {
+          return;
+        }
+
         const outDir = path.resolve(__dirname, '../../dist/apps/web');
         const manifestPath = path.join(outDir, 'manifest.json');
 
@@ -1132,6 +1218,284 @@ function rewriteManifestAssetsToCDNPlugin(): Plugin {
   };
 }
 
+const EMBEDDED_CREATIVE_STATIC_HTML_FILES = [
+  'home.html',
+  'en/home.html',
+  'versions.html',
+  'iframe-test.html',
+  'sw-debug.html',
+  'cdn-debug.html',
+];
+
+const EMBEDDED_CREATIVE_STANDALONE_ARTIFACT_PATHS = [
+  'product_showcase',
+  'user-manual',
+  'sw-debug',
+  'logo-tuzi.png',
+  'logo/group-qr.png',
+  'logo/cardid.jpg',
+];
+
+function createEmbeddedCreativeStaticHtml(title = 'New API Creative'): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>${title}</title>
+  </head>
+  <body>
+    <main>
+      <h1>${title}</h1>
+      <p>Creative is managed by new-api. Open <a href="/creative/">/creative/</a> from the new-api console.</p>
+    </main>
+  </body>
+</html>
+`;
+}
+
+function createEmbeddedCreativeHeaders(): string {
+  return `# New API embedded Creative headers.
+# The Go server is the authoritative deployment surface for /creative/.
+# Keep this static-host fallback same-origin and free of standalone provider origins.
+
+/
+  Cache-Control: public, max-age=0, must-revalidate
+  Content-Security-Policy: upgrade-insecure-requests; default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss: data:; frame-ancestors 'self' localhost:* 127.0.0.1:* *.localhost:*;
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: origin-when-cross-origin
+
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate
+  Content-Security-Policy: frame-ancestors 'self' localhost:* 127.0.0.1:* *.localhost:*;
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: origin-when-cross-origin
+
+/*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/*.css
+  Cache-Control: public, max-age=31536000, immutable
+
+/sw.js
+  Cache-Control: public, max-age=0, must-revalidate
+  Content-Security-Policy: frame-ancestors 'self' localhost:* 127.0.0.1:* *.localhost:*;
+
+/manifest.json
+  Cache-Control: public, max-age=3600, must-revalidate
+
+/version.json
+  Cache-Control: public, max-age=0, must-revalidate
+`;
+}
+
+function createEmbeddedCreativeCDNConfig(): string {
+  return `// New API embedded Creative always loads boot assets from its same-origin /creative bundle.
+(function () {
+  var preference = { cdn: 'local', latency: 0, timestamp: Date.now(), embeddedCreative: true };
+  var api = {
+    selectBestCDN: function () { return Promise.resolve(preference); },
+    getCDNBaseUrl: function () { return null; },
+    clearCDNCache: function () {},
+    reselectCDN: function () { return Promise.resolve(preference); },
+    sources: [],
+    config: { packageName: 'new-api-creative', embeddedCreative: true },
+    embeddedCreative: true,
+  };
+  window.__OPENTU_CDN__ = preference;
+  window.__AITU_CDN__ = preference;
+  window.__OPENTU_CDN_API__ = api;
+  window.__AITU_CDN_API__ = api;
+})();
+`;
+}
+
+async function writeEmbeddedCreativeAuxiliaryFiles(outDir: string): Promise<void> {
+  await writeFileWithFdRetry(path.join(outDir, '_headers'), createEmbeddedCreativeHeaders());
+  await writeFileWithFdRetry(
+    path.join(outDir, '_redirects'),
+    '# New API embedded Creative SPA fallback\n/*    /index.html   200\n'
+  );
+  await writeFileWithFdRetry(
+    path.join(outDir, 'robots.txt'),
+    'User-agent: *\nDisallow: /\n'
+  );
+  await writeFileWithFdRetry(
+    path.join(outDir, 'sitemap.xml'),
+    '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>\n'
+  );
+  await writeFileWithFdRetry(path.join(outDir, 'cdn-config.js'), createEmbeddedCreativeCDNConfig());
+}
+
+async function removeEmbeddedCreativeStandaloneArtifacts(outDir: string): Promise<void> {
+  for (const relativePath of EMBEDDED_CREATIVE_STANDALONE_ARTIFACT_PATHS) {
+    const targetPath = path.join(outDir, relativePath);
+    if (!fs.existsSync(targetPath)) {
+      continue;
+    }
+
+    await fs.promises.rm(targetPath, { recursive: true, force: true });
+  }
+}
+
+function embeddedCreativeArtifactCleanupPlugin(): Plugin {
+  return {
+    name: 'embedded-creative-artifact-cleanup',
+    apply: 'build',
+    closeBundle: {
+      sequential: true,
+      order: 'post',
+      async handler() {
+        if (!isEmbeddedCreativeBuild()) {
+          return;
+        }
+
+        const outDir = path.resolve(__dirname, '../../dist/apps/web');
+        const indexHtmlPath = path.join(outDir, 'index.html');
+        const manifestPath = path.join(outDir, 'manifest.json');
+
+        if (fs.existsSync(indexHtmlPath)) {
+          let html = (await readFileWithFdRetry(
+            indexHtmlPath,
+            'utf8'
+          )) as string;
+
+          html = html
+            .replace(/<title>[\s\S]*?<\/title>/, '<title>New API Creative</title>')
+            .replace(
+              /<meta\s+name="description"[\s\S]*?\/>/,
+              '<meta name="description" content="New API Creative is a new-api managed AI canvas workspace." />'
+            )
+            .replace(
+              /<meta\s+name="keywords"[\s\S]*?\/>/,
+              '<meta name="keywords" content="New API Creative,AI canvas,creative workspace" />'
+            )
+            .replace(
+              /<meta\s+name="application-name"[^>]*>/,
+              '<meta name="application-name" content="New API Creative" />'
+            )
+            .replace(
+              /<meta\s+name="author"[^>]*>/,
+              '<meta name="author" content="New API" />'
+            )
+            .replace(
+              /<meta\s+name="robots"[^>]*>/,
+              '<meta name="robots" content="noindex,nofollow" />'
+            )
+            .replace(
+              /<meta\s+property="og:title"[\s\S]*?\/>/,
+              '<meta property="og:title" content="New API Creative" />'
+            )
+            .replace(
+              /<meta\s+property="og:description"[\s\S]*?\/>/,
+              '<meta property="og:description" content="New API managed Creative workspace." />'
+            )
+            .replace(
+              /<meta\s+property="og:url"[^>]*>/,
+              '<meta property="og:url" content="/creative/" />'
+            )
+            .replace(
+              /<meta\s+property="og:site_name"[^>]*>/,
+              '<meta property="og:site_name" content="New API Creative" />'
+            )
+            .replace(
+              /<meta\s+property="og:image"[\s\S]*?\/>/,
+              '<meta property="og:image" content="/creative/icons/icon-512x512.svg" />'
+            )
+            .replace(
+              /<meta\s+property="og:image:alt"[^>]*>/,
+              '<meta property="og:image:alt" content="New API Creative workspace preview" />'
+            )
+            .replace(
+              /<meta\s+name="twitter:title"[\s\S]*?\/>/,
+              '<meta name="twitter:title" content="New API Creative" />'
+            )
+            .replace(
+              /<meta\s+name="twitter:description"[\s\S]*?\/>/,
+              '<meta name="twitter:description" content="New API managed Creative workspace." />'
+            )
+            .replace(
+              /<meta\s+name="twitter:image"[\s\S]*?\/>/,
+              '<meta name="twitter:image" content="/creative/icons/icon-512x512.svg" />'
+            )
+            .replace(
+              /<meta\s+name="twitter:image:alt"[^>]*>/,
+              '<meta name="twitter:image:alt" content="New API Creative workspace preview" />'
+            )
+            .replace(
+              /<meta\s+name="apple-mobile-web-app-title"[^>]*>/,
+              '<meta name="apple-mobile-web-app-title" content="Creative" />'
+            )
+            .replace(/\s*<link\s+rel="canonical"[^>]*>\s*/g, '\n')
+            .replace(/\s*<link\s+rel="alternate"[^>]*>\s*/g, '\n')
+            .replace(
+              /\s*<script\s+type="application\/ld\+json">[\s\S]*?<\/script>\s*/,
+              '\n'
+            )
+            .replace(
+              /<a\b(?=[^>]*\bclass="app-boot-mark")(?=[^>]*\bdata-official-site-link)[\s\S]*?<\/a\s*>/,
+              '<span class="app-boot-mark" data-official-site-link>New API Creative</span>'
+            )
+            .replace(
+              /<main id="seo-content">[\s\S]*?<\/main>/,
+              '<main id="seo-content" hidden aria-hidden="true"></main>'
+            )
+            .replace(/opentu\.ai/gi, 'new-api.local')
+            .replace(/aitu-app/g, 'new-api-creative')
+            .replace(
+              /var BOOT_CDN_PACKAGE_NAME = 'aitu-app';/,
+              "var BOOT_CDN_PACKAGE_NAME = 'new-api-creative';"
+            )
+            .replace(
+              /var BOOT_CDN_BASE_URL = 'https:\/\/cdn\.jsdelivr\.net\/npm\/';/,
+              "var BOOT_CDN_BASE_URL = '';"
+            )
+            .replace(
+              /var forceLocalBootAssets = false;/,
+              'var forceLocalBootAssets = true;'
+            );
+
+          await writeFileWithFdRetry(indexHtmlPath, html);
+        }
+
+        if (fs.existsSync(manifestPath)) {
+          const manifest = JSON.parse(
+            (await readFileWithFdRetry(manifestPath, 'utf8')) as string
+          );
+          manifest.name = 'New API Creative';
+          manifest.short_name = 'Creative';
+          manifest.description =
+            'New API managed Creative canvas workspace.';
+          manifest.start_url = '/creative/';
+          manifest.scope = '/creative/';
+          if (Array.isArray(manifest.shortcuts)) {
+            manifest.shortcuts = [];
+          }
+          await writeFileWithFdRetry(
+            manifestPath,
+            JSON.stringify(manifest, null, 2) + '\n'
+            );
+        }
+
+        await writeEmbeddedCreativeAuxiliaryFiles(outDir);
+        await removeEmbeddedCreativeStandaloneArtifacts(outDir);
+
+        for (const relativeFile of EMBEDDED_CREATIVE_STATIC_HTML_FILES) {
+          const htmlPath = path.join(outDir, relativeFile);
+          await fs.promises.mkdir(path.dirname(htmlPath), { recursive: true });
+          await writeFileWithFdRetry(
+            htmlPath,
+            createEmbeddedCreativeStaticHtml()
+          );
+        }
+
+        console.log('[EmbeddedCreative] Rewrote standalone static metadata');
+      },
+    },
+  };
+}
+
 // 检测是否在 watch 模式下运行（命令行包含 --watch）
 const isWatchMode = process.argv.includes('--watch');
 const isServeMode = process.argv.includes('serve');
@@ -1189,6 +1553,7 @@ export default defineConfig({
     deferEntryAssetsPlugin(),
     rewriteEntryAssetsToCDNPlugin(),
     rewriteManifestAssetsToCDNPlugin(),
+    embeddedCreativeArtifactCleanupPlugin(),
     precacheManifestPlugin(),
     idlePrefetchManifestPlugin(),
   ],

@@ -5,6 +5,8 @@ export const CREATIVE_BOOTSTRAP_ENDPOINT = '/creative/api/bootstrap';
 export const CREATIVE_MODELS_ENDPOINT = '/creative/api/models';
 export const CREATIVE_MODEL_PREFERENCE_ENDPOINT =
   '/creative/api/preferences/model';
+export const CREATIVE_MANAGED_CATALOG_UPDATED_EVENT =
+  'creative:managed-catalog-updated';
 export const CREATIVE_DOCUMENTS_ENDPOINT = '/creative/api/documents';
 export const CREATIVE_ASSETS_ENDPOINT = '/creative/api/assets';
 export const CREATIVE_CSRF_HEADER = 'X-Creative-CSRF';

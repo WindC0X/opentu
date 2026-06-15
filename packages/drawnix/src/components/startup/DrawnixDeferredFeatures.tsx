@@ -4,6 +4,7 @@ import type { DrawnixBoard } from '../../hooks/use-drawnix';
 import type { Board as WorkspaceBoard } from '../../types/workspace.types';
 import type { MediaLibraryConfig } from '../../types/asset.types';
 import { useDrawnix } from '../../hooks/use-drawnix';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import './deferred-features.scss';
 
 const ProjectDrawer = lazy(() =>
@@ -113,6 +114,7 @@ export function DrawnixDeferredFeatures({
   const { appState, setAppState } = useDrawnix();
   const commandPaletteOpen = appState.openCommandPalette || false;
   const canvasSearchOpen = appState.openCanvasSearch || false;
+  const embeddedCreative = isCreativeEmbeddedMode();
 
   return (
     <>
@@ -152,7 +154,7 @@ export function DrawnixDeferredFeatures({
           />
         </Suspense>
       )}
-      {cloudSyncOpen && (
+      {cloudSyncOpen && !embeddedCreative && (
         <Suspense fallback={null}>
           <SyncSettings
             visible={cloudSyncOpen}
@@ -160,7 +162,7 @@ export function DrawnixDeferredFeatures({
           />
         </Suspense>
       )}
-      {versionUpdateEnabled && (
+      {versionUpdateEnabled && !embeddedCreative && (
         <Suspense fallback={null}>
           <VersionUpdatePrompt />
         </Suspense>

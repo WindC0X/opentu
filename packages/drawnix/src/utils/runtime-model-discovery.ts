@@ -768,6 +768,86 @@ function cloneModelConfig(model: ModelConfig): ModelConfig {
   };
 }
 
+function mergeImageDefaults(
+  staticDefaults: ModelConfig['imageDefaults'],
+  runtimeDefaults: ModelConfig['imageDefaults']
+): ModelConfig['imageDefaults'] {
+  if (staticDefaults && runtimeDefaults) {
+    return { ...staticDefaults, ...runtimeDefaults };
+  }
+  if (runtimeDefaults) {
+    return { ...runtimeDefaults };
+  }
+  if (staticDefaults) {
+    return { ...staticDefaults };
+  }
+  return undefined;
+}
+
+function mergeVideoDefaults(
+  staticDefaults: ModelConfig['videoDefaults'],
+  runtimeDefaults: ModelConfig['videoDefaults']
+): ModelConfig['videoDefaults'] {
+  if (staticDefaults && runtimeDefaults) {
+    return { ...staticDefaults, ...runtimeDefaults };
+  }
+  if (runtimeDefaults) {
+    return { ...runtimeDefaults };
+  }
+  if (staticDefaults) {
+    return { ...staticDefaults };
+  }
+  return undefined;
+}
+
+function mergeStaticConfigPreservingRuntimeIdentity(
+  model: ModelConfig,
+  staticConfig = getStaticModelConfig(model.id),
+  options: { preferRuntimePresentation?: boolean } = {}
+): ModelConfig {
+  if (!staticConfig) {
+    return model;
+  }
+
+  const clonedStatic = cloneModelConfig(staticConfig);
+  const imageDefaults = mergeImageDefaults(
+    clonedStatic.imageDefaults,
+    model.imageDefaults
+  );
+  const videoDefaults = mergeVideoDefaults(
+    clonedStatic.videoDefaults,
+    model.videoDefaults
+  );
+  const preferRuntimePresentation =
+    options.preferRuntimePresentation !== false;
+  return {
+    ...clonedStatic,
+    ...model,
+    // new-api channel model ids are executable routing ids. Keep their exact
+    // casing/spelling even when they match a built-in OpenTU model
+    // case-insensitively; otherwise selectedModelIds and generation payloads
+    // drift back to the static id (for example gpt-image-2).
+    id: model.id,
+    label: preferRuntimePresentation
+      ? model.label || clonedStatic.label
+      : clonedStatic.label || model.label,
+    shortLabel: preferRuntimePresentation
+      ? model.shortLabel || clonedStatic.shortLabel
+      : clonedStatic.shortLabel || model.shortLabel,
+    shortCode: preferRuntimePresentation
+      ? model.shortCode || clonedStatic.shortCode
+      : clonedStatic.shortCode || model.shortCode,
+    description: preferRuntimePresentation
+      ? model.description || clonedStatic.description
+      : clonedStatic.description || model.description,
+    tags: Array.from(
+      new Set([...(clonedStatic.tags || []), ...(model.tags || [])])
+    ),
+    ...(imageDefaults ? { imageDefaults } : {}),
+    ...(videoDefaults ? { videoDefaults } : {}),
+  };
+}
+
 function adaptRuntimeModel(model: RemoteModelListItem): ModelConfig | null {
   if (!model?.id || typeof model.id !== 'string') {
     return null;
@@ -775,7 +855,11 @@ function adaptRuntimeModel(model: RemoteModelListItem): ModelConfig | null {
 
   const staticConfig = getStaticModelConfig(model.id);
   if (staticConfig) {
-    return cloneModelConfig(staticConfig);
+    return mergeStaticConfigPreservingRuntimeIdentity(
+      buildFallbackConfig(model),
+      staticConfig,
+      { preferRuntimePresentation: false }
+    );
   }
 
   return buildFallbackConfig(model);
@@ -862,7 +946,7 @@ function attachRuntimeSource(
 function refreshPersistedModelConfig(model: ModelConfig): ModelConfig {
   const staticConfig = getStaticModelConfig(model.id);
   if (staticConfig) {
-    return cloneModelConfig(staticConfig);
+    return mergeStaticConfigPreservingRuntimeIdentity(model, staticConfig);
   }
 
   const lowerId = model.id.toLowerCase();
@@ -1145,6 +1229,15 @@ class RuntimeModelDiscoveryStore {
 
   private syncRuntimeModelConfigs(): void {
     setRuntimeModelConfigs(this.resolveRuntimeModels());
+  }
+
+  refreshFromSettings(options: { reloadFromStorage?: boolean } = {}): void {
+    if (options.reloadFromStorage) {
+      settingsManager.reloadFromStorage();
+    }
+    this.catalogStates = this.loadCatalogStatesFromSettings();
+    this.syncRuntimeModelConfigs();
+    this.emit();
   }
 
   subscribe(listener: () => void): () => void {
@@ -1501,6 +1594,12 @@ class RuntimeModelDiscoveryStore {
 }
 
 export const runtimeModelDiscovery = new RuntimeModelDiscoveryStore();
+
+export function refreshRuntimeModelDiscoveryFromSettings(options?: {
+  reloadFromStorage?: boolean;
+}): void {
+  runtimeModelDiscovery.refreshFromSettings(options);
+}
 
 export function getPreferredModels(type: ModelType): ModelConfig[] {
   return runtimeModelDiscovery.getPreferredModels(type);

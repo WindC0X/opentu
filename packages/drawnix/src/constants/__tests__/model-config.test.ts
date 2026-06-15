@@ -48,6 +48,31 @@ describe('model-config image size options', () => {
     ]);
   });
 
+  it('对 new-api 渠道返回的大小写变体也使用同一份静态参数元数据', () => {
+    const staticModel = getStaticModelConfig('Gpt-image-2');
+    const params = getCompatibleParams('Gpt-image-2');
+
+    expect(staticModel?.id).toBe('gpt-image-2');
+    expect(
+      getSizeOptionsForModel('Gpt-image-2').map((option) => option.value)
+    ).toEqual([
+      'auto',
+      '1x1',
+      '2x3',
+      '3x2',
+      '3x4',
+      '4x3',
+      '4x5',
+      '5x4',
+      '9x16',
+      '16x9',
+      '21x9',
+    ]);
+    expect(params.map((param) => param.id)).toEqual(
+      expect.arrayContaining(['size', 'resolution', 'quality'])
+    );
+  });
+
   it('不再内置已下架的 GPT Image 旧模型', () => {
     expect(getStaticModelConfig('gpt-image-1')).toBeUndefined();
     expect(getStaticModelConfig('gpt-image-1.5')).toBeUndefined();

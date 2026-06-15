@@ -52,7 +52,8 @@
         "commands": [
           "nx run web:typecheck",
           "nx run web:build-app",
-          "nx run web:build-sw"
+          "nx run web:build-sw",
+          "node scripts/postprocess-embedded-creative-dist.js"
         ],
         "parallel": false
       }

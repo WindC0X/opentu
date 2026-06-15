@@ -14,6 +14,7 @@ import {
   type ProviderProfile,
 } from '../utils/settings-manager';
 import { sortModelsByDisplayPriority } from '../utils/model-sort';
+import { refreshRuntimeModelDiscoveryFromSettings } from '../utils/runtime-model-discovery';
 import { reconcilePersistedModelSelectionsWithAvailableModels } from '../utils/ai-model-selection-storage';
 import {
   getCreativeDefaultModel,
@@ -21,6 +22,7 @@ import {
 } from './creative-display-policy';
 import {
   CREATIVE_BOOTSTRAP_ENDPOINT,
+  CREATIVE_MANAGED_CATALOG_UPDATED_EVENT,
   CREATIVE_MANAGED_PROFILE_ID,
   CREATIVE_MANAGED_PROFILE_NAME,
   CREATIVE_MODELS_ENDPOINT,
@@ -41,13 +43,20 @@ type CreativeModelEndpointItem = {
   id?: unknown;
   object?: unknown;
   owned_by?: unknown;
+  ownedBy?: unknown;
+  vendor?: unknown;
   type?: unknown;
   modality?: unknown;
   modalities?: unknown;
   supported_endpoint_types?: unknown;
   label?: unknown;
   name?: unknown;
+  displayName?: unknown;
+  shortLabel?: unknown;
+  shortCode?: unknown;
+  short_code?: unknown;
   description?: unknown;
+  tags?: unknown;
 };
 
 export interface CreativeBootstrapResult {
@@ -58,6 +67,17 @@ export interface CreativeBootstrapResult {
 }
 
 let initializationPromise: Promise<CreativeBootstrapResult> | null = null;
+
+function dispatchManagedCatalogUpdated(status: 'ready' | 'error'): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(CREATIVE_MANAGED_CATALOG_UPDATED_EVENT, {
+      detail: { profileId: CREATIVE_MANAGED_PROFILE_ID, status },
+    })
+  );
+}
 
 function cloneStaticModel(model: ModelConfig): ModelConfig {
   return JSON.parse(JSON.stringify(model)) as ModelConfig;
@@ -88,6 +108,88 @@ function inferVendor(modelId: string, owner?: string | null): ModelVendor {
   return ModelVendor.OTHER;
 }
 
+function normalizeServerString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeServerVendor(value: unknown): ModelVendor | null {
+  const normalized = normalizeServerString(value)?.toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  const vendorEntries: Array<[string, ModelVendor]> = [
+    ['gemini', ModelVendor.GEMINI],
+    ['google', ModelVendor.GOOGLE],
+    ['flux', ModelVendor.FLUX],
+    ['midjourney', ModelVendor.MIDJOURNEY],
+    ['mj', ModelVendor.MIDJOURNEY],
+    ['suno', ModelVendor.SUNO],
+    ['openai', ModelVendor.GPT],
+    ['gpt', ModelVendor.GPT],
+    ['grok', ModelVendor.GROK],
+    ['xai', ModelVendor.GROK],
+    ['qwen', ModelVendor.QWEN],
+    ['glm', ModelVendor.GLM],
+    ['zhipu', ModelVendor.GLM],
+    ['minimax', ModelVendor.MINIMAX],
+    ['mistral', ModelVendor.MISTRAL],
+    ['llama', ModelVendor.LLAMA],
+    ['veo', ModelVendor.VEO],
+    ['sora', ModelVendor.SORA],
+    ['runway', ModelVendor.RUNWAY],
+    ['pika', ModelVendor.PIKA],
+    ['kling', ModelVendor.KLING],
+    ['hunyuan', ModelVendor.HUNYUAN],
+    ['stepfun', ModelVendor.STEPFUN],
+    ['deepseek', ModelVendor.DEEPSEEK],
+    ['anthropic', ModelVendor.ANTHROPIC],
+    ['claude', ModelVendor.ANTHROPIC],
+    ['doubao', ModelVendor.DOUBAO],
+    ['volc', ModelVendor.DOUBAO],
+    ['happyhorse', ModelVendor.HAPPYHORSE],
+  ];
+  for (const [keyword, vendor] of vendorEntries) {
+    if (normalized.includes(keyword)) {
+      return vendor;
+    }
+  }
+  return null;
+}
+
+function buildShortCode(modelId: string, type: ModelType): string {
+  const compact = modelId
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((part) => part[0]?.toLowerCase() || '')
+    .join('');
+  if (compact) return compact.slice(0, 6);
+  if (type === 'audio') return 'aud';
+  if (type === 'video') return 'vid';
+  if (type === 'text') return 'txt';
+  return 'img';
+}
+
+function normalizeServerTags(value: unknown): string[] {
+  const rawTags = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+    ? value.split(/[,;|\s]+/)
+    : [];
+  const tags = new Set<string>();
+  for (const rawTag of rawTags) {
+    if (typeof rawTag !== 'string') {
+      continue;
+    }
+    const tag = rawTag.trim().toLowerCase();
+    if (!tag || /https?:|api[_-]?key|base[_-]?url|secret|token|channel[_-]?id/.test(tag)) {
+      continue;
+    }
+    tags.add(tag.slice(0, 48));
+  }
+  return Array.from(tags);
+}
+
 function inferModelType(
   item: CreativeModelEndpointItem,
   modelId: string
@@ -95,10 +197,12 @@ function inferModelType(
   const hints = [
     item.type,
     item.modality,
+    item.vendor,
     ...(Array.isArray(item.modalities) ? item.modalities : []),
     ...(Array.isArray(item.supported_endpoint_types)
       ? item.supported_endpoint_types
       : []),
+    ...normalizeServerTags(item.tags),
     modelId,
   ]
     .map((value) => (typeof value === 'string' ? value.toLowerCase() : ''))
@@ -126,35 +230,58 @@ function normalizeCreativeModel(
   }
 
   const staticModel = getStaticModelConfig(id);
+  const serverLabel =
+    normalizeServerString(item.label) ||
+    normalizeServerString(item.displayName) ||
+    normalizeServerString(item.name);
+  const serverShortLabel =
+    normalizeServerString(item.shortLabel) || serverLabel || id;
+  const serverShortCode =
+    normalizeServerString(item.shortCode) || normalizeServerString(item.short_code);
+  const serverDescription = normalizeServerString(item.description);
+  const serverTags = normalizeServerTags(item.tags);
+  const type = staticModel?.type || inferModelType(item, id);
+  const vendor =
+    staticModel?.vendor ||
+    normalizeServerVendor(item.vendor) ||
+    normalizeServerVendor(item.owned_by) ||
+    normalizeServerVendor(item.ownedBy) ||
+    inferVendor(
+      id,
+      normalizeServerString(item.owned_by) || normalizeServerString(item.ownedBy)
+    );
   const base = staticModel
-    ? cloneStaticModel(staticModel)
+    ? {
+        ...cloneStaticModel(staticModel),
+        // Preserve the exact logical model id supplied by new-api. Static
+        // metadata can be matched case-insensitively for display/params, but
+        // relay submissions must use the administrator-configured channel id.
+        id,
+      }
     : {
         id,
-        label:
-          (typeof item.label === 'string' && item.label.trim()) ||
-          (typeof item.name === 'string' && item.name.trim()) ||
-          id,
-        shortLabel:
-          (typeof item.name === 'string' && item.name.trim()) ||
-          (typeof item.label === 'string' && item.label.trim()) ||
-          id,
-        description:
-          typeof item.description === 'string' && item.description.trim()
-            ? item.description.trim()
-            : undefined,
-        type: inferModelType(item, id),
-        vendor: inferVendor(
-          id,
-          typeof item.owned_by === 'string' ? item.owned_by : null
-        ),
+        label: serverLabel || id,
+        shortLabel: serverShortLabel,
+        shortCode: serverShortCode || buildShortCode(id, type),
+        description: serverDescription || undefined,
+        type,
+        vendor,
       };
+  const mergedTags = staticModel
+    ? [...(base.tags || []), 'runtime', 'creative']
+    : [...(base.tags || []), ...serverTags, 'runtime', 'creative'];
 
   return {
     ...base,
+    shortLabel: staticModel
+      ? base.shortLabel || base.label
+      : base.shortLabel || serverShortLabel,
+    shortCode: base.shortCode || serverShortCode || buildShortCode(id, type),
+    description: base.description || serverDescription || undefined,
     sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
     sourceProfileName: CREATIVE_MANAGED_PROFILE_NAME,
     selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::${id}`,
-    tags: Array.from(new Set([...(base.tags || []), 'runtime', 'creative'])),
+    tags: Array.from(new Set(mergedTags)),
   };
 }
 
@@ -371,6 +498,7 @@ async function upsertManagedCatalog(models: ModelConfig[]): Promise<void> {
     ),
     nextCatalog,
   ]);
+  refreshRuntimeModelDiscoveryFromSettings({ reloadFromStorage: true });
 }
 
 async function upsertManagedUnavailableCatalog(): Promise<void> {
@@ -390,6 +518,7 @@ async function upsertManagedUnavailableCatalog(): Promise<void> {
     ),
     nextCatalog,
   ]);
+  refreshRuntimeModelDiscoveryFromSettings({ reloadFromStorage: true });
 }
 
 async function ensureManagedUnavailableProfile(): Promise<void> {
@@ -479,6 +608,7 @@ async function initializeCreativeManagedSessionBrokerInternal(
     // model that vanished from the current creative pool is visibly marked and
     // replaced with the opentu-owned fallback before direct use.
     reconcilePersistedCreativeModelSelections(models);
+    dispatchManagedCatalogUpdated('ready');
 
     return {
       status: 'ready',
@@ -504,6 +634,7 @@ async function initializeCreativeManagedSessionBrokerInternal(
       );
     }
     console.warn('[CreativeSessionBroker] initialization failed:', message);
+    dispatchManagedCatalogUpdated('error');
     return {
       status: 'error',
       profileId: CREATIVE_MANAGED_PROFILE_ID,

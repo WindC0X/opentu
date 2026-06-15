@@ -17,7 +17,10 @@ import {
 } from 'tdesign-react';
 import { ToolDefinition, ToolCategory } from '../../types/toolbox.types';
 import { toolboxService } from '../../services/toolbox-service';
-import { hasTemplateVariables } from '../../utils/url-template';
+import {
+  hasApiKeyTemplate,
+  hasTemplateVariables,
+} from '../../utils/url-template';
 import { HoverTip } from '../shared/hover';
 import './custom-tool-dialog.scss';
 
@@ -31,6 +34,8 @@ export interface CustomToolDialogProps {
   onClose: () => void;
   /** 添加成功回调 */
   onSuccess?: (tool: ToolDefinition) => void;
+  /** 嵌入式 Creative 中不允许保存浏览器 API Key 模板工具 */
+  forbidApiKeyTemplates?: boolean;
 }
 
 // Emoji 预设列表
@@ -66,6 +71,7 @@ export const CustomToolDialog: React.FC<CustomToolDialogProps> = ({
   visible,
   onClose,
   onSuccess,
+  forbidApiKeyTemplates = false,
 }) => {
   // 表单状态
   const [formData, setFormData] = useState<Partial<ToolDefinition>>(DEFAULT_FORM_DATA);
@@ -92,6 +98,14 @@ export const CustomToolDialog: React.FC<CustomToolDialogProps> = ({
       return '请输入工具 URL';
     }
 
+	    if (
+	      forbidApiKeyTemplates &&
+	      typeof formData.url === 'string' &&
+	      hasApiKeyTemplate(formData.url)
+	    ) {
+	      return '嵌入模式下不支持浏览器凭证模板工具';
+	    }
+
     // URL 格式验证
     if (hasUrl) {
       try {
@@ -115,7 +129,7 @@ export const CustomToolDialog: React.FC<CustomToolDialogProps> = ({
     }
 
     return null;
-  }, [formData]);
+  }, [forbidApiKeyTemplates, formData]);
 
   // 提交表单
   const handleSubmit = useCallback(async () => {
@@ -198,7 +212,11 @@ export const CustomToolDialog: React.FC<CustomToolDialogProps> = ({
               updateField('url', value);
             }}
             placeholder="https://example.com"
-            tips="支持模板变量：${apiKey}（设置中的 API Key）自行确保目标URL可靠，避免Key泄漏"
+	            tips={
+	              forbidApiKeyTemplates
+	                ? '嵌入模式由 new-api 托管上游凭证，不支持浏览器凭证模板'
+	                : '支持模板变量：${apiKey}（设置中的 API Key）自行确保目标URL可靠，避免Key泄漏'
+	            }
           />
         </FormItem>
 

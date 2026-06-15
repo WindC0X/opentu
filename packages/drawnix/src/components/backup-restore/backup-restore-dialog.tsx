@@ -20,6 +20,7 @@ import {
 } from '../../services/backup-restore';
 import { workspaceService } from '../../services/workspace-service';
 import { safeReload } from '../../utils/active-tasks';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 import './backup-restore-dialog.scss';
 
 export interface BackupRestoreDialogProps {
@@ -37,6 +38,14 @@ export interface BackupRestoreDialogProps {
 
 type TabType = 'backup' | 'restore';
 
+const EMBEDDED_LOCAL_BACKUP_DOMAINS = [
+  'prompts',
+  'projects',
+  'assets',
+  'tasks',
+  'knowledgeBase',
+];
+
 export const BackupRestoreDialog = ({
   open,
   onOpenChange,
@@ -44,6 +53,7 @@ export const BackupRestoreDialog = ({
   onSwitchBoard,
   onBeforeImport,
 }: BackupRestoreDialogProps) => {
+  const embeddedCreative = isCreativeEmbeddedMode();
   const { confirm, confirmDialog } = useConfirmDialog({ container });
   const toInputDateTime = (timestamp?: number | null): string => {
     if (!timestamp) return '';
@@ -64,7 +74,7 @@ export const BackupRestoreDialog = ({
     includeProjects: true,
     includeAssets: true,
     includeKnowledgeBase: true,
-    includeEnvironment: true,
+    includeEnvironment: !embeddedCreative,
     includeSecrets: false,
     encryptionPassword: '',
     timeRangeStart: null,
@@ -179,12 +189,12 @@ export const BackupRestoreDialog = ({
       !backupOptions.includeProjects &&
       !backupOptions.includeAssets &&
       !backupOptions.includeKnowledgeBase &&
-      !backupOptions.includeEnvironment
+      (!embeddedCreative && !backupOptions.includeEnvironment)
     ) {
       MessagePlugin.warning('请至少选择一项要备份的内容');
       return;
     }
-    if (backupOptions.includeSecrets && !backupOptions.encryptionPassword?.trim()) {
+    if (!embeddedCreative && backupOptions.includeSecrets && !backupOptions.encryptionPassword?.trim()) {
       MessagePlugin.warning('包含敏感配置时需要输入备份密码');
       return;
     }
@@ -205,11 +215,19 @@ export const BackupRestoreDialog = ({
       backupOptions.includeProjects &&
       backupOptions.includeAssets &&
       backupOptions.includeKnowledgeBase &&
+      !embeddedCreative &&
       !!backupOptions.includeEnvironment &&
       !backupOptions.timeRangeStart &&
       !backupOptions.timeRangeEnd;
     const exportOptions: BackupOptions = {
       ...backupOptions,
+      ...(embeddedCreative
+        ? {
+            includeEnvironment: false,
+            includeSecrets: false,
+            encryptionPassword: '',
+          }
+        : {}),
       mode: isCompleteSelection ? 'complete' : 'incremental',
     };
 
@@ -232,7 +250,7 @@ export const BackupRestoreDialog = ({
     } finally {
       setIsProcessing(false);
     }
-  }, [backupOptions, handleClose]);
+  }, [backupOptions, embeddedCreative, handleClose]);
 
   const handleFileSelect = useCallback(() => {
     fileInputRef.current?.click();
@@ -279,7 +297,13 @@ export const BackupRestoreDialog = ({
             setProgress(p);
             setProgressMessage(msg);
           },
-          importOptions
+          embeddedCreative
+            ? {
+                ...importOptions,
+                encryptionPassword: '',
+                selectedDomains: EMBEDDED_LOCAL_BACKUP_DOMAINS,
+              }
+            : importOptions
         );
 
         setImportResult(result);
@@ -305,12 +329,23 @@ export const BackupRestoreDialog = ({
         }
       }
     },
-    [confirm, importOptions, onBeforeImport]
+    [confirm, embeddedCreative, importOptions, onBeforeImport]
   );
 
   const handleOptionChange = useCallback(
     (key: keyof BackupOptions, checked: boolean) => {
       setBackupOptions((prev) => {
+        if (
+          embeddedCreative &&
+          (key === 'includeEnvironment' || key === 'includeSecrets')
+        ) {
+          return {
+            ...prev,
+            includeEnvironment: false,
+            includeSecrets: false,
+            encryptionPassword: '',
+          };
+        }
         const next = {
           ...prev,
           [key]: checked,
@@ -327,7 +362,7 @@ export const BackupRestoreDialog = ({
         return next;
       });
     },
-    []
+    [embeddedCreative]
   );
 
   return (
@@ -367,8 +402,10 @@ export const BackupRestoreDialog = ({
         {activeTab === 'backup' && (
           <div className="backup-restore-dialog__panel">
             <div className="backup-restore-dialog__body">
-              <p className="backup-restore-dialog__description">
-                选择要备份的内容，将导出为 ZIP 压缩包：
+	              <p className="backup-restore-dialog__description">
+	                {embeddedCreative
+	                  ? '选择要备份的本地内容，将导出为 ZIP 压缩包。嵌入模式下不会导出 new-api 渠道、供应商密钥或同步凭据。'
+	                  : '选择要备份的内容，将导出为 ZIP 压缩包：'}
               </p>
 
               <div className="backup-restore-dialog__options">
@@ -443,42 +480,46 @@ export const BackupRestoreDialog = ({
                   </div>
                 </Checkbox>
 
-                <Checkbox
-                  checked={!!backupOptions.includeEnvironment}
-                  onChange={(checked) =>
-                    handleOptionChange('includeEnvironment', checked as boolean)
-                  }
-                  disabled={isProcessing}
-                >
-                  <div className="backup-restore-dialog__option-content">
-                    <span className="backup-restore-dialog__option-title">
-                      环境
-                    </span>
-                    <span className="backup-restore-dialog__option-desc">
-                      包含聊天、歌单、角色、工作流、偏好和外部 Skill
-                    </span>
-                  </div>
-                </Checkbox>
+                {!embeddedCreative && (
+                  <>
+                    <Checkbox
+                      checked={!!backupOptions.includeEnvironment}
+                      onChange={(checked) =>
+                        handleOptionChange('includeEnvironment', checked as boolean)
+                      }
+                      disabled={isProcessing}
+                    >
+                      <div className="backup-restore-dialog__option-content">
+                        <span className="backup-restore-dialog__option-title">
+                          环境
+                        </span>
+                        <span className="backup-restore-dialog__option-desc">
+                          包含聊天、歌单、角色、工作流、偏好和外部 Skill
+                        </span>
+                      </div>
+                    </Checkbox>
 
-                <Checkbox
-                  checked={!!backupOptions.includeSecrets}
-                  onChange={(checked) =>
-                    handleOptionChange('includeSecrets', checked as boolean)
-                  }
-                  disabled={isProcessing}
-                >
-                  <div className="backup-restore-dialog__option-content">
-                    <span className="backup-restore-dialog__option-title">
-                      敏感配置
-                    </span>
-                    <span className="backup-restore-dialog__option-desc">
-                      加密导出 API Key、Provider Profile 和同步凭据
-                    </span>
-                  </div>
-                </Checkbox>
+                    <Checkbox
+                      checked={!!backupOptions.includeSecrets}
+                      onChange={(checked) =>
+                        handleOptionChange('includeSecrets', checked as boolean)
+                      }
+                      disabled={isProcessing}
+                    >
+                      <div className="backup-restore-dialog__option-content">
+                        <span className="backup-restore-dialog__option-title">
+                          敏感配置
+                        </span>
+                        <span className="backup-restore-dialog__option-desc">
+                          加密导出 API Key、Provider Profile 和同步凭据
+                        </span>
+                      </div>
+                    </Checkbox>
+                  </>
+                )}
               </div>
 
-              {backupOptions.includeSecrets && (
+              {!embeddedCreative && backupOptions.includeSecrets && (
                 <label className="backup-restore-dialog__password-field">
                   <span>备份密码</span>
                   <input
@@ -564,8 +605,10 @@ export const BackupRestoreDialog = ({
         {activeTab === 'restore' && (
           <div className="backup-restore-dialog__panel">
             <div className="backup-restore-dialog__body">
-              <p className="backup-restore-dialog__description">
-                选择恢复方式，再选择备份文件：
+	              <p className="backup-restore-dialog__description">
+	                {embeddedCreative
+	                  ? '选择恢复方式，再选择备份文件。嵌入模式只恢复本地内容，跳过环境、Provider Profile、供应商密钥和云端同步凭据。'
+	                  : '选择恢复方式，再选择备份文件：'}
               </p>
 
               <div className="backup-restore-dialog__mode-group">
@@ -611,20 +654,22 @@ export const BackupRestoreDialog = ({
                 </button>
               </div>
 
-              <label className="backup-restore-dialog__password-field">
-                <span>备份密码</span>
-                <input
-                  type="password"
-                  value={importOptions.encryptionPassword || ''}
-                  disabled={isProcessing}
-                  onChange={(e) =>
-                    setImportOptions((prev) => ({
-                      ...prev,
-                      encryptionPassword: e.target.value,
-                    }))
-                  }
-                />
-              </label>
+              {!embeddedCreative && (
+                <label className="backup-restore-dialog__password-field">
+                  <span>备份密码</span>
+                  <input
+                    type="password"
+                    value={importOptions.encryptionPassword || ''}
+                    disabled={isProcessing}
+                    onChange={(e) =>
+                      setImportOptions((prev) => ({
+                        ...prev,
+                        encryptionPassword: e.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              )}
 
               <div
                 className="backup-restore-dialog__dropzone"

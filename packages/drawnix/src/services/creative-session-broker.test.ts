@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   hasInvocationRouteCredentials: vi.fn(() => true),
   updateActiveInvocationRouteModel: vi.fn(async () => undefined),
   initializeCreativeModelPreferenceSync: vi.fn(async () => undefined),
+  refreshRuntimeModelDiscoveryFromSettings: vi.fn(() => undefined),
 }));
 
 vi.mock('../utils/settings-manager', () => ({
@@ -56,6 +57,11 @@ vi.mock('../utils/settings-manager', () => ({
 vi.mock('./creative-model-preference-sync', () => ({
   initializeCreativeModelPreferenceSync:
     mocks.initializeCreativeModelPreferenceSync,
+}));
+
+vi.mock('../utils/runtime-model-discovery', () => ({
+  refreshRuntimeModelDiscoveryFromSettings:
+    mocks.refreshRuntimeModelDiscoveryFromSettings,
 }));
 
 import {
@@ -163,6 +169,7 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     });
     expect(mocks.providerProfilesUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.providerCatalogsUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshRuntimeModelDiscoveryFromSettings).toHaveBeenCalled();
     expect(result.models?.[0]).not.toHaveProperty('defaultModel');
     expect(result.models?.[0]).not.toHaveProperty('defaultVisibleModels');
     expect(result.models?.[0]).not.toHaveProperty('uiPolicy');
@@ -307,6 +314,131 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     expect(result.models).toHaveLength(6);
     expect(mocks.initializeCreativeModelPreferenceSync).toHaveBeenCalledTimes(
       1
+    );
+  });
+
+  it('uses safe server model metadata for custom creative models while preserving exact static configs', async () => {
+    const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-model-meta',
+              nonce: 'nonce-model-meta',
+            },
+            capabilities: {
+              videoRelayEnabled: true,
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({
+          data: [
+            {
+              id: 'custom-image-alias',
+              label: 'Custom Image Alias',
+              shortLabel: 'Custom Image',
+              shortCode: 'cia',
+              type: 'image',
+              vendor: 'Safe Vendor',
+              tags: ['image', 'custom'],
+              description: 'Safe custom image model',
+            },
+            {
+              id: 'gpt-image-2',
+              label: 'Server label must not replace static config',
+              shortCode: 'bad',
+              type: 'image',
+              tags: ['server-tag', 'mj'],
+            },
+          ],
+        });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    }) as unknown as typeof fetch;
+
+    const result = await initializeCreativeManagedSessionBroker(fetcher);
+
+    expect(result.status).toBe('ready');
+    const customModel = result.models?.find(
+      (model) => model.id === 'custom-image-alias'
+    );
+    expect(customModel).toMatchObject({
+      label: 'Custom Image Alias',
+      shortLabel: 'Custom Image',
+      shortCode: 'cia',
+      type: 'image',
+      sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+      selectionKey: 'new-api-creative::custom-image-alias',
+    });
+    expect(customModel?.tags).toEqual(
+      expect.arrayContaining(['image', 'custom', 'runtime', 'creative'])
+    );
+
+    const staticModel = result.models?.find(
+      (model) => model.id === 'gpt-image-2'
+    );
+    expect(staticModel).toMatchObject({
+      label: 'gpt-image-2',
+      shortLabel: 'gpt-image-2',
+      shortCode: 'gpt2',
+      type: 'image',
+    });
+    expect(staticModel?.tags).toEqual(expect.arrayContaining(['runtime', 'creative']));
+    expect(staticModel?.tags).not.toContain('server-tag');
+    expect(staticModel?.tags).not.toContain('mj');
+  });
+
+  it('uses case-insensitive static metadata while preserving the server logical model id for submission', async () => {
+    const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-model-case',
+              nonce: 'nonce-model-case',
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({
+          data: [
+            {
+              id: 'Gpt-image-2',
+              label: 'Server case must be preserved',
+              shortCode: 'bad',
+              type: 'image',
+              tags: ['server-tag', 'mj'],
+            },
+          ],
+        });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    }) as unknown as typeof fetch;
+
+    const result = await initializeCreativeManagedSessionBroker(fetcher);
+
+    expect(result.status).toBe('ready');
+    const model = result.models?.find((item) => item.id === 'Gpt-image-2');
+    expect(model).toMatchObject({
+      id: 'Gpt-image-2',
+      label: 'gpt-image-2',
+      shortLabel: 'gpt-image-2',
+      shortCode: 'gpt2',
+      type: 'image',
+      sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+      selectionKey: 'new-api-creative::Gpt-image-2',
+    });
+    expect(model?.tags).toEqual(expect.arrayContaining(['runtime', 'creative']));
+    expect(model?.tags).not.toContain('server-tag');
+    expect(model?.tags).not.toContain('mj');
+    expect(mocks.updateActiveInvocationRouteModel).toHaveBeenCalledWith(
+      'image',
+      { profileId: CREATIVE_MANAGED_PROFILE_ID, modelId: 'Gpt-image-2' }
     );
   });
 
