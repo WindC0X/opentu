@@ -375,6 +375,9 @@ export class WorkflowEngine {
             | import('../../types/shared/core.types').GenerationParams['promptMeta']
             | undefined,
           params: step.args.params as Record<string, unknown> | undefined,
+          userParams: step.args.userParams as
+            | import('../../constants/model-config').CreativeUserParams
+            | undefined,
           forceMainThread: this.options.forceFallbackExecutor,
           signal,
           onTaskCreated: (taskId) => {

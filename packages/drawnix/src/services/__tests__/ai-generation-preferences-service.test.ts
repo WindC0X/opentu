@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ModelConfig } from '../../constants/model-config';
 
 describe('ai-generation-preferences-service', () => {
   beforeEach(() => {
@@ -236,6 +237,120 @@ describe('ai-generation-preferences-service', () => {
       resolution: '2k',
       quality: 'medium',
     });
+  });
+
+  it('schema-backed image bindings sharing a provider model keep scoped defaults isolated', async () => {
+    const {
+      clearRuntimeModelConfigs,
+      normalizeCreativeParameterSchema,
+      setRuntimeModelConfigs,
+      ModelVendor,
+    } = await import('../../constants/model-config');
+    const {
+      loadScopedAIImageToolPreferences,
+      loadScopedAIInputModelParams,
+      saveAIImageToolPreferences,
+      saveScopedAIInputModelParams,
+    } = await import('../ai-generation-preferences-service');
+
+    const bindingA = 'mock:gpt-image-2:fast';
+    const bindingB = 'mock:gpt-image-2:quality';
+    const makeRuntimeModel = (
+      id: string,
+      qualityDefault: string,
+      sizeDefault: string
+    ): ModelConfig => ({
+      id,
+      label: id,
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      providerModelId: 'gpt-image-2',
+      priceModelId: `${id}:price`,
+      selectionKey: `new-api-creative::${id}`,
+      parameterSchema: normalizeCreativeParameterSchema(
+        [
+          {
+            id: 'size',
+            label: 'Size',
+            type: 'enum',
+            defaultValue: sizeDefault,
+            options: [
+              { value: '512x512', label: '512×512' },
+              { value: '1024x1024', label: '1024×1024' },
+            ],
+          },
+          {
+            id: 'quality',
+            label: 'Quality',
+            type: 'enum',
+            defaultValue: qualityDefault,
+            options: [
+              { value: 'low', label: 'Low' },
+              { value: 'high', label: 'High' },
+            ],
+          },
+        ],
+        'image',
+        id
+      ),
+    });
+
+    try {
+      setRuntimeModelConfigs([
+        makeRuntimeModel(bindingA, 'low', '512x512'),
+        makeRuntimeModel(bindingB, 'high', '1024x1024'),
+      ]);
+
+      saveAIImageToolPreferences({
+        currentModel: bindingA,
+        currentSelectionKey: `new-api-creative::${bindingA}`,
+        extraParams: { size: '512x512', quality: 'low' },
+        aspectRatio: '1:1',
+      });
+
+      expect(
+        loadScopedAIImageToolPreferences(
+          bindingB,
+          `new-api-creative::${bindingB}`
+        )
+      ).toMatchObject({
+        extraParams: { size: '1024x1024', quality: 'high' },
+      });
+      expect(
+        loadScopedAIInputModelParams(
+          'image',
+          bindingB,
+          `new-api-creative::${bindingB}`,
+          { size: '512x512', quality: 'low' }
+        )
+      ).toEqual({});
+
+      saveScopedAIInputModelParams(
+        'image',
+        bindingB,
+        { size: '1024x1024', quality: 'high' },
+        `new-api-creative::${bindingB}`
+      );
+
+      expect(
+        loadScopedAIImageToolPreferences(
+          bindingA,
+          `new-api-creative::${bindingA}`
+        )
+      ).toMatchObject({
+        extraParams: { size: '512x512', quality: 'low' },
+      });
+      expect(
+        loadScopedAIImageToolPreferences(
+          bindingB,
+          `new-api-creative::${bindingB}`
+        )
+      ).toMatchObject({
+        extraParams: { size: '1024x1024', quality: 'high' },
+      });
+    } finally {
+      clearRuntimeModelConfigs();
+    }
   });
 
   it('保留 Gemini preview 的旧 quality 档位语义', async () => {

@@ -248,7 +248,8 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           background: params.background,
           outputFormat: params.outputFormat,
           outputCompression: params.outputCompression,
-          params: params.params,
+          params: params.userParams ? undefined : params.params,
+          userParams: params.userParams,
           assetMetadata: params.assetMetadata,
           preferredRequestSchema: invocationOptions.preferredRequestSchema,
         },
@@ -259,6 +260,11 @@ export class FallbackMediaExecutor implements IMediaExecutor {
 
     // 异步图片模型：使用 /v1/videos 接口（与 SW 模式一致）
     if (isAsyncImageModel(modelName)) {
+      if (params.userParams) {
+        throw new Error(
+          'schema-backed Creative image requests require a managed adapter route'
+        );
+      }
       return this.generateAsyncImageTask(
         taskId,
         {
@@ -291,6 +297,11 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     });
 
     try {
+      if (params.userParams) {
+        throw new Error(
+          'schema-backed Creative image requests require a managed adapter route'
+        );
+      }
       // 处理参考图片：统一转为 base64（API 要求），并行处理提升性能
       let processedImages: string[] | undefined;
       if (referenceImages && referenceImages.length > 0) {

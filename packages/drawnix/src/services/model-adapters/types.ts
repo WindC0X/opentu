@@ -2,6 +2,7 @@ import type {
   ModelConfig,
   ModelType,
   ModelVendor,
+  CreativeUserParams,
 } from '../../constants/model-config';
 import type { ModelRef } from '../../utils/settings-types';
 import type {
@@ -41,6 +42,8 @@ export interface AdapterMetadata {
   matchTags?: string[];
   /** 自定义匹配函数（接收 modelConfig） */
   matchPredicate?: (model: ModelConfig) => boolean;
+  /** 是否显式支持 new-api runtime parameterSchema 的 typed userParams 请求 */
+  supportsCreativeUserParams?: boolean;
 }
 
 export interface ImageGenerationRequest {
@@ -58,6 +61,8 @@ export interface ImageGenerationRequest {
   outputFormat?: 'png' | 'jpeg' | 'webp';
   outputCompression?: number;
   params?: Record<string, unknown>;
+  /** new-api runtime parameterSchema 对应的类型化用户参数 */
+  userParams?: CreativeUserParams;
 }
 
 export interface ImageGenerationResult {

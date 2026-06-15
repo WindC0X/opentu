@@ -248,6 +248,7 @@ export function convertDirectGenerationToWorkflow(
     size,
     duration,
     extraParams,
+    userParams,
     selection,
     defaultModels,
     defaultModelRefs,
@@ -308,7 +309,9 @@ export function convertDirectGenerationToWorkflow(
         }
       }
       // 透传额外参数（如 seedream_quality）
-      if (extraParams) {
+      if (userParams) {
+        imageArgs.userParams = userParams;
+      } else if (extraParams) {
         imageArgs.params = extraParams;
       }
 

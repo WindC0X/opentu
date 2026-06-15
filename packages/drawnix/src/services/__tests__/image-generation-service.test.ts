@@ -29,10 +29,60 @@ vi.mock('../media-executor', () => ({
 }));
 
 vi.mock('../../utils/settings-manager', () => ({
+  LEGACY_DEFAULT_PROVIDER_PROFILE_ID: 'default',
   settingsManager: {
     waitForInitialization: waitForInitializationMock,
+    addListener: vi.fn(() => undefined),
   },
   hasInvocationRouteCredentials: hasInvocationRouteCredentialsMock,
+  createModelRef: (profileId: string, modelId: string) => ({
+    profileId,
+    modelId,
+  }),
+  resolveInvocationRoute: (
+    operation: string,
+    requestedModel?: string | { profileId?: string; modelId?: string } | null
+  ) => {
+    const modelRef =
+      requestedModel && typeof requestedModel === 'object'
+        ? requestedModel
+        : null;
+    const modelId =
+      modelRef?.modelId ||
+      (typeof requestedModel === 'string' ? requestedModel : '') ||
+      'gpt-image-2';
+    return {
+      operation,
+      profileId: modelRef?.profileId || 'default',
+      modelId,
+      modelRef: modelRef
+        ? { profileId: modelRef.profileId || 'default', modelId }
+        : null,
+      baseUrl: '/creative/relay/v1',
+      apiKey: '',
+      authType: 'session-broker',
+      providerType: 'openai-compatible',
+      binding: null,
+    };
+  },
+  providerPricingCacheSettings: {
+    get: vi.fn(() => []),
+    update: vi.fn(async () => undefined),
+  },
+  providerCatalogsSettings: {
+    get: vi.fn(() => []),
+    update: vi.fn(async () => undefined),
+    addListener: vi.fn(() => undefined),
+  },
+  providerProfilesSettings: {
+    get: vi.fn(() => []),
+    update: vi.fn(async () => undefined),
+  },
+  invocationPresetsSettings: {
+    get: vi.fn(() => []),
+    update: vi.fn(async () => undefined),
+    addListener: vi.fn(() => undefined),
+  },
 }));
 
 vi.mock('../task-queue-service', () => ({
@@ -113,7 +163,8 @@ describe('image-generation-service', () => {
           quality: 'high',
           n: 2,
         },
-      })
+      }),
+      expect.any(Object)
     );
 
     expect(trackExternalTaskMock).toHaveBeenCalledWith(
@@ -144,6 +195,63 @@ describe('image-generation-service', () => {
       expect.objectContaining({
         signal: undefined,
       })
+    );
+  });
+
+  it('passes schema-backed userParams to executor without legacy adapter params', async () => {
+    const { generateImage } = await import(
+      '../media-generation/image-generation-service'
+    );
+
+    await generateImage('Draw a cat', {
+      forceMainThread: true,
+      model: 'mock:gpt-image-2:preview',
+      size: '16x9',
+      resolution: '4k',
+      quality: 'high',
+      params: {
+        webhook: 'https://evil.example/hook',
+      },
+      userParams: {
+        size: '1024x1024',
+        seed: 42,
+        oversea: true,
+      },
+    });
+
+    expect(createTaskMock).toHaveBeenCalledWith(
+      'task-image-1',
+      'image',
+      expect.objectContaining({
+        model: 'mock:gpt-image-2:preview',
+        size: undefined,
+        resolution: undefined,
+        quality: undefined,
+        params: undefined,
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+      }),
+      expect.any(Object)
+    );
+
+    expect(generateImageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-image-1',
+        model: 'mock:gpt-image-2:preview',
+        size: undefined,
+        resolution: undefined,
+        quality: undefined,
+        params: undefined,
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+      }),
+      expect.any(Object)
     );
   });
 });

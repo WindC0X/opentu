@@ -7,6 +7,7 @@
 
 import type { ModelRef } from '../../utils/settings-manager';
 import type { GenerationParams } from '../../types/shared/core.types';
+import type { CreativeUserParams } from '../../constants/model-config';
 import type { ExecutionOptions } from './types';
 import { taskStorageWriter } from './task-storage-writer';
 import { createTaskInvocationRouteSnapshot } from '../task-invocation-route';
@@ -103,6 +104,7 @@ export async function executeImageViaAdapter(
     outputCompression?: number;
     idempotencyKey?: string;
     params?: Record<string, unknown>;
+    userParams?: CreativeUserParams;
     assetMetadata?: GenerationParams['assetMetadata'];
     preferredRequestSchema?: string | readonly string[];
   },
@@ -127,6 +129,12 @@ export async function executeImageViaAdapter(
   });
 
   try {
+    const schemaBacked = !!params.userParams;
+    if (schemaBacked && !adapter.supportsCreativeUserParams) {
+      throw new Error(
+        'schema-backed Creative image requests require a managed userParams adapter'
+      );
+    }
     let processedImages: string[] | undefined;
     if (params.referenceImages && params.referenceImages.length > 0) {
       processedImages = await Promise.all(
@@ -148,7 +156,7 @@ export async function executeImageViaAdapter(
         prompt: params.prompt,
         model: params.model,
         modelRef: params.modelRef || null,
-        size: params.size,
+        size: schemaBacked ? undefined : params.size,
         generationMode:
           params.generationMode ||
           (isGPTImageEditRequestSchema(preferredRequestSchema)
@@ -156,18 +164,23 @@ export async function executeImageViaAdapter(
             : 'text_to_image'),
         referenceImages: processedImages,
         maskImage: params.maskImage,
-        inputFidelity: params.inputFidelity,
-        background: params.background,
-        outputFormat: params.outputFormat,
-        outputCompression: params.outputCompression,
+        inputFidelity: schemaBacked ? undefined : params.inputFidelity,
+        background: schemaBacked ? undefined : params.background,
+        outputFormat: schemaBacked ? undefined : params.outputFormat,
+        outputCompression: schemaBacked
+          ? undefined
+          : params.outputCompression,
         idempotencyKey,
-        params: {
-          resolution: params.resolution,
-          quality: params.quality,
-          n: params.count,
-          ...params.params,
-          idempotencyKey,
-        },
+        params: params.userParams
+          ? undefined
+          : {
+              resolution: params.resolution,
+              quality: params.quality,
+              n: params.count,
+              ...params.params,
+              idempotencyKey,
+            },
+        userParams: params.userParams,
       }
     );
 

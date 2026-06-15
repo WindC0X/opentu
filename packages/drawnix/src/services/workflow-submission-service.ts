@@ -461,6 +461,8 @@ class WorkflowSubmissionService {
         input_video:
           extraParams?.input_video || parsedInput.selection.videos[0],
       };
+    } else if (parsedInput.userParams) {
+      args.userParams = parsedInput.userParams;
     } else if (extraParams) {
       args.params = extraParams;
     }

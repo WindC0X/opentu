@@ -10,6 +10,7 @@
 
 import type { CacheWarning } from '../cache-warning.types';
 import type { ModelRef } from '../../utils/settings-manager';
+import type { CreativeUserParams } from '../../constants/model-config';
 
 // ============================================================================
 // Chat Tool Call
@@ -164,6 +165,8 @@ export interface GenerationParams {
   height?: number;
   /** Size parameter for API (e.g., '16x9', '1x1') */
   size?: string;
+  /** new-api runtime parameterSchema 对应的类型化用户参数 */
+  userParams?: CreativeUserParams;
   /** Image generation mode for providers that distinguish generation/edit */
   generationMode?: 'text_to_image' | 'image_to_image' | 'image_edit';
   /** Whether this image task is generating a PPT slide image */

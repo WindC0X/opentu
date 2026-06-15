@@ -7,6 +7,7 @@ import {
   getDefaultVideoModel,
   getModelConfig,
   getSizeOptionsForModel,
+  hasRuntimeParameterSchema,
 } from '../constants/model-config';
 import {
   ASPECT_RATIO_OPTIONS,
@@ -787,7 +788,19 @@ export function loadScopedAIInputModelParams(
   const preferenceKey = getModelPreferenceKey(modelId, selectionKey);
   const scopedParams =
     stored.scopedPreferences?.[generationType]?.[preferenceKey];
-  return asRecord(scopedParams ?? fallbackParams);
+  if (scopedParams) {
+    return asRecord(scopedParams);
+  }
+
+  // Runtime schema bindings are distinct backend binding ids even when they
+  // share one providerModelId. Falling back to the previous model's params can
+  // silently apply binding A values to binding B, so let the caller rebuild
+  // defaults from B's own schema instead.
+  if (hasRuntimeParameterSchema(modelId)) {
+    return {};
+  }
+
+  return asRecord(fallbackParams);
 }
 
 export function saveScopedAIInputModelParams(
@@ -828,10 +841,16 @@ export function loadScopedAIImageToolPreferences(
   const preferenceKey = getModelPreferenceKey(modelId, selectionKey);
   const scoped = stored.scopedPreferences?.[preferenceKey];
   const inputParams = loadAIInputImageParams(modelId, selectionKey);
-  const storedAspectRatio = scoped?.aspectRatio ?? stored.aspectRatio;
+  const schemaBacked = hasRuntimeParameterSchema(modelId);
+  const shouldUseGlobalFallback = !schemaBacked || !!scoped || !!inputParams;
+  const storedAspectRatio =
+    scoped?.aspectRatio ??
+    (shouldUseGlobalFallback ? stored.aspectRatio : undefined);
   const rawExtraParams = mergeImageToolAspectRatioParams(
     modelId,
-    inputParams ?? scoped?.extraParams ?? stored.extraParams,
+    inputParams ??
+      scoped?.extraParams ??
+      (shouldUseGlobalFallback ? stored.extraParams : {}),
     storedAspectRatio
   );
   const extraParams = sanitizeImageToolExtraParams(modelId, rawExtraParams);

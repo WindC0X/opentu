@@ -3,6 +3,8 @@ import {
   getCompatibleParams,
   getSizeOptionsForModel,
   getStaticModelConfig,
+  buildCreativeUserParams,
+  hasRuntimeParameterSchema,
   normalizeCreativeParameterSchema,
   ModelVendor,
   type ModelConfig,
@@ -52,22 +54,69 @@ describe('model-config image size options', () => {
     expect(params[1]?.options?.map((option) => option.value)).toEqual([
       '1024x1024',
     ]);
+    expect(params[0]?.runtimeDefaultValue).toBe(true);
+  });
+
+  it('把 runtime parameterSchema 选择值转换为类型化 userParams', () => {
+    const parameterSchema = normalizeCreativeParameterSchema(
+      [
+        {
+          id: 'size',
+          label: '尺寸',
+          type: 'enum',
+          defaultValue: '1024x1024',
+          options: [{ value: '1024x1024', label: '1024×1024' }],
+        },
+        { id: 'seed', label: 'Seed', type: 'integer' },
+        { id: 'oversea', label: '海外', type: 'boolean' },
+      ],
+      'image',
+      'mock:gpt-image-2:preview'
+    );
+    const runtimeModel: ModelConfig = {
+      id: 'mock:gpt-image-2:preview',
+      label: 'Mock GPT Image 2',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      parameterSchema,
+    };
+
+    expect(hasRuntimeParameterSchema(runtimeModel)).toBe(true);
+    expect(
+      buildCreativeUserParams(runtimeModel, {
+        size: '1024x1024',
+        seed: '42.8',
+        oversea: 'true',
+        callback: 'https://evil.example/hook',
+      })
+    ).toEqual({
+      size: '1024x1024',
+      seed: 42,
+      oversea: true,
+    });
   });
 
   it('拒绝 runtime parameterSchema 中的危险控制字段 ID', () => {
     const dangerousIds = [
       'baseUrl',
+      'endpoint',
+      'url',
+      'authHeader',
       'user',
       'model',
       'model_name',
       'modelRef',
       'sourceProfileId',
+      'provider',
+      'channel',
+      'channelId',
+      'idempotencyKey',
       'onProgress',
       'onSubmitted',
       'headers',
       'callback',
       'webhook',
-      'channelId',
+      'notifyHook',
     ];
     const parameterSchema = normalizeCreativeParameterSchema(
       [

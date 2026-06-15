@@ -16,6 +16,9 @@ import {
   getDefaultImageModel as getSystemDefaultImageModel,
   getDefaultTextModel as getSystemDefaultTextModel,
   getDefaultVideoModel as getSystemDefaultVideoModel,
+  buildCreativeUserParams,
+  hasRuntimeParameterSchema,
+  type CreativeUserParams,
 } from '../constants/model-config';
 import { getEffectiveVideoDefaultParams } from '../services/video-binding-utils';
 import { buildMJPromptSuffix } from './mj-params';
@@ -136,6 +139,8 @@ export interface ParsedGenerationParams {
   duration?: string;
   /** 额外参数（如 seedream_quality, aspect_ratio 等，透传给 adapter） */
   extraParams?: Record<string, string>;
+  /** new-api runtime parameterSchema 对应的类型化用户参数 */
+  userParams?: CreativeUserParams;
   /** 原始解析结果 */
   parseResult: ParseResult;
   /** 是否有额外内容（除模型/参数/数量外） */
@@ -374,11 +379,18 @@ export function parseAIInput(
   // 解析参数
   let size: string | undefined;
   let duration: string | undefined;
+  const modelConfig = getModelConfig(modelId);
+  const schemaBackedModel = modelConfig
+    ? hasRuntimeParameterSchema(modelConfig)
+    : false;
+  const userParams = schemaBackedModel
+    ? buildCreativeUserParams(modelConfig || modelId, options?.params)
+    : undefined;
 
   // 1. 优先从 options.params 中读取（新逻辑，支持多参数对象）
   // 收集额外参数（非 size/duration 的自定义参数，如 seedream_quality, aspect_ratio）
   let extraParams: Record<string, string> | undefined;
-  if (options?.params) {
+  if (options?.params && !schemaBackedModel) {
     if (
       generationType !== 'audio' &&
       generationType !== 'text' &&
@@ -403,12 +415,12 @@ export function parseAIInput(
   }
 
   // 2. 兼容旧逻辑：options.size（来自单独的 size 参数）
-  if (!size && options?.size && options.size !== 'auto') {
+  if (!schemaBackedModel && !size && options?.size && options.size !== 'auto') {
     size = normalizeSize(options.size);
   }
 
   // 3. 从提示词中解析 -size=xxx 或 -duration=xxx
-  if (!size && options?.size !== 'auto') {
+  if (!schemaBackedModel && !size && options?.size !== 'auto') {
     for (const param of parseResult.selectedParams) {
       if (param.id === 'size') {
         size = normalizeSize(param.value);
@@ -417,7 +429,7 @@ export function parseAIInput(
     }
   }
 
-  if (!duration) {
+  if (!schemaBackedModel && !duration) {
     for (const param of parseResult.selectedParams) {
       if (param.id === 'duration') {
         duration = param.value;
@@ -432,9 +444,9 @@ export function parseAIInput(
     options?.size !== 'auto' &&
     generationType !== 'text' &&
     generationType !== 'agent' &&
-    generationType !== 'audio'
+    generationType !== 'audio' &&
+    !schemaBackedModel
   ) {
-    const modelConfig = getModelConfig(modelId);
     if (modelConfig?.type === 'image' && modelConfig.imageDefaults) {
       // 图片模型使用默认尺寸
       size = '1x1'; // 默认正方形
@@ -467,7 +479,7 @@ export function parseAIInput(
   }
 
   // 视频模型：如果没有指定时长，使用默认值
-  if (!duration && generationType === 'video') {
+  if (!schemaBackedModel && !duration && generationType === 'video') {
     const defaults = getEffectiveVideoDefaultParams(
       modelId,
       options?.modelRef || modelId,
@@ -494,6 +506,7 @@ export function parseAIInput(
     size,
     duration,
     extraParams,
+    userParams,
     parseResult,
     hasExtraContent,
     selection,

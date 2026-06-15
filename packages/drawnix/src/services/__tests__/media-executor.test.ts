@@ -206,6 +206,7 @@ describe('Media Executor Module', () => {
       }));
       vi.doMock('../../utils/api-auth-error-event', () => ({
         isAuthError: vi.fn(() => false),
+        classifyApiCredentialError: vi.fn(() => null),
         dispatchApiAuthError: vi.fn(),
       }));
       vi.doMock('../model-adapters', async (importOriginal) => {
@@ -295,6 +296,7 @@ describe('Media Executor Module', () => {
       }));
       vi.doMock('../../utils/api-auth-error-event', () => ({
         isAuthError: vi.fn(() => false),
+        classifyApiCredentialError: vi.fn(() => null),
         dispatchApiAuthError: vi.fn(),
       }));
       vi.doMock('../model-adapters', async (importOriginal) => {
@@ -345,6 +347,142 @@ describe('Media Executor Module', () => {
       expect(receivedNestedIdempotencyKey).toBe('opentu-image-task-1');
     }, 15000);
 
+    it('passes schema-backed image userParams without legacy adapter params', async () => {
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+      }));
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          completeTask: vi.fn(async () => undefined),
+          failTask: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../unified-cache-service', () => ({
+        unifiedCacheService: {
+          getImageForAI: vi.fn(),
+          isCached: vi.fn(async () => false),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../../utils/api-auth-error-event', () => ({
+        isAuthError: vi.fn(() => false),
+        classifyApiCredentialError: vi.fn(() => null),
+        dispatchApiAuthError: vi.fn(),
+      }));
+      vi.doMock('../model-adapters', async (importOriginal) => {
+        const actual = await importOriginal<
+          typeof import('../model-adapters')
+        >();
+
+        return {
+          ...actual,
+          getAdapterContextFromSettings: vi.fn(() => ({
+            baseUrl: '/creative/relay/v1',
+            apiKey: '',
+            authType: 'session-broker',
+          })),
+        };
+      });
+
+      const { executeImageViaAdapter } = await import(
+        '../media-executor/fallback-adapter-routes'
+      );
+      let receivedRequest: unknown;
+      const adapter: ImageModelAdapter = {
+        id: 'mock-schema-image-adapter',
+        label: 'Mock Schema Image',
+        kind: 'image',
+        supportsCreativeUserParams: true,
+        async generateImage(_context, request) {
+          receivedRequest = request;
+          return {
+            url: 'https://example.com/schema.jpg',
+            format: 'jpg',
+          };
+        },
+      };
+
+      await executeImageViaAdapter('task-schema', adapter, {
+        prompt: 'A cat',
+        model: 'mock:gpt-image-2:preview',
+        resolution: '4k',
+        quality: 'high',
+        params: {
+          webhook: 'https://evil.example/hook',
+        },
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+      });
+
+      expect(receivedRequest).toMatchObject({
+        model: 'mock:gpt-image-2:preview',
+        size: undefined,
+        idempotencyKey: 'opentu-image-task-schema',
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+      });
+      expect(
+        (receivedRequest as { params?: Record<string, unknown> }).params
+      ).toBeUndefined();
+    }, 15000);
+
+    it('fails schema-backed image userParams before unsupported adapters can call providers', async () => {
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+      }));
+      const failTask = vi.fn(async () => undefined);
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          completeTask: vi.fn(async () => undefined),
+          failTask,
+        },
+      }));
+      vi.doMock('../../utils/api-auth-error-event', () => ({
+        isAuthError: vi.fn(() => false),
+        classifyApiCredentialError: vi.fn(() => null),
+        dispatchApiAuthError: vi.fn(),
+      }));
+
+      const { executeImageViaAdapter } = await import(
+        '../media-executor/fallback-adapter-routes'
+      );
+      const generateImage = vi.fn();
+      const adapter: ImageModelAdapter = {
+        id: 'gpt-image-adapter',
+        label: 'GPT Image',
+        kind: 'image',
+        generateImage,
+      };
+
+      await expect(
+        executeImageViaAdapter('task-schema', adapter, {
+          prompt: 'A cat',
+          model: 'mock:gpt-image-2:preview',
+          userParams: {
+            size: '1024x1024',
+          },
+        })
+      ).rejects.toThrow(/userParams adapter/);
+
+      expect(generateImage).not.toHaveBeenCalled();
+      expect(failTask).toHaveBeenCalledWith(
+        'task-schema',
+        expect.objectContaining({
+          code: 'IMAGE_GENERATION_ERROR',
+        })
+      );
+    }, 15000);
+
     it('passes video adapter progress through fallback adapter routes', async () => {
       const updateRemoteId = vi.fn(async () => undefined);
       const completeTask = vi.fn(async () => undefined);
@@ -371,6 +509,7 @@ describe('Media Executor Module', () => {
       }));
       vi.doMock('../../utils/api-auth-error-event', () => ({
         isAuthError: vi.fn(() => false),
+        classifyApiCredentialError: vi.fn(() => null),
         dispatchApiAuthError: vi.fn(),
       }));
       vi.doMock('../model-adapters', async (importOriginal) => {

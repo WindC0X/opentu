@@ -78,6 +78,8 @@ export const VENDOR_NAMES: Record<ModelVendor, string> = {
 export type ParamValueType = 'enum' | 'number' | 'string' | 'boolean';
 
 export type CreativeParamPrimitive = string | number | boolean;
+export type CreativeUserParamValue = CreativeParamPrimitive;
+export type CreativeUserParams = Record<string, CreativeUserParamValue>;
 
 export interface CreativeParameterSchemaOption {
   value: CreativeParamPrimitive;
@@ -134,6 +136,10 @@ export interface ParamConfig {
   modelType: ModelType;
   /** 运行时 schema 原始值类型；用于提交前 cast */
   runtimeValueType?: CreativeParameterSchemaItem['type'];
+  /** 运行时 schema 默认值的原始 JSON 值；用于提交前保留类型 */
+  runtimeDefaultValue?: CreativeParamPrimitive;
+  /** 运行时 enum 选项的原始 JSON 值；用于提交前保留类型 */
+  runtimeOptions?: CreativeParameterSchemaOption[];
   /** 是否来自 new-api runtime parameterSchema */
   runtimeSchema?: boolean;
 }
@@ -2750,12 +2756,87 @@ export function normalizeCreativeParameterSchema(
         compatibleModels: [compatibleModelId],
         modelType,
         runtimeValueType: item.type,
+        runtimeDefaultValue: item.defaultValue,
+        runtimeOptions: item.options,
         runtimeSchema: true,
       };
     })
     .filter((param): param is ParamConfig => !!param);
 
   return params.length > 0 ? params : undefined;
+}
+
+export function hasRuntimeParameterSchema(
+  modelIdOrConfig: string | ModelConfig
+): boolean {
+  const modelConfig =
+    typeof modelIdOrConfig === 'string'
+      ? getModelConfig(modelIdOrConfig)
+      : modelIdOrConfig;
+  return !!modelConfig?.parameterSchema?.some((param) => param.runtimeSchema);
+}
+
+function castCreativeRuntimeParamValue(
+  param: ParamConfig,
+  selectedValue: string
+): CreativeUserParamValue | undefined {
+  if (param.runtimeValueType === 'boolean') {
+    if (selectedValue === 'true') return true;
+    if (selectedValue === 'false') return false;
+    return undefined;
+  }
+
+  if (param.runtimeValueType === 'number' || param.runtimeValueType === 'integer') {
+    const numeric = Number(selectedValue);
+    if (!Number.isFinite(numeric)) {
+      return undefined;
+    }
+    return param.runtimeValueType === 'integer'
+      ? Math.trunc(numeric)
+      : numeric;
+  }
+
+  if (param.runtimeValueType === 'enum') {
+    const option = param.runtimeOptions?.find(
+      (candidate) => runtimeSchemaValueToString(candidate.value) === selectedValue
+    );
+    return option ? option.value : selectedValue;
+  }
+
+  return selectedValue;
+}
+
+export function buildCreativeUserParams(
+  modelIdOrConfig: string | ModelConfig,
+  selectedParams?: Record<string, string>
+): CreativeUserParams | undefined {
+  if (!selectedParams || Object.keys(selectedParams).length === 0) {
+    return undefined;
+  }
+  const params = getCompatibleParams(modelIdOrConfig).filter(
+    (param) => param.runtimeSchema
+  );
+  if (params.length === 0) {
+    return undefined;
+  }
+
+  const schemaIds = new Set(params.map((param) => param.id));
+  const userParams: CreativeUserParams = {};
+  for (const [key, rawValue] of Object.entries(selectedParams)) {
+    if (!schemaIds.has(key) || rawValue === '') {
+      continue;
+    }
+    const param = params.find((candidate) => candidate.id === key);
+    if (!param) {
+      continue;
+    }
+    const value = castCreativeRuntimeParamValue(param, rawValue);
+    if (value !== undefined) {
+      userParams[key] = value;
+    }
+  }
+
+  return Object.keys(userParams).length > 0 ? userParams : undefined;
 }
 
 /**

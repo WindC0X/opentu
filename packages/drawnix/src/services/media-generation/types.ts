@@ -7,6 +7,7 @@
 
 import type { ModelRef } from '../../utils/settings-manager';
 import type { GenerationParams } from '../../types/shared/core.types';
+import type { CreativeUserParams } from '../../constants/model-config';
 
 // Re-export core types
 export { TaskStatus, TaskType } from '../../types/shared/core.types';
@@ -36,6 +37,8 @@ export interface ImageGenerationOptions {
   count?: number;
   /** 透传给具体适配器的额外参数（如 seedream_quality、aspect_ratio） */
   params?: Record<string, unknown>;
+  /** new-api runtime parameterSchema 对应的类型化用户参数 */
+  userParams?: CreativeUserParams;
   assetMetadata?: GenerationParams['assetMetadata'];
   promptMeta?: GenerationParams['promptMeta'];
   signal?: AbortSignal;

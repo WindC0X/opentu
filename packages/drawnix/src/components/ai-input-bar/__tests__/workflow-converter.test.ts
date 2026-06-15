@@ -195,6 +195,36 @@ describe('workflow-converter', () => {
         expect(workflow.steps[0].args.referenceImages).toEqual(referenceImages);
       });
 
+      it('schema-backed 图片步骤只序列化 userParams 而不透传 legacy params', () => {
+        const params = createMockParams({
+          generationType: 'image',
+          modelId: 'mock:gpt-image-2:preview',
+          size: undefined,
+          extraParams: {
+            size: '1024x1024',
+            webhook: 'https://evil.example/hook',
+          },
+          userParams: {
+            size: '1024x1024',
+            seed: 42,
+            oversea: true,
+          },
+        });
+
+        const workflow = convertDirectGenerationToWorkflow(params);
+
+        expect(workflow.steps[0].args).toMatchObject({
+          model: 'mock:gpt-image-2:preview',
+          userParams: {
+            size: '1024x1024',
+            seed: 42,
+            oversea: true,
+          },
+        });
+        expect(workflow.steps[0].args.params).toBeUndefined();
+        expect(workflow.steps[0].args.size).toBeUndefined();
+      });
+
       it('单张图片带蒙版时应该创建 image_edit 请求参数', () => {
         const params = createMockParams({
           generationType: 'image',

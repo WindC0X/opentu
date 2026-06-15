@@ -62,31 +62,33 @@ function buildStoredImageTaskParams(
   prompt: string,
   options: ImageGenerationOptions
 ) {
+  const schemaBacked = !!options.userParams;
   return {
     prompt,
     model: options.model,
     modelRef: options.modelRef || null,
-    size: options.size,
-    resolution: options.resolution,
-    quality: options.quality,
+    size: schemaBacked ? undefined : options.size,
+    resolution: schemaBacked ? undefined : options.resolution,
+    quality: schemaBacked ? undefined : options.quality,
     generationMode: options.generationMode,
     referenceImages:
       options.referenceImages && options.referenceImages.length > 0
         ? options.referenceImages
         : undefined,
     maskImage: options.maskImage,
-    inputFidelity: options.inputFidelity,
-    background: options.background,
-    outputFormat: options.outputFormat,
-    outputCompression: options.outputCompression,
+    inputFidelity: schemaBacked ? undefined : options.inputFidelity,
+    background: schemaBacked ? undefined : options.background,
+    outputFormat: schemaBacked ? undefined : options.outputFormat,
+    outputCompression: schemaBacked ? undefined : options.outputCompression,
     uploadedImages:
       options.uploadedImages && options.uploadedImages.length > 0
         ? options.uploadedImages
         : undefined,
-    count: options.count,
+    count: schemaBacked ? undefined : options.count,
     assetMetadata: options.assetMetadata,
     promptMeta: options.promptMeta,
-    params: buildStoredImageAdapterParams(options),
+    params: options.userParams ? undefined : buildStoredImageAdapterParams(options),
+    userParams: options.userParams,
   };
 }
 
@@ -172,20 +174,31 @@ export async function generateImage(
     prompt: sanitizedParams.prompt,
     model: effectiveOptions.model,
     modelRef: effectiveOptions.modelRef || null,
-    size: effectiveOptions.size,
-    resolution: effectiveOptions.resolution,
+    size: effectiveOptions.userParams ? undefined : effectiveOptions.size,
+    resolution: effectiveOptions.userParams
+      ? undefined
+      : effectiveOptions.resolution,
     generationMode: effectiveOptions.generationMode,
-    quality: effectiveOptions.quality,
+    quality: effectiveOptions.userParams ? undefined : effectiveOptions.quality,
     referenceImages: effectiveOptions.referenceImages,
     maskImage: effectiveOptions.maskImage,
-    inputFidelity: effectiveOptions.inputFidelity,
-    background: effectiveOptions.background,
-    outputFormat: effectiveOptions.outputFormat,
-    outputCompression: effectiveOptions.outputCompression,
+    inputFidelity: effectiveOptions.userParams
+      ? undefined
+      : effectiveOptions.inputFidelity,
+    background: effectiveOptions.userParams
+      ? undefined
+      : effectiveOptions.background,
+    outputFormat: effectiveOptions.userParams
+      ? undefined
+      : effectiveOptions.outputFormat,
+    outputCompression: effectiveOptions.userParams
+      ? undefined
+      : effectiveOptions.outputCompression,
     uploadedImages: effectiveOptions.uploadedImages,
-    count: effectiveOptions.count,
+    count: effectiveOptions.userParams ? undefined : effectiveOptions.count,
     assetMetadata: effectiveOptions.assetMetadata,
-    params: effectiveOptions.params,
+    params: effectiveOptions.userParams ? undefined : effectiveOptions.params,
+    userParams: effectiveOptions.userParams,
   };
 
   // 调用 executor 执行
