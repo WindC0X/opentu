@@ -311,7 +311,9 @@ export const ParametersDropdown: React.FC<ParametersDropdownProps> = ({
                 type="button"
                 disabled={disabled}
               >
-                <span className="parameters-dropdown__label">{triggerLabel}</span>
+                <span className="parameters-dropdown__label">
+                  {triggerLabel}
+                </span>
                 <ChevronDown
                   size={14}
                   className={`parameters-dropdown__icon ${
@@ -358,7 +360,8 @@ export const ParametersDropdown: React.FC<ParametersDropdownProps> = ({
                           <div className="parameters-dropdown__section-title">
                             {param.label}
                           </div>
-                          {param.valueType === 'enum' ? (
+                          {param.valueType === 'enum' ||
+                          param.valueType === 'boolean' ? (
                             <div className="parameters-dropdown__options">
                               {param.options?.map((option, optionIndex) => {
                                 const isSelected =
@@ -450,7 +453,9 @@ export const ParametersDropdown: React.FC<ParametersDropdownProps> = ({
                                   <button
                                     type="button"
                                     className="parameters-dropdown__field-action"
-                                    onClick={() => handleRandomParamValue(param)}
+                                    onClick={() =>
+                                      handleRandomParamValue(param)
+                                    }
                                     onMouseDown={(event) =>
                                       event.stopPropagation()
                                     }

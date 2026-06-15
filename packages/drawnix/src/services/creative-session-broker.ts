@@ -1,5 +1,7 @@
 import {
   ModelVendor,
+  normalizeCreativeParameterSchema,
+  type CreativeParameterSchemaItem,
   type ModelConfig,
   type ModelType,
   getStaticModelConfig,
@@ -57,6 +59,16 @@ type CreativeModelEndpointItem = {
   short_code?: unknown;
   description?: unknown;
   tags?: unknown;
+  providerModelId?: unknown;
+  provider_model_id?: unknown;
+  priceModelId?: unknown;
+  price_model_id?: unknown;
+  parameterSchema?: unknown;
+  parameter_schema?: unknown;
+  recommendedScore?: unknown;
+  recommended_score?: unknown;
+  sortOrder?: unknown;
+  sort_order?: unknown;
 };
 
 export interface CreativeBootstrapResult {
@@ -110,6 +122,12 @@ function inferVendor(modelId: string, owner?: string | null): ModelVendor {
 
 function normalizeServerString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizeServerNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function normalizeServerVendor(value: unknown): ModelVendor | null {
@@ -182,7 +200,10 @@ function normalizeServerTags(value: unknown): string[] {
       continue;
     }
     const tag = rawTag.trim().toLowerCase();
-    if (!tag || /https?:|api[_-]?key|base[_-]?url|secret|token|channel[_-]?id/.test(tag)) {
+    if (
+      !tag ||
+      /https?:|api[_-]?key|base[_-]?url|secret|token|channel[_-]?id/.test(tag)
+    ) {
       continue;
     }
     tags.add(tag.slice(0, 48));
@@ -237,8 +258,21 @@ function normalizeCreativeModel(
   const serverShortLabel =
     normalizeServerString(item.shortLabel) || serverLabel || id;
   const serverShortCode =
-    normalizeServerString(item.shortCode) || normalizeServerString(item.short_code);
+    normalizeServerString(item.shortCode) ||
+    normalizeServerString(item.short_code);
   const serverDescription = normalizeServerString(item.description);
+  const providerModelId =
+    normalizeServerString(item.providerModelId) ||
+    normalizeServerString(item.provider_model_id) ||
+    undefined;
+  const priceModelId =
+    normalizeServerString(item.priceModelId) ||
+    normalizeServerString(item.price_model_id) ||
+    undefined;
+  const recommendedScore = normalizeServerNumber(
+    item.recommendedScore ?? item.recommended_score
+  );
+  const sortOrder = normalizeServerNumber(item.sortOrder ?? item.sort_order);
   const serverTags = normalizeServerTags(item.tags);
   const type = staticModel?.type || inferModelType(item, id);
   const vendor =
@@ -248,7 +282,8 @@ function normalizeCreativeModel(
     normalizeServerVendor(item.ownedBy) ||
     inferVendor(
       id,
-      normalizeServerString(item.owned_by) || normalizeServerString(item.ownedBy)
+      normalizeServerString(item.owned_by) ||
+        normalizeServerString(item.ownedBy)
     );
   const base = staticModel
     ? {
@@ -270,6 +305,15 @@ function normalizeCreativeModel(
   const mergedTags = staticModel
     ? [...(base.tags || []), 'runtime', 'creative']
     : [...(base.tags || []), ...serverTags, 'runtime', 'creative'];
+  const parameterSchema = normalizeCreativeParameterSchema(
+    (Array.isArray(item.parameterSchema)
+      ? item.parameterSchema
+      : Array.isArray(item.parameter_schema)
+      ? item.parameter_schema
+      : undefined) as CreativeParameterSchemaItem[] | undefined,
+    type,
+    id
+  );
 
   return {
     ...base,
@@ -281,6 +325,11 @@ function normalizeCreativeModel(
     sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
     sourceProfileName: CREATIVE_MANAGED_PROFILE_NAME,
     selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::${id}`,
+    providerModelId,
+    priceModelId,
+    parameterSchema,
+    recommendedScore: recommendedScore ?? base.recommendedScore,
+    sortOrder,
     tags: Array.from(new Set(mergedTags)),
   };
 }

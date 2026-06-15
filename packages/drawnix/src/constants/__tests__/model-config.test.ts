@@ -3,10 +3,121 @@ import {
   getCompatibleParams,
   getSizeOptionsForModel,
   getStaticModelConfig,
+  normalizeCreativeParameterSchema,
   ModelVendor,
+  type ModelConfig,
 } from '../model-config';
 
 describe('model-config image size options', () => {
+  it('优先使用 new-api runtime parameterSchema 并保留原始 value 类型信息', () => {
+    const parameterSchema = normalizeCreativeParameterSchema(
+      [
+        {
+          id: 'size',
+          label: '尺寸',
+          type: 'enum',
+          defaultValue: '1024x1024',
+          options: [{ value: '1024x1024', label: '1024×1024' }],
+          order: 2,
+        },
+        {
+          id: 'oversea',
+          label: '海外',
+          type: 'boolean',
+          defaultValue: true,
+          order: 1,
+        },
+      ],
+      'image',
+      'grsai:gpt-image-2:generate'
+    );
+    const runtimeModel: ModelConfig = {
+      id: 'grsai:gpt-image-2:generate',
+      label: 'GrsAI GPT Image 2',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      parameterSchema,
+    };
+
+    const params = getCompatibleParams(runtimeModel);
+
+    expect(params.map((param) => param.id)).toEqual(['oversea', 'size']);
+    expect(params[0]).toMatchObject({
+      id: 'oversea',
+      valueType: 'boolean',
+      defaultValue: 'true',
+      runtimeValueType: 'boolean',
+      runtimeSchema: true,
+    });
+    expect(params[1]?.options?.map((option) => option.value)).toEqual([
+      '1024x1024',
+    ]);
+  });
+
+  it('拒绝 runtime parameterSchema 中的危险控制字段 ID', () => {
+    const dangerousIds = [
+      'baseUrl',
+      'user',
+      'model',
+      'model_name',
+      'modelRef',
+      'sourceProfileId',
+      'onProgress',
+      'onSubmitted',
+      'headers',
+      'callback',
+      'webhook',
+      'channelId',
+    ];
+    const parameterSchema = normalizeCreativeParameterSchema(
+      [
+        ...dangerousIds.map((id) => ({
+          id,
+          label: id,
+          type: 'string' as const,
+        })),
+        {
+          id: 'size',
+          label: '尺寸',
+          type: 'enum',
+          options: [{ value: '1024x1024', label: '1024×1024' }],
+        },
+      ],
+      'image',
+      'grsai:gpt-image-2:generate'
+    );
+
+    expect(parameterSchema?.map((param) => param.id)).toEqual(['size']);
+  });
+
+  it('binding 没有 runtime schema 时按 providerModelId 继续匹配静态参数', () => {
+    const runtimeModel: ModelConfig = {
+      id: 'grsai:gpt-image-2:generate',
+      providerModelId: 'gpt-image-2',
+      priceModelId: 'unrelated-price-model',
+      label: 'GrsAI GPT Image 2',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+    };
+
+    expect(getCompatibleParams(runtimeModel).map((param) => param.id)).toEqual(
+      expect.arrayContaining(['size', 'resolution', 'quality'])
+    );
+  });
+
+  it('binding 静态参数 fallback 不使用 priceModelId', () => {
+    const runtimeModel: ModelConfig = {
+      id: 'billing-only-binding',
+      providerModelId: 'unknown-provider-model',
+      priceModelId: 'gpt-image-2',
+      label: 'Billing only binding',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+    };
+
+    expect(getCompatibleParams(runtimeModel)).toEqual([]);
+  });
+
   it('为 gpt-image-2 系列暴露扩展比例', () => {
     const expected = [
       'auto',
@@ -142,9 +253,7 @@ describe('model-config image size options', () => {
     ).toEqual(['true', 'false']);
     expect(
       r2vParams.find((param) => param.id === 'watermark')?.defaultValue
-    ).toBe(
-      'false'
-    );
+    ).toBe('false');
     expect(getStaticModelConfig('happyhorse-1.0-t2v')?.vendor).toBe(
       ModelVendor.HAPPYHORSE
     );

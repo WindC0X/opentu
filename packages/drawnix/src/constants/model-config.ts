@@ -75,7 +75,30 @@ export const VENDOR_NAMES: Record<ModelVendor, string> = {
 /**
  * 参数值类型
  */
-export type ParamValueType = 'enum' | 'number' | 'string';
+export type ParamValueType = 'enum' | 'number' | 'string' | 'boolean';
+
+export type CreativeParamPrimitive = string | number | boolean;
+
+export interface CreativeParameterSchemaOption {
+  value: CreativeParamPrimitive;
+  label: string;
+}
+
+export interface CreativeParameterSchemaItem {
+  id: string;
+  label: string;
+  shortLabel?: string;
+  description?: string;
+  type: 'enum' | 'string' | 'number' | 'integer' | 'boolean';
+  defaultValue?: CreativeParamPrimitive;
+  options?: CreativeParameterSchemaOption[];
+  min?: number;
+  max?: number;
+  step?: number;
+  required?: boolean;
+  order?: number;
+  hidden?: boolean;
+}
 
 /**
  * 参数配置接口
@@ -109,6 +132,10 @@ export interface ParamConfig {
   compatibleTags?: string[];
   /** 适用的模型类型 */
   modelType: ModelType;
+  /** 运行时 schema 原始值类型；用于提交前 cast */
+  runtimeValueType?: CreativeParameterSchemaItem['type'];
+  /** 是否来自 new-api runtime parameterSchema */
+  runtimeSchema?: boolean;
 }
 
 export const SORA_MODE_PARAM_ID = 'sora_mode';
@@ -173,6 +200,14 @@ export interface ModelConfig {
   sourceProfileName?: string | null;
   /** 选择器中用于区分同名模型来源的唯一键 */
   selectionKey?: string;
+  /** new-api Creative binding 对应的真实供应商模型 ID */
+  providerModelId?: string;
+  /** new-api Creative binding 对应的计费模型 ID */
+  priceModelId?: string;
+  /** new-api 下发的运行时参数 schema，优先于静态参数 */
+  parameterSchema?: ParamConfig[];
+  /** 服务端推荐分/排序，仅托管 Creative catalog 使用 */
+  sortOrder?: number;
 }
 
 const BUILT_IN_MODEL_RECOMMENDATION_SCORES: Readonly<Record<string, number>> = {
@@ -796,7 +831,8 @@ const BUILT_IN_VIDEO_MODELS: ModelConfig[] = [
     id: 'happyhorse-1.0-video-edit',
     label: 'HappyHorse 1.0 Video Edit',
     shortCode: 'h10v',
-    description: 'HappyHorse 视频参考生成视频，时长跟随输入视频，支持保留原音频',
+    description:
+      'HappyHorse 视频参考生成视频，时长跟随输入视频，支持保留原音频',
     type: 'video',
     vendor: ModelVendor.HAPPYHORSE,
     supportsTools: true,
@@ -1414,10 +1450,7 @@ export function getModelsByType(type: ModelType): ModelConfig[] {
  * 获取模型配置
  */
 export function getModelConfig(modelId: string): ModelConfig | undefined {
-  return (
-    findModelById(runtimeModels, modelId) ||
-    getStaticModelConfig(modelId)
-  );
+  return findModelById(runtimeModels, modelId) || getStaticModelConfig(modelId);
 }
 
 /**
@@ -1870,7 +1903,8 @@ export const VIDEO_PARAMS: ParamConfig[] = [
     id: 'duration',
     label: '视频时长',
     shortLabel: '时长',
-    description: 'HappyHorse 视频时长（3-15 秒整数；Video Edit 跟随输入视频，不支持此参数）',
+    description:
+      'HappyHorse 视频时长（3-15 秒整数；Video Edit 跟随输入视频，不支持此参数）',
     valueType: 'enum',
     options: [
       { value: '3', label: '3秒' },
@@ -2598,12 +2632,149 @@ export function getParamsByModelType(modelType: ModelType): ParamConfig[] {
   return ALL_PARAMS.filter((param) => param.modelType === modelType);
 }
 
+function runtimeSchemaValueToString(value: CreativeParamPrimitive): string {
+  return String(value);
+}
+
+function isSafeCreativeRuntimeParamId(id: string): boolean {
+  const trimmed = id.trim();
+  if (!/^[a-zA-Z][a-zA-Z0-9_:-]{0,63}$/.test(trimmed)) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase().replace(/[_:\-\s]/g, '');
+  const forbidden = [
+    'apikey',
+    'authorization',
+    'bearer',
+    'token',
+    'secret',
+    'key',
+    'credential',
+    'baseurl',
+    'url',
+    'endpoint',
+    'host',
+    'header',
+    'headers',
+    'channelid',
+    'channel',
+    'provider',
+    'providerid',
+    'providermodelid',
+    'model',
+    'modelid',
+    'modelname',
+    'modelref',
+    'sourcemodel',
+    'sourceprofileid',
+    'profileid',
+    'internaloptions',
+    'onprogress',
+    'onsubmitted',
+    'idempotencykey',
+    'idempotency',
+    'route',
+    'routing',
+    'group',
+    'groupid',
+    'user',
+    'userid',
+    'ownerid',
+    'owner',
+    'notifyhook',
+    'callback',
+    'callbackurl',
+    'webhook',
+    'mjapisecret',
+  ];
+  return !forbidden.some((word) => normalized.includes(word));
+}
+
+export function normalizeCreativeParameterSchema(
+  schema: CreativeParameterSchemaItem[] | undefined,
+  modelType: ModelType,
+  compatibleModelId: string
+): ParamConfig[] | undefined {
+  if (!Array.isArray(schema) || schema.length === 0) {
+    return undefined;
+  }
+
+  const params = schema
+    .filter(
+      (item) =>
+        item &&
+        !item.hidden &&
+        item.id &&
+        item.label &&
+        isSafeCreativeRuntimeParamId(item.id)
+    )
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map<ParamConfig | null>((item) => {
+      const valueType: ParamValueType =
+        item.type === 'integer'
+          ? 'number'
+          : item.type === 'boolean'
+          ? 'boolean'
+          : item.type;
+      const options =
+        item.type === 'boolean'
+          ? [
+              { value: 'true', label: '开启' },
+              { value: 'false', label: '关闭' },
+            ]
+          : item.options?.map((option) => ({
+              value: runtimeSchemaValueToString(option.value),
+              label: option.label || runtimeSchemaValueToString(option.value),
+            }));
+
+      if (item.type === 'enum' && (!options || options.length === 0)) {
+        return null;
+      }
+
+      return {
+        id: item.id,
+        label: item.label,
+        shortLabel: item.shortLabel,
+        description: item.description,
+        valueType,
+        options,
+        defaultValue:
+          item.defaultValue === undefined
+            ? undefined
+            : runtimeSchemaValueToString(item.defaultValue),
+        min: item.min,
+        max: item.max,
+        step: item.step,
+        integer: item.type === 'integer',
+        compatibleModels: [compatibleModelId],
+        modelType,
+        runtimeValueType: item.type,
+        runtimeSchema: true,
+      };
+    })
+    .filter((param): param is ParamConfig => !!param);
+
+  return params.length > 0 ? params : undefined;
+}
+
 /**
  * 根据模型 ID 获取兼容的参数列表
  */
-export function getCompatibleParams(modelId: string): ParamConfig[] {
-  const modelConfig = getModelConfig(modelId);
+export function getCompatibleParams(
+  modelIdOrConfig: string | ModelConfig
+): ParamConfig[] {
+  const modelId =
+    typeof modelIdOrConfig === 'string' ? modelIdOrConfig : modelIdOrConfig.id;
+  const modelConfig =
+    typeof modelIdOrConfig === 'string'
+      ? getModelConfig(modelId)
+      : modelIdOrConfig;
   if (!modelConfig) return [];
+
+  if (modelConfig.parameterSchema && modelConfig.parameterSchema.length > 0) {
+    return modelConfig.parameterSchema;
+  }
 
   // 构建模型标签集合：显式标签 + 类型 + 厂商 + 基于 ID 的启发式
   const modelTags = new Set<string>();
@@ -2635,6 +2806,9 @@ export function getCompatibleParams(modelId: string): ParamConfig[] {
     const lookupIds = new Set([
       normalizeModelIdForLookup(modelId),
       normalizeModelIdForLookup(modelConfig.id),
+      ...(modelConfig.providerModelId
+        ? [normalizeModelIdForLookup(modelConfig.providerModelId)]
+        : []),
     ]);
     const idMatched =
       param.compatibleModels.length === 0 ||

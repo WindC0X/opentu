@@ -386,9 +386,77 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
       shortCode: 'gpt2',
       type: 'image',
     });
-    expect(staticModel?.tags).toEqual(expect.arrayContaining(['runtime', 'creative']));
+    expect(staticModel?.tags).toEqual(
+      expect.arrayContaining(['runtime', 'creative'])
+    );
     expect(staticModel?.tags).not.toContain('server-tag');
     expect(staticModel?.tags).not.toContain('mj');
+  });
+
+  it('preserves new-api binding metadata and runtime parameter schema for managed models', async () => {
+    const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-schema',
+              nonce: 'nonce-schema',
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({
+          data: [
+            {
+              id: 'grsai:gpt-image-2:generate',
+              providerModelId: 'gpt-image-2',
+              priceModelId: 'gpt-image-2-price',
+              label: 'GrsAI GPT Image 2',
+              type: 'image',
+              recommendedScore: 87,
+              sortOrder: 9,
+              parameterSchema: [
+                {
+                  id: 'size',
+                  label: '尺寸',
+                  type: 'enum',
+                  defaultValue: '1024x1024',
+                  options: [{ value: '1024x1024', label: '1024×1024' }],
+                },
+              ],
+            },
+          ],
+        });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    }) as unknown as typeof fetch;
+
+    const result = await initializeCreativeManagedSessionBroker(fetcher);
+
+    expect(result.status).toBe('ready');
+    const model = result.models?.[0];
+    expect(model).toMatchObject({
+      id: 'grsai:gpt-image-2:generate',
+      providerModelId: 'gpt-image-2',
+      priceModelId: 'gpt-image-2-price',
+      recommendedScore: 87,
+      sortOrder: 9,
+      selectionKey: 'new-api-creative::grsai:gpt-image-2:generate',
+    });
+    expect(model?.parameterSchema?.map((param) => param.id)).toEqual(['size']);
+
+    const catalog = getCreativeManagedCatalog(getFirstProviderCatalogsUpdate());
+    expect(catalog.discoveredModels[0]).toMatchObject({
+      id: 'grsai:gpt-image-2:generate',
+      providerModelId: 'gpt-image-2',
+      priceModelId: 'gpt-image-2-price',
+    });
+    expect(catalog.discoveredModels[0]?.parameterSchema?.[0]).toMatchObject({
+      id: 'size',
+      runtimeSchema: true,
+    });
   });
 
   it('uses case-insensitive static metadata while preserving the server logical model id for submission', async () => {
@@ -433,7 +501,9 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
       sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
       selectionKey: 'new-api-creative::Gpt-image-2',
     });
-    expect(model?.tags).toEqual(expect.arrayContaining(['runtime', 'creative']));
+    expect(model?.tags).toEqual(
+      expect.arrayContaining(['runtime', 'creative'])
+    );
     expect(model?.tags).not.toContain('server-tag');
     expect(model?.tags).not.toContain('mj');
     expect(mocks.updateActiveInvocationRouteModel).toHaveBeenCalledWith(
