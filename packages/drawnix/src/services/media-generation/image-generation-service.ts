@@ -31,6 +31,7 @@ import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-
 import {
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
+  isCreativeManagedImageTask,
 } from '../../constants/model-config';
 
 function buildStoredImageAdapterParams(
@@ -94,6 +95,7 @@ function buildStoredImageTaskParams(
     promptMeta: options.promptMeta,
     params: schemaBacked ? undefined : buildStoredImageAdapterParams(options),
     userParams,
+    creativeManaged: schemaBacked ? true : undefined,
   };
 }
 
@@ -143,6 +145,7 @@ export async function generateImage(
   const taskId = generateTaskId();
   const now = Date.now();
   const schemaBacked =
+    isCreativeManagedImageTask(effectiveOptions) ||
     hasCreativeUserParams(effectiveOptions.userParams) ||
     (!!effectiveOptions.model && hasRuntimeParameterSchema(effectiveOptions.model));
   const userParams = effectiveOptions.userParams || (schemaBacked ? {} : undefined);
@@ -199,6 +202,7 @@ export async function generateImage(
     assetMetadata: effectiveOptions.assetMetadata,
     params: schemaBacked ? undefined : effectiveOptions.params,
     userParams,
+    creativeManaged: schemaBacked ? true : undefined,
   };
 
   // 调用 executor 执行

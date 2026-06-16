@@ -72,6 +72,7 @@ import { IMAGE_GENERATION_TIMEOUT_MS } from '../../constants/TASK_CONSTANTS';
 import {
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
+  isCreativeManagedImageTask,
 } from '../../constants/model-config';
 import {
   assertTaskInvocationRouteAvailable,
@@ -226,6 +227,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     const modelName = effectiveModel || config.imageConfig.modelName;
 
     const schemaBacked =
+      isCreativeManagedImageTask(params) ||
       hasCreativeUserParams(params.userParams) ||
       hasRuntimeParameterSchema(modelName);
     if (schemaBacked) {
@@ -272,10 +274,13 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           background: params.background,
           outputFormat: params.outputFormat,
           outputCompression: params.outputCompression,
-          params: hasCreativeUserParams(params.userParams)
-            ? undefined
-            : params.params,
+          params:
+            isCreativeManagedImageTask(params) ||
+            hasCreativeUserParams(params.userParams)
+              ? undefined
+              : params.params,
           userParams: params.userParams,
+          creativeManaged: params.creativeManaged,
           assetMetadata: params.assetMetadata,
           preferredRequestSchema: invocationOptions.preferredRequestSchema,
         },
@@ -286,7 +291,10 @@ export class FallbackMediaExecutor implements IMediaExecutor {
 
     // 异步图片模型：使用 /v1/videos 接口（与 SW 模式一致）
     if (isAsyncImageModel(modelName)) {
-      if (hasCreativeUserParams(params.userParams)) {
+      if (
+        isCreativeManagedImageTask(params) ||
+        hasCreativeUserParams(params.userParams)
+      ) {
         throw new Error(
           'schema-backed Creative image requests require a managed adapter route'
         );
@@ -323,7 +331,10 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     });
 
     try {
-      if (hasCreativeUserParams(params.userParams)) {
+      if (
+        isCreativeManagedImageTask(params) ||
+        hasCreativeUserParams(params.userParams)
+      ) {
         throw new Error(
           'schema-backed Creative image requests require a managed adapter route'
         );

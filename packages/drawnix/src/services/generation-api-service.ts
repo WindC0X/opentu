@@ -29,6 +29,7 @@ import {
   DEFAULT_IMAGE_MODEL_ID,
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
+  isCreativeManagedImageTask,
 } from '../constants/model-config';
 import {
   getAdapterContextFromSettings,
@@ -440,6 +441,7 @@ class GenerationAPIService {
       const effectiveModelRef =
         embeddedModel?.modelRef || requestedModelRef || null;
       if (
+        isCreativeManagedImageTask(params as any) ||
         hasCreativeUserParams((params as any).userParams) ||
         hasRuntimeParameterSchema(effectiveModel || '')
       ) {

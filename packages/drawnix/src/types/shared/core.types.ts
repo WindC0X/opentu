@@ -167,6 +167,8 @@ export interface GenerationParams {
   size?: string;
   /** new-api runtime parameterSchema 对应的类型化用户参数 */
   userParams?: CreativeUserParams;
+  /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
+  creativeManaged?: boolean;
   /** Image generation mode for providers that distinguish generation/edit */
   generationMode?: 'text_to_image' | 'image_to_image' | 'image_edit';
   /** Whether this image task is generating a PPT slide image */

@@ -406,6 +406,42 @@ describe('task-queue-service image edit retry persistence', () => {
     });
   });
 
+  it('rehydrates managed image tasks with empty userParams without legacy params on retry', async () => {
+    const { taskQueueService, mocks } = await setupTaskQueueServiceHarness([
+      TaskStatus.FAILED,
+      TaskStatus.COMPLETED,
+    ]);
+
+    const task = taskQueueService.createTask(
+      {
+        prompt: 'Managed defaults cat',
+        model: 'mock:gpt-image-2:preview',
+        size: '16x9',
+        quality: 'high',
+        params: { webhook: 'https://evil.example/hook' },
+        userParams: {},
+        creativeManaged: true,
+      },
+      TaskType.IMAGE
+    );
+
+    await flushAsyncWork();
+    taskQueueService.retryTask(task.id);
+    await flushAsyncWork();
+
+    expect(mocks.generateImage).toHaveBeenCalledTimes(2);
+    expect(mocks.generateImage.mock.calls[1]?.[0]).toMatchObject({
+      taskId: task.id,
+      prompt: 'Managed defaults cat',
+      model: 'mock:gpt-image-2:preview',
+      userParams: {},
+      creativeManaged: true,
+      size: undefined,
+      quality: undefined,
+      params: undefined,
+    });
+  });
+
   it('allows explicit manual retry for completed image tasks and clears stale results', async () => {
     const { taskQueueService, mocks } = await setupTaskQueueServiceHarness([
       TaskStatus.COMPLETED,

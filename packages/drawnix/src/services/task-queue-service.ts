@@ -39,6 +39,7 @@ import { resolveCreativeEmbeddedModelForGeneration } from './creative-embedded-m
 import {
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
+  isCreativeManagedImageTask,
 } from '../constants/model-config';
 import { cacheRemoteUrl } from './media-executor/fallback-utils';
 import {
@@ -924,6 +925,7 @@ class TaskQueueService {
             | Record<string, string | number | boolean>
             | undefined;
           const schemaBacked =
+            isCreativeManagedImageTask(task.params) ||
             hasCreativeUserParams(rawUserParams) ||
             hasRuntimeParameterSchema(effectiveModel || '');
           const userParams = rawUserParams || (schemaBacked ? {} : undefined);
@@ -1008,6 +1010,7 @@ class TaskQueueService {
                     | undefined),
               params: extraParams,
               userParams,
+              creativeManaged: schemaBacked ? true : undefined,
               assetMetadata: task.params.assetMetadata,
             },
             executionOptions

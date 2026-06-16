@@ -87,6 +87,12 @@ export function hasCreativeUserParams(
   return !!userParams && Object.keys(userParams).length > 0;
 }
 
+export function isCreativeManagedImageTask(
+  value?: { creativeManaged?: unknown } | null
+): boolean {
+  return value?.creativeManaged === true;
+}
+
 export interface CreativeParameterSchemaOption {
   value: CreativeParamPrimitive;
   label: string;

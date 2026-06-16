@@ -9,6 +9,7 @@ import type { ModelRef } from '../../utils/settings-manager';
 import type { GenerationParams } from '../../types/shared/core.types';
 import {
   hasCreativeUserParams,
+  isCreativeManagedImageTask,
   type CreativeUserParams,
 } from '../../constants/model-config';
 import type { ExecutionOptions } from './types';
@@ -349,6 +350,7 @@ export async function executeImageViaAdapter(
     idempotencyKey?: string;
     params?: Record<string, unknown>;
     userParams?: CreativeUserParams;
+    creativeManaged?: boolean;
     assetMetadata?: GenerationParams['assetMetadata'];
     preferredRequestSchema?: string | readonly string[];
   },
@@ -373,7 +375,9 @@ export async function executeImageViaAdapter(
   });
 
   try {
-    const schemaBacked = hasCreativeUserParams(params.userParams);
+    const schemaBacked =
+      isCreativeManagedImageTask(params) ||
+      hasCreativeUserParams(params.userParams);
     if (schemaBacked && !adapter.supportsCreativeUserParams) {
       throw new Error(
         'schema-backed Creative image requests require a managed userParams adapter'

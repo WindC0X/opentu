@@ -39,6 +39,8 @@ export interface ImageGenerationOptions {
   params?: Record<string, unknown>;
   /** new-api runtime parameterSchema 对应的类型化用户参数 */
   userParams?: CreativeUserParams;
+  /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
+  creativeManaged?: boolean;
   assetMetadata?: GenerationParams['assetMetadata'];
   promptMeta?: GenerationParams['promptMeta'];
   signal?: AbortSignal;
