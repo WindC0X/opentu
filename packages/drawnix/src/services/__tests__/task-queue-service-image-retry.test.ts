@@ -122,6 +122,7 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
   }));
 
   vi.doMock('../../utils/settings-manager', () => ({
+    LEGACY_DEFAULT_PROVIDER_PROFILE_ID: 'legacy-default',
     hasInvocationRouteCredentials: vi.fn(() => true),
     createModelRef: (profileId?: string | null, modelId?: string | null) =>
       profileId || modelId
@@ -151,6 +152,25 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
       get: vi.fn(() => []),
       set: vi.fn(),
     },
+    providerCatalogsSettings: {
+      get: vi.fn(() => []),
+      set: vi.fn(),
+      addListener: vi.fn(() => vi.fn()),
+    },
+    invocationPresetsSettings: {
+      get: vi.fn(() => []),
+      set: vi.fn(),
+      addListener: vi.fn(() => vi.fn()),
+    },
+    settingsManager: {
+      addListener: vi.fn(() => vi.fn()),
+      reloadFromStorage: vi.fn(),
+    },
+  }));
+
+  vi.doMock('../creative-mode', () => ({
+    CREATIVE_MANAGED_PROFILE_ID: 'new-api-creative',
+    isCreativeEmbeddedMode: () => false,
   }));
 
   vi.doMock('../provider-routing', () => ({
@@ -338,6 +358,52 @@ describe('task-queue-service image edit retry persistence', () => {
     expect(storedTasks.get(task.id)?.params.referenceImages).toEqual([
       'data:image/png;base64,source',
     ]);
+  }, 15000);
+
+  it('rehydrates schema-backed image userParams without legacy params on retry', async () => {
+    const { taskQueueService, mocks } = await setupTaskQueueServiceHarness([
+      TaskStatus.FAILED,
+      TaskStatus.COMPLETED,
+    ]);
+
+    const task = taskQueueService.createTask(
+      {
+        prompt: 'Schema-backed cat',
+        model: 'mock:gpt-image-2:preview',
+        size: '16x9',
+        resolution: '4k',
+        quality: 'high',
+        count: 2,
+        params: { webhook: 'https://evil.example/hook' },
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+      },
+      TaskType.IMAGE
+    );
+
+    await flushAsyncWork();
+    taskQueueService.retryTask(task.id);
+    await flushAsyncWork();
+
+    expect(mocks.generateImage).toHaveBeenCalledTimes(2);
+    expect(mocks.generateImage.mock.calls[1]?.[0]).toMatchObject({
+      taskId: task.id,
+      prompt: 'Schema-backed cat',
+      model: 'mock:gpt-image-2:preview',
+      userParams: {
+        size: '1024x1024',
+        seed: 42,
+        oversea: true,
+      },
+      size: undefined,
+      resolution: undefined,
+      quality: undefined,
+      count: undefined,
+      params: undefined,
+    });
   });
 
   it('allows explicit manual retry for completed image tasks and clears stale results', async () => {

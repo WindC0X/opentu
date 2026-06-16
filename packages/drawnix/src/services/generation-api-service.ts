@@ -27,6 +27,8 @@ import {
   DEFAULT_AUDIO_MODEL_ID,
   isAsyncImageModel,
   DEFAULT_IMAGE_MODEL_ID,
+  hasCreativeUserParams,
+  hasRuntimeParameterSchema,
 } from '../constants/model-config';
 import {
   getAdapterContextFromSettings,
@@ -437,6 +439,14 @@ class GenerationAPIService {
       const effectiveModel = embeddedModel?.modelId || requestedModel;
       const effectiveModelRef =
         embeddedModel?.modelRef || requestedModelRef || null;
+      if (
+        hasCreativeUserParams((params as any).userParams) ||
+        hasRuntimeParameterSchema(effectiveModel || '')
+      ) {
+        throw new Error(
+          'schema-backed Creative image requests require the managed image task route'
+        );
+      }
       const referenceImages = await this.extractReferenceImages(params);
       const shouldUseEditSchema = isImageEditRequest(params, referenceImages);
       const invocationOptions = {

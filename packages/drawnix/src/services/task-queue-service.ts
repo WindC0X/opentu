@@ -36,6 +36,10 @@ import {
   resolveAdapterForInvocation,
 } from './model-adapters';
 import { resolveCreativeEmbeddedModelForGeneration } from './creative-embedded-model-guard';
+import {
+  hasCreativeUserParams,
+  hasRuntimeParameterSchema,
+} from '../constants/model-config';
 import { cacheRemoteUrl } from './media-executor/fallback-utils';
 import {
   IMAGE_GENERATION_TIMEOUT_MS,
@@ -916,25 +920,41 @@ class TaskQueueService {
           const effectiveModel = embeddedModel?.modelId || task.params.model;
           const effectiveModelRef =
             embeddedModel?.modelRef || task.params.modelRef || null;
-          // 从 params.params 中提取额外参数，并补齐新图像契约字段
-          const extraParams = {
-            ...(((task.params as any).params || {}) as Record<string, unknown>),
-          };
-          if (task.params.resolution !== undefined) {
-            extraParams.resolution = task.params.resolution;
+          const rawUserParams = (task.params as any).userParams as
+            | Record<string, string | number | boolean>
+            | undefined;
+          const schemaBacked =
+            hasCreativeUserParams(rawUserParams) ||
+            hasRuntimeParameterSchema(effectiveModel || '');
+          const userParams = rawUserParams || (schemaBacked ? {} : undefined);
+          // 从 params.params 中提取额外参数，并补齐新图像契约字段。
+          // Schema-backed Creative bindings must keep userParams separate and
+          // must not rehydrate legacy adapter params during retries/resume.
+          const extraParams = schemaBacked
+            ? undefined
+            : {
+                ...(((task.params as any).params || {}) as Record<
+                  string,
+                  unknown
+                >),
+              };
+          if (!schemaBacked && task.params.resolution !== undefined) {
+            extraParams!.resolution = task.params.resolution;
           }
           if (
+            !schemaBacked &&
             task.params.quality !== undefined &&
-            extraParams.quality === undefined
+            extraParams!.quality === undefined
           ) {
-            extraParams.quality = task.params.quality;
+            extraParams!.quality = task.params.quality;
           }
           if (
+            !schemaBacked &&
             typeof task.params.count === 'number' &&
             Number.isFinite(task.params.count) &&
-            extraParams.n === undefined
+            extraParams!.n === undefined
           ) {
-            extraParams.n = task.params.count;
+            extraParams!.n = task.params.count;
           }
           await executor.generateImage(
             {
@@ -942,12 +962,10 @@ class TaskQueueService {
               prompt: task.params.prompt,
               model: effectiveModel,
               modelRef: effectiveModelRef,
-              size: task.params.size,
-              resolution: task.params.resolution as
-                | '1k'
-                | '2k'
-                | '4k'
-                | undefined,
+              size: schemaBacked ? undefined : task.params.size,
+              resolution: schemaBacked
+                ? undefined
+                : (task.params.resolution as '1k' | '2k' | '4k' | undefined),
               generationMode: task.params.generationMode as
                 | 'text_to_image'
                 | 'image_to_image'
@@ -957,37 +975,39 @@ class TaskQueueService {
                 | string[]
                 | undefined,
               maskImage: task.params.maskImage as string | undefined,
-              inputFidelity: task.params.inputFidelity as
-                | 'high'
-                | 'low'
-                | undefined,
-              background: task.params.background as
-                | 'transparent'
-                | 'opaque'
-                | 'auto'
-                | undefined,
-              outputFormat: task.params.outputFormat as
-                | 'png'
-                | 'jpeg'
-                | 'webp'
-                | undefined,
-              outputCompression: task.params.outputCompression as
-                | number
-                | undefined,
-              count: task.params.count as number | undefined,
+              inputFidelity: schemaBacked
+                ? undefined
+                : (task.params.inputFidelity as 'high' | 'low' | undefined),
+              background: schemaBacked
+                ? undefined
+                : (task.params.background as
+                    | 'transparent'
+                    | 'opaque'
+                    | 'auto'
+                    | undefined),
+              outputFormat: schemaBacked
+                ? undefined
+                : (task.params.outputFormat as 'png' | 'jpeg' | 'webp' | undefined),
+              outputCompression: schemaBacked
+                ? undefined
+                : (task.params.outputCompression as number | undefined),
+              count: schemaBacked ? undefined : (task.params.count as number | undefined),
               uploadedImages: task.params.uploadedImages as
                 | Array<{ url?: string }>
                 | undefined,
-              quality: (task.params.quality ?? extraParams.quality) as
-                | 'auto'
-                | 'low'
-                | 'medium'
-                | 'high'
-                | '1k'
-                | '2k'
-                | '4k'
-                | undefined,
+              quality: schemaBacked
+                ? undefined
+                : ((task.params.quality ?? extraParams?.quality) as
+                    | 'auto'
+                    | 'low'
+                    | 'medium'
+                    | 'high'
+                    | '1k'
+                    | '2k'
+                    | '4k'
+                    | undefined),
               params: extraParams,
+              userParams,
               assetMetadata: task.params.assetMetadata,
             },
             executionOptions

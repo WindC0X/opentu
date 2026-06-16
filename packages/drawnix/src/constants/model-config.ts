@@ -81,6 +81,12 @@ export type CreativeParamPrimitive = string | number | boolean;
 export type CreativeUserParamValue = CreativeParamPrimitive;
 export type CreativeUserParams = Record<string, CreativeUserParamValue>;
 
+export function hasCreativeUserParams(
+  userParams?: CreativeUserParams | null
+): boolean {
+  return !!userParams && Object.keys(userParams).length > 0;
+}
+
 export interface CreativeParameterSchemaOption {
   value: CreativeParamPrimitive;
   label: string;

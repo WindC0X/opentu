@@ -28,6 +28,10 @@ import {
 } from '../../types/task.types';
 import { createTaskInvocationRouteSnapshot } from '../task-invocation-route';
 import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
+import {
+  hasCreativeUserParams,
+  hasRuntimeParameterSchema,
+} from '../../constants/model-config';
 
 function buildStoredImageAdapterParams(
   options: ImageGenerationOptions
@@ -60,9 +64,10 @@ function buildStoredImageAdapterParams(
 
 function buildStoredImageTaskParams(
   prompt: string,
-  options: ImageGenerationOptions
+  options: ImageGenerationOptions,
+  schemaBacked = hasCreativeUserParams(options.userParams)
 ) {
-  const schemaBacked = !!options.userParams;
+  const userParams = options.userParams || (schemaBacked ? {} : undefined);
   return {
     prompt,
     model: options.model,
@@ -87,8 +92,8 @@ function buildStoredImageTaskParams(
     count: schemaBacked ? undefined : options.count,
     assetMetadata: options.assetMetadata,
     promptMeta: options.promptMeta,
-    params: options.userParams ? undefined : buildStoredImageAdapterParams(options),
-    userParams: options.userParams,
+    params: schemaBacked ? undefined : buildStoredImageAdapterParams(options),
+    userParams,
   };
 }
 
@@ -137,9 +142,14 @@ export async function generateImage(
   // 创建任务记录
   const taskId = generateTaskId();
   const now = Date.now();
+  const schemaBacked =
+    hasCreativeUserParams(effectiveOptions.userParams) ||
+    (!!effectiveOptions.model && hasRuntimeParameterSchema(effectiveOptions.model));
+  const userParams = effectiveOptions.userParams || (schemaBacked ? {} : undefined);
   const persistedTaskParams = buildStoredImageTaskParams(
     sanitizedParams.prompt,
-    effectiveOptions
+    effectiveOptions,
+    schemaBacked
   );
   const invocationRoute = createTaskInvocationRouteSnapshot(
     'image',
@@ -174,31 +184,21 @@ export async function generateImage(
     prompt: sanitizedParams.prompt,
     model: effectiveOptions.model,
     modelRef: effectiveOptions.modelRef || null,
-    size: effectiveOptions.userParams ? undefined : effectiveOptions.size,
-    resolution: effectiveOptions.userParams
-      ? undefined
-      : effectiveOptions.resolution,
+    size: schemaBacked ? undefined : effectiveOptions.size,
+    resolution: schemaBacked ? undefined : effectiveOptions.resolution,
     generationMode: effectiveOptions.generationMode,
-    quality: effectiveOptions.userParams ? undefined : effectiveOptions.quality,
+    quality: schemaBacked ? undefined : effectiveOptions.quality,
     referenceImages: effectiveOptions.referenceImages,
     maskImage: effectiveOptions.maskImage,
-    inputFidelity: effectiveOptions.userParams
-      ? undefined
-      : effectiveOptions.inputFidelity,
-    background: effectiveOptions.userParams
-      ? undefined
-      : effectiveOptions.background,
-    outputFormat: effectiveOptions.userParams
-      ? undefined
-      : effectiveOptions.outputFormat,
-    outputCompression: effectiveOptions.userParams
-      ? undefined
-      : effectiveOptions.outputCompression,
+    inputFidelity: schemaBacked ? undefined : effectiveOptions.inputFidelity,
+    background: schemaBacked ? undefined : effectiveOptions.background,
+    outputFormat: schemaBacked ? undefined : effectiveOptions.outputFormat,
+    outputCompression: schemaBacked ? undefined : effectiveOptions.outputCompression,
     uploadedImages: effectiveOptions.uploadedImages,
-    count: effectiveOptions.userParams ? undefined : effectiveOptions.count,
+    count: schemaBacked ? undefined : effectiveOptions.count,
     assetMetadata: effectiveOptions.assetMetadata,
-    params: effectiveOptions.userParams ? undefined : effectiveOptions.params,
-    userParams: effectiveOptions.userParams,
+    params: schemaBacked ? undefined : effectiveOptions.params,
+    userParams,
   };
 
   // 调用 executor 执行

@@ -63,11 +63,16 @@ import {
 import { resolveAdapterForInvocation } from '../model-adapters';
 import { GPT_IMAGE_EDIT_REQUEST_SCHEMAS } from '../model-adapters';
 import {
+  executeCreativeManagedImageTask,
   executeImageViaAdapter,
   executeVideoViaAdapter,
 } from './fallback-adapter-routes';
 import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
 import { IMAGE_GENERATION_TIMEOUT_MS } from '../../constants/TASK_CONSTANTS';
+import {
+  hasCreativeUserParams,
+  hasRuntimeParameterSchema,
+} from '../../constants/model-config';
 import {
   assertTaskInvocationRouteAvailable,
   createTaskInvocationRouteSnapshot,
@@ -220,6 +225,25 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     const startTime = Date.now();
     const modelName = effectiveModel || config.imageConfig.modelName;
 
+    const schemaBacked =
+      hasCreativeUserParams(params.userParams) ||
+      hasRuntimeParameterSchema(modelName);
+    if (schemaBacked) {
+      return executeCreativeManagedImageTask(
+        taskId,
+        {
+          prompt,
+          model: modelName,
+          modelRef: effectiveModelRef,
+          referenceImages,
+          userParams: params.userParams || {},
+          assetMetadata: params.assetMetadata,
+        },
+        options,
+        startTime
+      );
+    }
+
     // 专用 adapter 路由（mj-imagine 等非 gemini 模型）
     const imageAdapter = resolveAdapterForInvocation(
       'image',
@@ -248,7 +272,9 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           background: params.background,
           outputFormat: params.outputFormat,
           outputCompression: params.outputCompression,
-          params: params.userParams ? undefined : params.params,
+          params: hasCreativeUserParams(params.userParams)
+            ? undefined
+            : params.params,
           userParams: params.userParams,
           assetMetadata: params.assetMetadata,
           preferredRequestSchema: invocationOptions.preferredRequestSchema,
@@ -260,7 +286,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
 
     // 异步图片模型：使用 /v1/videos 接口（与 SW 模式一致）
     if (isAsyncImageModel(modelName)) {
-      if (params.userParams) {
+      if (hasCreativeUserParams(params.userParams)) {
         throw new Error(
           'schema-backed Creative image requests require a managed adapter route'
         );
@@ -297,7 +323,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     });
 
     try {
-      if (params.userParams) {
+      if (hasCreativeUserParams(params.userParams)) {
         throw new Error(
           'schema-backed Creative image requests require a managed adapter route'
         );

@@ -133,6 +133,31 @@ describe('generation-api-service embedded Creative model guard', () => {
     expect(mocks.adapterGenerateImage).not.toHaveBeenCalled();
   });
 
+
+
+  it('rejects schema-backed userParams on the legacy adapter path', async () => {
+    mocks.getSelectableModels.mockReturnValue([managedImageModel]);
+    mocks.getPinnedSelectableModel.mockImplementation((_type, modelId) =>
+      modelId === managedImageModel.id ? managedImageModel : null
+    );
+    const { generationAPIService } = await import('../generation-api-service');
+
+    await expect(
+      generationAPIService.generate(
+        'schema-legacy-path',
+        {
+          prompt: 'draw a cat',
+          model: 'newapi-image',
+          userParams: { size: '1024x1024', seed: 42 },
+          params: { webhook: 'https://evil.example/hook' },
+        },
+        TaskType.IMAGE
+      )
+    ).rejects.toThrow(/managed image task route/);
+
+    expect(mocks.resolveAdapterForInvocation).not.toHaveBeenCalled();
+    expect(mocks.adapterGenerateImage).not.toHaveBeenCalled();
+  });
   it('replaces a missing request model with the managed default instead of a static fallback', async () => {
     mocks.getSelectableModels.mockReturnValue([managedImageModel]);
     mocks.getPinnedSelectableModel.mockImplementation((_type, modelId) =>

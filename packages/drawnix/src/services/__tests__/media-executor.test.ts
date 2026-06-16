@@ -22,11 +22,13 @@ import type {
 describe('Media Executor Module', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.doUnmock('../media-executor/task-storage-writer');
     vi.doUnmock('../../utils/settings-manager');
     vi.doUnmock('../sw-channel/client');
     vi.doUnmock('../task-storage-reader');
     vi.doUnmock('../media-executor/llm-api-logger');
+    vi.doUnmock('../creative-mode');
     vi.doUnmock('../unified-cache-service');
     vi.doUnmock('../../utils/api-auth-error-event');
     vi.doUnmock('../model-adapters');
@@ -187,6 +189,7 @@ describe('Media Executor Module', () => {
         startLLMApiLog: vi.fn(() => 'log-id'),
         completeLLMApiLog: vi.fn(),
         failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
       }));
       vi.doMock('../media-executor/task-storage-writer', () => ({
         taskStorageWriter: {
@@ -280,6 +283,7 @@ describe('Media Executor Module', () => {
         startLLMApiLog: vi.fn(() => 'log-id'),
         completeLLMApiLog: vi.fn(),
         failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
       }));
       vi.doMock('../media-executor/task-storage-writer', () => ({
         taskStorageWriter: {
@@ -347,11 +351,102 @@ describe('Media Executor Module', () => {
       expect(receivedNestedIdempotencyKey).toBe('opentu-image-task-1');
     }, 15000);
 
+    it('does not mark ordinary image adapter requests as schema-backed with empty userParams', async () => {
+      const completeTask = vi.fn(async () => undefined);
+      const updateStatus = vi.fn(async () => undefined);
+      const failTask = vi.fn(async () => undefined);
+      const generateImage = vi.fn(async () => ({
+        url: 'https://example.com/mj.jpg',
+        format: 'jpg',
+      }));
+      const resolveAdapterForInvocation = vi.fn(() => ({
+        id: 'mj-image-adapter',
+        label: 'MJ Image',
+        kind: 'image',
+        generateImage,
+      }));
+
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
+      }));
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          updateStatus,
+          completeTask,
+          failTask,
+        },
+      }));
+      vi.doMock('../unified-cache-service', () => ({
+        unifiedCacheService: {
+          getImageForAI: vi.fn(),
+          isCached: vi.fn(async () => false),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../../utils/settings-manager', async (importOriginal) => {
+        const actual = await importOriginal<
+          typeof import('../../utils/settings-manager')
+        >();
+        return {
+          ...actual,
+          geminiSettings: {
+            get: () => ({ apiKey: '', baseUrl: '/creative/relay/v1' }),
+          },
+        };
+      });
+      vi.doMock('../model-adapters', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../model-adapters')>();
+        return {
+          ...actual,
+          resolveAdapterForInvocation,
+          getAdapterContextFromSettings: vi.fn(() => ({
+            baseUrl: '/creative/relay/v1',
+            apiKey: '',
+            authType: 'session-broker',
+          })),
+        };
+      });
+
+      const { FallbackMediaExecutor } = await import(
+        '../media-executor/fallback-executor'
+      );
+      const executor = new FallbackMediaExecutor();
+
+      await executor.generateImage({
+        taskId: 'task-ordinary-adapter',
+        prompt: 'A cat',
+        model: 'mj-imagine',
+        params: { aspect_ratio: '1:1' },
+        userParams: {},
+      });
+
+      expect(resolveAdapterForInvocation).toHaveBeenCalled();
+      expect(generateImage).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          model: 'mj-imagine',
+          params: expect.objectContaining({
+            aspect_ratio: '1:1',
+            idempotencyKey: 'opentu-image-task-ordinary-adapter',
+          }),
+        })
+      );
+      expect(completeTask).toHaveBeenCalledWith(
+        'task-ordinary-adapter',
+        expect.objectContaining({ url: 'https://example.com/mj.jpg' })
+      );
+      expect(failTask).not.toHaveBeenCalled();
+    }, 15000);
+
     it('passes schema-backed image userParams without legacy adapter params', async () => {
       vi.doMock('../media-executor/llm-api-logger', () => ({
         startLLMApiLog: vi.fn(() => 'log-id'),
         completeLLMApiLog: vi.fn(),
         failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
       }));
       vi.doMock('../media-executor/task-storage-writer', () => ({
         taskStorageWriter: {
@@ -434,11 +529,218 @@ describe('Media Executor Module', () => {
       ).toBeUndefined();
     }, 15000);
 
+    it('submits schema-backed image userParams through the managed Creative task route', async () => {
+      const completeTask = vi.fn(async () => undefined);
+      const updateStatus = vi.fn(async () => undefined);
+      const cacheMediaFromBlob = vi.fn(async () => undefined);
+      const resolveAdapterForInvocation = vi.fn();
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/creative/relay/v1/images/tasks')) {
+          expect(init?.method).toBe('POST');
+          expect(init?.credentials).toBe('same-origin');
+          const headers = new Headers(init?.headers as HeadersInit);
+          expect(headers.get('Idempotency-Key')).toBe('opentu-image-task-schema');
+          expect(headers.get('X-Creative-CSRF')).toBe('csrf-token');
+          expect(headers.get('X-Creative-Nonce')).toBe('nonce-token');
+          const body = JSON.parse(String(init?.body));
+          expect(body).toEqual({
+            model: 'mock:gpt-image-2:preview',
+            prompt: 'A cat',
+            userParams: { size: '1024x1024', seed: 42 },
+          });
+          expect(body.params).toBeUndefined();
+          expect(body.idempotencyKey).toBeUndefined();
+          expect(body.onProgress).toBeUndefined();
+          expect(body.onSubmitted).toBeUndefined();
+          expect(body.images).toBeUndefined();
+          return new Response(
+            JSON.stringify({
+              task_id: 'creative-task-1',
+              status: 'succeeded',
+              result: {
+                url: '/creative/relay/v1/images/tasks/creative-task-1/content',
+                mimeType: 'image/png',
+              },
+            }),
+            { status: 202, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (url.endsWith('/creative/relay/v1/images/tasks/creative-task-1/content')) {
+          return new Response(new Blob(['png-bytes'], { type: 'image/png' }), {
+            status: 200,
+            headers: { 'Content-Type': 'image/png' },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      vi.doMock('../creative-mode', () => ({
+        CREATIVE_MANAGED_PROFILE_ID: 'new-api-creative',
+        CREATIVE_RELAY_BASE_URL: '/creative/relay/v1',
+        isCreativeEmbeddedMode: () => false,
+        requireCreativeSessionAuthHeaders: () => ({
+          'X-Creative-CSRF': 'csrf-token',
+          'X-Creative-Nonce': 'nonce-token',
+        }),
+      }));
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
+      }));
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          updateStatus,
+          completeTask,
+          failTask: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../unified-cache-service', () => ({
+        unifiedCacheService: {
+          getImageForAI: vi.fn(),
+          isCached: vi.fn(async () => false),
+          cacheMediaFromBlob,
+        },
+      }));
+      vi.doMock('../../utils/settings-manager', async (importOriginal) => {
+        const actual = await importOriginal<
+          typeof import('../../utils/settings-manager')
+        >();
+        return {
+          ...actual,
+          geminiSettings: {
+            get: () => ({ apiKey: '', baseUrl: '/creative/relay/v1' }),
+          },
+        };
+      });
+      vi.doMock('../model-adapters', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../model-adapters')>();
+        return {
+          ...actual,
+          resolveAdapterForInvocation,
+        };
+      });
+
+      const { FallbackMediaExecutor } = await import(
+        '../media-executor/fallback-executor'
+      );
+      const executor = new FallbackMediaExecutor();
+
+      await executor.generateImage({
+        taskId: 'task-schema',
+        prompt: 'A cat',
+        model: 'mock:gpt-image-2:preview',
+        params: { webhook: 'https://evil.example/hook' },
+        userParams: { size: '1024x1024', seed: 42 },
+      });
+
+      expect(updateStatus).toHaveBeenCalledWith('task-schema', 'processing');
+      expect(resolveAdapterForInvocation).not.toHaveBeenCalled();
+      expect(cacheMediaFromBlob).toHaveBeenCalledWith(
+        '/__aitu_cache__/image/creative-task-1.png',
+        expect.any(Blob),
+        'image',
+        expect.objectContaining({ taskId: 'creative-task-1' })
+      );
+      expect(completeTask).toHaveBeenCalledWith('task-schema', {
+        url: '/__aitu_cache__/image/creative-task-1.png',
+        format: 'png',
+        size: 9,
+      });
+    }, 15000);
+
+    it('fails schema-backed managed image tasks with reference images before submit', async () => {
+      const failTask = vi.fn(async () => undefined);
+      const updateStatus = vi.fn(async () => undefined);
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      vi.doMock('../creative-mode', () => ({
+        CREATIVE_MANAGED_PROFILE_ID: 'new-api-creative',
+        CREATIVE_RELAY_BASE_URL: '/creative/relay/v1',
+        isCreativeEmbeddedMode: () => false,
+        requireCreativeSessionAuthHeaders: () => ({
+          'X-Creative-CSRF': 'csrf-token',
+          'X-Creative-Nonce': 'nonce-token',
+        }),
+      }));
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
+      }));
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          updateStatus,
+          completeTask: vi.fn(async () => undefined),
+          failTask,
+        },
+      }));
+      vi.doMock('../unified-cache-service', () => ({
+        unifiedCacheService: {
+          getImageForAI: vi.fn(),
+          isCached: vi.fn(async () => false),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../../utils/settings-manager', async (importOriginal) => {
+        const actual = await importOriginal<
+          typeof import('../../utils/settings-manager')
+        >();
+        return {
+          ...actual,
+          geminiSettings: {
+            get: () => ({ apiKey: '', baseUrl: '/creative/relay/v1' }),
+          },
+        };
+      });
+      vi.doMock('../model-adapters', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../model-adapters')>();
+        return {
+          ...actual,
+          resolveAdapterForInvocation: vi.fn(),
+        };
+      });
+
+      const { FallbackMediaExecutor } = await import(
+        '../media-executor/fallback-executor'
+      );
+      const executor = new FallbackMediaExecutor();
+
+      await expect(
+        executor.generateImage({
+          taskId: 'task-schema-ref',
+          prompt: 'Edit this cat',
+          model: 'mock:gpt-image-2:preview',
+          referenceImages: ['https://provider.example/input.png'],
+          userParams: { size: '1024x1024' },
+        })
+      ).rejects.toThrow(/does not support reference images/);
+
+      expect(updateStatus).toHaveBeenCalledWith(
+        'task-schema-ref',
+        'processing'
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(failTask).toHaveBeenCalledWith(
+        'task-schema-ref',
+        expect.objectContaining({
+          code: 'IMAGE_GENERATION_ERROR',
+          message: expect.stringMatching(/does not support reference images/),
+        })
+      );
+    }, 15000);
+
     it('fails schema-backed image userParams before unsupported adapters can call providers', async () => {
       vi.doMock('../media-executor/llm-api-logger', () => ({
         startLLMApiLog: vi.fn(() => 'log-id'),
         completeLLMApiLog: vi.fn(),
         failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
       }));
       const failTask = vi.fn(async () => undefined);
       vi.doMock('../media-executor/task-storage-writer', () => ({
@@ -492,6 +794,7 @@ describe('Media Executor Module', () => {
         startLLMApiLog: vi.fn(() => 'log-id'),
         completeLLMApiLog: vi.fn(),
         failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
       }));
       vi.doMock('../media-executor/task-storage-writer', () => ({
         taskStorageWriter: {

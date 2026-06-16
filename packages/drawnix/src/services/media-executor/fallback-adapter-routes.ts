@@ -7,14 +7,22 @@
 
 import type { ModelRef } from '../../utils/settings-manager';
 import type { GenerationParams } from '../../types/shared/core.types';
-import type { CreativeUserParams } from '../../constants/model-config';
+import {
+  hasCreativeUserParams,
+  type CreativeUserParams,
+} from '../../constants/model-config';
 import type { ExecutionOptions } from './types';
 import { taskStorageWriter } from './task-storage-writer';
+import {
+  CREATIVE_RELAY_BASE_URL,
+  requireCreativeSessionAuthHeaders,
+} from '../creative-mode';
 import { createTaskInvocationRouteSnapshot } from '../task-invocation-route';
 import {
   startLLMApiLog,
   completeLLMApiLog,
   failLLMApiLog,
+  updateLLMApiLogMetadata,
   LLMReferenceImage,
 } from './llm-api-logger';
 import {
@@ -38,6 +46,26 @@ type ImageGenerationMode = 'text_to_image' | 'image_to_image' | 'image_edit';
 type ImageInputFidelity = 'high' | 'low';
 type ImageBackground = 'transparent' | 'opaque' | 'auto';
 type ImageOutputFormat = 'png' | 'jpeg' | 'webp';
+
+type CreativeImageTaskStatus =
+  | 'queued'
+  | 'in_progress'
+  | 'completed'
+  | 'failed'
+  | 'succeeded'
+  | 'success'
+  | 'error';
+
+interface CreativeImageTaskDTO {
+  task_id?: string;
+  status?: CreativeImageTaskStatus | string;
+  progress?: string;
+  model?: string;
+  result?: {
+    url?: string;
+    mimeType?: string;
+  };
+}
 
 function getStringParam(
   params: { params?: Record<string, unknown> },
@@ -78,6 +106,222 @@ function resolvePreferredRequestSchema(params: {
   }
 
   return params.preferredRequestSchema;
+}
+
+function creativeImageTaskPath(taskId?: string): string {
+  const base = `${CREATIVE_RELAY_BASE_URL}/images/tasks`;
+  return taskId ? `${base}/${encodeURIComponent(taskId)}` : base;
+}
+
+function isCreativeImageTaskComplete(status?: string): boolean {
+  const normalized = (status || '').toLowerCase();
+  return (
+    normalized === 'completed' ||
+    normalized === 'succeeded' ||
+    normalized === 'success'
+  );
+}
+
+function isCreativeImageTaskFailed(status?: string): boolean {
+  const normalized = (status || '').toLowerCase();
+  return normalized === 'failed' || normalized === 'error';
+}
+
+function extensionFromMimeType(mimeType?: string): string {
+  const normalized = mimeType?.toLowerCase() || '';
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return 'jpg';
+  if (normalized.includes('webp')) return 'webp';
+  return 'png';
+}
+
+function createCreativeImageTaskIdempotencyKey(taskId: string): string {
+  return `opentu-image-${taskId}`;
+}
+
+function resolveCreativeImageTaskContentUrl(
+  taskId: string,
+  contentUrl?: string
+): string {
+  const fallback = `${creativeImageTaskPath(taskId)}/content`;
+  if (!contentUrl) {
+    return fallback;
+  }
+  if (contentUrl === fallback) {
+    return contentUrl;
+  }
+  return fallback;
+}
+
+async function parseCreativeImageTaskResponse(
+  response: Response,
+  operation: 'submit' | 'fetch' | 'content'
+): Promise<CreativeImageTaskDTO> {
+  if (!response.ok) {
+    const error = new Error(
+      `creative image task ${operation} failed: ${response.status}`
+    );
+    (error as any).httpStatus = response.status;
+    throw error;
+  }
+  if (operation === 'content') {
+    return {};
+  }
+  const payload = (await response.json()) as CreativeImageTaskDTO;
+  if (!payload || typeof payload !== 'object') {
+    throw new Error(`creative image task ${operation} returned invalid JSON`);
+  }
+  return payload;
+}
+
+async function downloadCreativeImageTaskContent(params: {
+  taskId: string;
+  contentUrl?: string;
+  model?: string;
+  signal?: AbortSignal;
+}): Promise<{ url: string; format: string; size: number }> {
+  const response = await fetch(
+    resolveCreativeImageTaskContentUrl(params.taskId, params.contentUrl),
+    {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'image/*,application/octet-stream',
+      },
+      signal: params.signal,
+    }
+  );
+  await parseCreativeImageTaskResponse(response, 'content');
+  const blob = await response.blob();
+  if (!blob.size) {
+    throw new Error('creative image task content is empty');
+  }
+  const format = extensionFromMimeType(blob.type);
+  const localUrl = `/__aitu_cache__/image/${params.taskId}.${format}`;
+  await unifiedCacheService.cacheMediaFromBlob(localUrl, blob, 'image', {
+    taskId: params.taskId,
+    model: params.model,
+  });
+  return { url: localUrl, format, size: blob.size };
+}
+
+export async function executeCreativeManagedImageTask(
+  taskId: string,
+  params: {
+    prompt: string;
+    model: string;
+    modelRef?: ModelRef | null;
+    referenceImages?: string[];
+    userParams: CreativeUserParams;
+    assetMetadata?: GenerationParams['assetMetadata'];
+  },
+  options?: ExecutionOptions,
+  startTime?: number
+): Promise<void> {
+  const logStartTime = startTime || Date.now();
+  const logId = startLLMApiLog({
+    endpoint: `${CREATIVE_RELAY_BASE_URL}/images/tasks`,
+    model: params.model,
+    taskType: 'image',
+    prompt: params.prompt,
+    hasReferenceImages:
+      !!params.referenceImages && params.referenceImages.length > 0,
+    referenceImageCount: params.referenceImages?.length,
+    taskId,
+  });
+
+  try {
+    if (params.referenceImages?.length) {
+      throw new Error(
+        'creative managed image task does not support reference images yet'
+      );
+    }
+    const idempotencyKey = createCreativeImageTaskIdempotencyKey(taskId);
+    options?.onProgress?.({ progress: 10, phase: 'submitting' });
+    const submitResponse = await fetch(creativeImageTaskPath(), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        ...requireCreativeSessionAuthHeaders(),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        model: params.model,
+        prompt: params.prompt,
+        userParams: params.userParams,
+      }),
+      signal: options?.signal,
+    });
+    const submitted = await parseCreativeImageTaskResponse(
+      submitResponse,
+      'submit'
+    );
+    const remoteTaskId = submitted.task_id || taskId;
+    updateLLMApiLogMetadata(logId, {
+      remoteId: remoteTaskId,
+      httpStatus: submitResponse.status,
+    });
+
+    let current = submitted;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      if (isCreativeImageTaskComplete(current.status)) {
+        const content = await downloadCreativeImageTaskContent({
+          taskId: remoteTaskId,
+          contentUrl: current.result?.url,
+          model: params.model,
+          signal: options?.signal,
+        });
+        completeLLMApiLog(logId, {
+          httpStatus: submitResponse.status,
+          duration: Date.now() - logStartTime,
+          resultType: 'image',
+          resultCount: 1,
+          remoteId: remoteTaskId,
+          resultUrl: content.url,
+        });
+        options?.onProgress?.({ progress: 100 });
+        await taskStorageWriter.completeTask(taskId, {
+          url: content.url,
+          format: content.format,
+          size: content.size,
+        });
+        return;
+      }
+
+      if (isCreativeImageTaskFailed(current.status)) {
+        throw new Error('creative image task failed');
+      }
+
+      options?.onProgress?.({
+        progress: Math.min(95, 10 + attempt),
+        phase: 'polling',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const pollResponse = await fetch(creativeImageTaskPath(remoteTaskId), {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: options?.signal,
+      });
+      current = await parseCreativeImageTaskResponse(pollResponse, 'fetch');
+    }
+
+    throw new Error('creative image task timed out');
+  } catch (error: any) {
+    const errorMessage = error?.message || 'Creative image task failed';
+    failLLMApiLog(logId, {
+      duration: Date.now() - logStartTime,
+      errorMessage,
+    });
+    await taskStorageWriter.failTask(taskId, {
+      code: 'IMAGE_GENERATION_ERROR',
+      message: errorMessage,
+    });
+    throw error;
+  }
 }
 
 /**
@@ -129,7 +373,7 @@ export async function executeImageViaAdapter(
   });
 
   try {
-    const schemaBacked = !!params.userParams;
+    const schemaBacked = hasCreativeUserParams(params.userParams);
     if (schemaBacked && !adapter.supportsCreativeUserParams) {
       throw new Error(
         'schema-backed Creative image requests require a managed userParams adapter'
@@ -171,7 +415,7 @@ export async function executeImageViaAdapter(
           ? undefined
           : params.outputCompression,
         idempotencyKey,
-        params: params.userParams
+        params: schemaBacked
           ? undefined
           : {
               resolution: params.resolution,
@@ -180,7 +424,7 @@ export async function executeImageViaAdapter(
               ...params.params,
               idempotencyKey,
             },
-        userParams: params.userParams,
+        userParams: schemaBacked ? params.userParams : undefined,
       }
     );
 
