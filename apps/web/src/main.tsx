@@ -34,11 +34,29 @@ const swQueryParam =
   typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('sw')
     : null;
+const isCreativeEmbeddedBuild = import.meta.env.BASE_URL === '/creative/';
+const isCreativeEmbeddedPath =
+  typeof window !== 'undefined' &&
+  (window.location.pathname === '/creative' ||
+    window.location.pathname.startsWith('/creative/'));
+const isCreativeEmbeddedMode =
+  isCreativeEmbeddedBuild || isCreativeEmbeddedPath;
+const isServiceWorkerExplicitlyEnabled = swQueryParam === '1';
 const isServiceWorkerExplicitlyDisabled = swQueryParam === '0';
 const hasServiceWorkerSupport =
   typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
 const shouldUseServiceWorker =
-  hasServiceWorkerSupport && !isServiceWorkerExplicitlyDisabled;
+  hasServiceWorkerSupport &&
+  (isCreativeEmbeddedMode
+    ? isServiceWorkerExplicitlyEnabled
+    : !isServiceWorkerExplicitlyDisabled);
+const shouldCleanupServiceWorker =
+  hasServiceWorkerSupport &&
+  (isServiceWorkerExplicitlyDisabled ||
+    (isCreativeEmbeddedMode && !isServiceWorkerExplicitlyEnabled));
+const DISABLED_SW_RELOAD_STORAGE_KEY =
+  '__OPENTU_MAIN_SW_DISABLED_RELOAD_AT__';
+const DISABLED_SW_RELOAD_TTL_MS = 60 * 1000;
 
 function setupLazyAssetRecoveryListeners(): void {
   if (typeof window === 'undefined') {
@@ -264,7 +282,39 @@ function scheduleCDNPreferenceSync(
 function cleanupDisabledServiceWorker(): void {
   navigator.serviceWorker
     .getRegistration()
-    .then((registration) => registration?.unregister())
+    .then(async (registration) => {
+      if (!registration) {
+        return;
+      }
+
+      await registration.unregister();
+
+      if (!navigator.serviceWorker.controller) {
+        return;
+      }
+
+      try {
+        const reloadedAtRaw = window.sessionStorage.getItem(
+          DISABLED_SW_RELOAD_STORAGE_KEY
+        );
+        const reloadedAt = reloadedAtRaw ? Number(reloadedAtRaw) : 0;
+        if (
+          Number.isFinite(reloadedAt) &&
+          reloadedAt > 0 &&
+          Date.now() - reloadedAt < DISABLED_SW_RELOAD_TTL_MS
+        ) {
+          return;
+        }
+
+        window.sessionStorage.setItem(
+          DISABLED_SW_RELOAD_STORAGE_KEY,
+          String(Date.now())
+        );
+        void safeReload();
+      } catch {
+        // If sessionStorage is unavailable, avoid a possible reload loop.
+      }
+    })
     .catch((error) => {
       console.warn('[Main] Disabled service worker cleanup failed:', error);
     });
@@ -387,8 +437,7 @@ if (typeof window !== 'undefined') {
 }
 
 if (
-  hasServiceWorkerSupport &&
-  isServiceWorkerExplicitlyDisabled
+  shouldCleanupServiceWorker
 ) {
   cleanupDisabledServiceWorker();
 }

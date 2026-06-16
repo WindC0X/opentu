@@ -75,7 +75,8 @@
     "verify:startup": "node scripts/validate-startup-bundle.js",
     "deploy:upload": "node scripts/upload-and-deploy.js",
     "deploy:nginx": "node scripts/upload-nginx-config.js",
-    "e2e:creative-embedded": "nx e2e web-e2e -- --project=creative-embedded"
+    "e2e:creative-embedded": "nx e2e web-e2e -- --project=creative-embedded",
+    "verify:creative-embedded-startup": "node scripts/verify-creative-embedded-startup.js"
   },
   "private": true,
   "dependencies": {

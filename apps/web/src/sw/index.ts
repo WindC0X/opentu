@@ -4862,12 +4862,43 @@ async function handleFontRequest(request: Request): Promise<Response> {
   }
 }
 
-// Quick fetch without retries - for cache-first scenarios
+const DEFAULT_QUICK_FETCH_TIMEOUT_MS = 8000;
+
+// Quick fetch without retries - for cache-first scenarios. Keep it bounded so
+// startup scripts such as cdn-config.js cannot leave the app shell pending
+// forever behind an old service worker.
 async function fetchQuick(
   request: Request,
   fetchOptions: any = {}
 ): Promise<Response> {
-  return fetch(request, fetchOptions);
+  const {
+    timeoutMs = DEFAULT_QUICK_FETCH_TIMEOUT_MS,
+    ...boundedFetchOptions
+  } = fetchOptions || {};
+
+  if (
+    boundedFetchOptions.signal ||
+    typeof AbortController === 'undefined' ||
+    typeof timeoutMs !== 'number' ||
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0
+  ) {
+    return fetch(request, boundedFetchOptions);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(request, {
+      ...boundedFetchOptions,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function getVirtualMediaCacheKeys(request: Request, url: URL): string[] {
