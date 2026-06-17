@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeAll, describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   convertDirectGenerationToWorkflow,
   convertAgentFlowToWorkflow,
@@ -13,21 +13,54 @@ import {
   WorkflowStep,
 } from '../workflow-converter';
 import type { ParsedGenerationParams } from '../../../utils/ai-input-parser';
-import { initializeMCP } from '../../../mcp';
 
 vi.hoisted(() => {
+  const requestWithResult = <T,>(result: T) => {
+    const request: {
+      onsuccess: ((event: Event) => void) | null;
+      onerror: ((event: Event) => void) | null;
+      result: T;
+      error: null;
+    } = {
+      onsuccess: null,
+      onerror: null,
+      result,
+      error: null,
+    };
+    queueMicrotask(() => request.onsuccess?.(new Event('success')));
+    return request;
+  };
   const createObjectStore = () => ({
     createIndex: () => undefined,
-    count: () => ({ onsuccess: null, onerror: null, result: 0 }),
-    get: () => ({ onsuccess: null, onerror: null, result: undefined }),
-    put: () => ({ onsuccess: null, onerror: null }),
+    count: () => requestWithResult(0),
+    get: () => requestWithResult(undefined),
+    getAll: () => requestWithResult([]),
+    getAllKeys: () => requestWithResult([]),
+    put: () => requestWithResult(undefined),
   });
+  const createTransaction = () => {
+    const transaction: {
+      objectStore: () => ReturnType<typeof createObjectStore>;
+      abort: () => void;
+      error: null;
+      oncomplete: ((event: Event) => void) | null;
+      onerror: ((event: Event) => void) | null;
+      onabort: ((event: Event) => void) | null;
+    } = {
+      objectStore: () => createObjectStore(),
+      abort: () => undefined,
+      error: null,
+      oncomplete: null,
+      onerror: null,
+      onabort: null,
+    };
+    queueMicrotask(() => transaction.oncomplete?.(new Event('complete')));
+    return transaction;
+  };
   const createDatabase = () => ({
     objectStoreNames: { contains: () => true },
     createObjectStore: () => createObjectStore(),
-    transaction: () => ({
-      objectStore: () => createObjectStore(),
-    }),
+    transaction: () => createTransaction(),
     close: () => undefined,
     onclose: null,
   });
@@ -59,6 +92,7 @@ vi.hoisted(() => {
         });
         return request;
       },
+      deleteDatabase: () => requestWithResult(undefined),
     },
     configurable: true,
   });
@@ -131,10 +165,6 @@ const knowledgeContextRefs = [
 ];
 
 describe('workflow-converter', () => {
-  beforeAll(() => {
-    initializeMCP();
-  });
-
   describe('convertDirectGenerationToWorkflow', () => {
     describe('图片生成场景', () => {
       it('应该正确转换单张图片生成请求', () => {
@@ -223,6 +253,34 @@ describe('workflow-converter', () => {
         });
         expect(workflow.steps[0].args.params).toBeUndefined();
         expect(workflow.steps[0].args.size).toBeUndefined();
+      });
+
+      it('schema-backed 图片步骤即使 userParams 为空也保留 managed 标记', () => {
+        const params = createMockParams({
+          generationType: 'image',
+          modelId: 'mock:gpt-image-2:preview',
+          size: undefined,
+          extraParams: {
+            size: '1024x1024',
+            callback: 'https://evil.example/hook',
+          },
+          userParams: {},
+          creativeManaged: true,
+        });
+
+        const workflow = convertDirectGenerationToWorkflow(params);
+
+        expect(workflow.steps[0].args).toMatchObject({
+          model: 'mock:gpt-image-2:preview',
+          userParams: {},
+          creativeManaged: true,
+        });
+        expect(workflow.steps[0].args.params).toBeUndefined();
+        expect(workflow.steps[0].args.size).toBeUndefined();
+        expect(workflow.metadata).toMatchObject({
+          userParams: {},
+          creativeManaged: true,
+        });
       });
 
       it('单张图片带蒙版时应该创建 image_edit 请求参数', () => {
@@ -671,7 +729,7 @@ describe('workflow-converter', () => {
         content: string;
       }>;
       expect(messages[0].content).toContain('generate_image');
-      expect(messages[0].content).toContain('必须实际调用工具生成图片');
+      expect(messages[0].content).toContain('必须实际调用 `generate_image` 工具');
     });
 
     it('Skill 回退到 Agent 路径时应携带知识库上下文 refs', async () => {

@@ -3480,6 +3480,12 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
               count: parsedParams.count,
               size: parsedParams.size,
               duration: parsedParams.duration,
+              custom: parsedParams.extraParams,
+              userParams:
+                parsedParams.creativeManaged || parsedParams.userParams
+                  ? parsedParams.userParams || {}
+                  : undefined,
+              creativeManaged: parsedParams.creativeManaged ? true : undefined,
             },
             selection,
             finalPrompt: parsedParams.prompt,
@@ -4073,6 +4079,8 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             count: workflowMessageData.count,
             size: retryContext.aiContext.params.size,
             duration: retryContext.aiContext.params.duration,
+            userParams: retryContext.aiContext.params.userParams,
+            creativeManaged: retryContext.aiContext.params.creativeManaged,
             referenceImages: retryContext.referenceImages,
             selection: retryContext.aiContext.selection,
             knowledgeContextRefs: retryContext.aiContext.knowledgeContextRefs,

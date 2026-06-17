@@ -378,6 +378,7 @@ export class WorkflowEngine {
           userParams: step.args.userParams as
             | import('../../constants/model-config').CreativeUserParams
             | undefined,
+          creativeManaged: step.args.creativeManaged as boolean | undefined,
           forceMainThread: this.options.forceFallbackExecutor,
           signal,
           onTaskCreated: (taskId) => {

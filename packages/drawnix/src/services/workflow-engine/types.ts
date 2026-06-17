@@ -5,6 +5,7 @@
  */
 
 import type { ModelRef } from '../../utils/settings-manager';
+import type { CreativeUserParams } from '../../constants/model-config';
 
 // ============================================================================
 // 工作流步骤
@@ -86,6 +87,8 @@ export interface WorkflowContext {
     count?: number;
     size?: string;
     duration?: string;
+    userParams?: CreativeUserParams;
+    creativeManaged?: boolean;
   };
   /** 参考图片 */
   referenceImages?: string[];

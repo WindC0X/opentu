@@ -12,12 +12,12 @@ import { geminiSettings, type ModelRef } from './settings-manager';
 import {
   getDefaultAudioModel as getSystemDefaultAudioModel,
   getModelConfig,
-  getImageModelDefaults,
   getDefaultImageModel as getSystemDefaultImageModel,
   getDefaultTextModel as getSystemDefaultTextModel,
   getDefaultVideoModel as getSystemDefaultVideoModel,
   buildCreativeUserParams,
   hasRuntimeParameterSchema,
+  isCreativeManagedModel,
   type CreativeUserParams,
 } from '../constants/model-config';
 import { getEffectiveVideoDefaultParams } from '../services/video-binding-utils';
@@ -141,6 +141,8 @@ export interface ParsedGenerationParams {
   extraParams?: Record<string, string>;
   /** new-api runtime parameterSchema 对应的类型化用户参数 */
   userParams?: CreativeUserParams;
+  /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
+  creativeManaged?: boolean;
   /** 原始解析结果 */
   parseResult: ParseResult;
   /** 是否有额外内容（除模型/参数/数量外） */
@@ -381,10 +383,11 @@ export function parseAIInput(
   let duration: string | undefined;
   const modelConfig = getModelConfig(modelId);
   const schemaBackedModel = modelConfig
-    ? hasRuntimeParameterSchema(modelConfig)
-    : false;
+    ? isCreativeManagedModel(modelConfig, options?.modelRef || null) ||
+      hasRuntimeParameterSchema(modelConfig)
+    : isCreativeManagedModel(modelId, options?.modelRef || null);
   const userParams = schemaBackedModel
-    ? buildCreativeUserParams(modelConfig || modelId, options?.params)
+    ? buildCreativeUserParams(modelConfig || modelId, options?.params) || {}
     : undefined;
 
   // 1. 优先从 options.params 中读取（新逻辑，支持多参数对象）
@@ -507,6 +510,7 @@ export function parseAIInput(
     duration,
     extraParams,
     userParams,
+    creativeManaged: schemaBackedModel ? true : undefined,
     parseResult,
     hasExtraContent,
     selection,

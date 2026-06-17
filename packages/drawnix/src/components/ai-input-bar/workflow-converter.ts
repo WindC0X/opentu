@@ -249,6 +249,7 @@ export function convertDirectGenerationToWorkflow(
     duration,
     extraParams,
     userParams,
+    creativeManaged,
     selection,
     defaultModels,
     defaultModelRefs,
@@ -281,17 +282,20 @@ export function convertDirectGenerationToWorkflow(
     if (generationType === 'image') {
       // 构建图片生成参数，size 为 undefined 时不传（让模型自动决定）
       // 注意：batchId 等参数直接放在 args 中，确保传输时不会丢失
-      const imageArgs: Record<string, unknown> = withKnowledgeContextRefs({
-        prompt,
-        model: modelId,
-        modelRef,
-        workflowId,
-        // 批量生成参数直接放在 args 中
-        batchId,
-        batchIndex: i + 1,
-        batchTotal: count,
-        globalIndex: i + 1,
-      }, normalizedKnowledgeContextRefs);
+      const imageArgs: Record<string, unknown> = withKnowledgeContextRefs(
+        {
+          prompt,
+          model: modelId,
+          modelRef,
+          workflowId,
+          // 批量生成参数直接放在 args 中
+          batchId,
+          batchIndex: i + 1,
+          batchTotal: count,
+          globalIndex: i + 1,
+        },
+        normalizedKnowledgeContextRefs
+      );
       if (size) {
         imageArgs.size = size;
       }
@@ -309,8 +313,9 @@ export function convertDirectGenerationToWorkflow(
         }
       }
       // 透传额外参数（如 seedream_quality）
-      if (userParams) {
-        imageArgs.userParams = userParams;
+      if (creativeManaged || userParams) {
+        imageArgs.userParams = userParams || {};
+        imageArgs.creativeManaged = true;
       } else if (extraParams) {
         imageArgs.params = extraParams;
       }
@@ -326,18 +331,21 @@ export function convertDirectGenerationToWorkflow(
     } else if (generationType === 'video') {
       // 构建视频生成参数，size 为 undefined 时不传（让模型自动决定）
       // 注意：batchId 等参数直接放在 args 中，确保传输时不会丢失
-      const videoArgs: Record<string, unknown> = withKnowledgeContextRefs({
-        prompt,
-        model: modelId,
-        modelRef,
-        seconds: duration || '5',
-        workflowId,
-        // 批量生成参数直接放在 args 中
-        batchId,
-        batchIndex: i + 1,
-        batchTotal: count,
-        globalIndex: i + 1,
-      }, normalizedKnowledgeContextRefs);
+      const videoArgs: Record<string, unknown> = withKnowledgeContextRefs(
+        {
+          prompt,
+          model: modelId,
+          modelRef,
+          seconds: duration || '5',
+          workflowId,
+          // 批量生成参数直接放在 args 中
+          batchId,
+          batchIndex: i + 1,
+          batchTotal: count,
+          globalIndex: i + 1,
+        },
+        normalizedKnowledgeContextRefs
+      );
       if (size) {
         videoArgs.size = size;
       }
@@ -371,17 +379,20 @@ export function convertDirectGenerationToWorkflow(
           ? extraParams.sunoAction
           : 'music';
       const isLyricsAction = sunoAction === 'lyrics';
-      const audioArgs: Record<string, unknown> = withKnowledgeContextRefs({
-        prompt,
-        model: modelId,
-        modelRef,
-        sunoAction,
-        workflowId,
-        batchId,
-        batchIndex: i + 1,
-        batchTotal: count,
-        globalIndex: i + 1,
-      }, normalizedKnowledgeContextRefs);
+      const audioArgs: Record<string, unknown> = withKnowledgeContextRefs(
+        {
+          prompt,
+          model: modelId,
+          modelRef,
+          sunoAction,
+          workflowId,
+          batchId,
+          batchIndex: i + 1,
+          batchTotal: count,
+          globalIndex: i + 1,
+        },
+        normalizedKnowledgeContextRefs
+      );
 
       // 从 Markdown 卡片内容解析 title/tags/lyrics（仅 music 动作且用户未手动设置时）
       if (!isLyricsAction && prompt) {
@@ -438,17 +449,20 @@ export function convertDirectGenerationToWorkflow(
         status: 'pending',
       });
     } else {
-      const textArgs: Record<string, unknown> = withKnowledgeContextRefs({
-        prompt,
-        model: modelId,
-        modelRef,
-        rawInput,
-        workflowId,
-        batchId,
-        batchIndex: i + 1,
-        batchTotal: count,
-        globalIndex: i + 1,
-      }, normalizedKnowledgeContextRefs);
+      const textArgs: Record<string, unknown> = withKnowledgeContextRefs(
+        {
+          prompt,
+          model: modelId,
+          modelRef,
+          rawInput,
+          workflowId,
+          batchId,
+          batchIndex: i + 1,
+          batchTotal: count,
+          globalIndex: i + 1,
+        },
+        normalizedKnowledgeContextRefs
+      );
       if (referenceImages.length > 0) {
         textArgs.referenceImages = referenceImages;
       }
@@ -513,6 +527,8 @@ export function convertDirectGenerationToWorkflow(
       duration,
       referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
       selection,
+      userParams: creativeManaged || userParams ? userParams || {} : undefined,
+      creativeManaged: creativeManaged ? true : undefined,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs
@@ -545,6 +561,8 @@ export function convertAgentFlowToWorkflow(
     size,
     duration,
     extraParams,
+    userParams,
+    creativeManaged,
     selection,
     defaultModels,
     defaultModelRefs,
@@ -659,6 +677,8 @@ export function convertAgentFlowToWorkflow(
       defaultModelRefs,
       referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
       selection,
+      userParams: creativeManaged || userParams ? userParams || {} : undefined,
+      creativeManaged: creativeManaged ? true : undefined,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs
@@ -765,6 +785,8 @@ export async function convertSkillFlowToWorkflow(
     count,
     size,
     duration,
+    userParams,
+    creativeManaged,
     selection,
     defaultModels,
     defaultModelRefs,
@@ -1072,6 +1094,8 @@ export async function convertSkillFlowToWorkflow(
       duration,
       referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
       selection,
+      userParams: creativeManaged || userParams ? userParams || {} : undefined,
+      creativeManaged: creativeManaged ? true : undefined,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs

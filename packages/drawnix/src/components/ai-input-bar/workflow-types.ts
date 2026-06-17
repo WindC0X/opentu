@@ -5,6 +5,7 @@ import type {
 } from '../../utils/ai-input-parser';
 import type { ModelRef } from '../../utils/settings-types';
 import type { KnowledgeContextRef } from '../../types/task.types';
+import type { CreativeUserParams } from '../../constants/model-config';
 
 /**
  * 工作流步骤执行选项（批量参数等）
@@ -96,6 +97,10 @@ export interface WorkflowDefinition {
     referenceImages?: string[];
     /** 选中元素的分类信息 */
     selection: SelectionInfo;
+    /** new-api runtime parameterSchema 对应的类型化用户参数 */
+    userParams?: CreativeUserParams;
+    /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
+    creativeManaged?: boolean;
     /** 本次生成使用的知识库笔记轻量引用 */
     knowledgeContextRefs?: KnowledgeContextRef[];
     /** 解析方式标记（用于调试和数据分析） */

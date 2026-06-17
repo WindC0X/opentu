@@ -20,6 +20,7 @@ import { workflowStorageReader } from './workflow-storage-reader';
 import { WorkflowEngine as MainThreadWorkflowEngine } from './workflow-engine';
 import { executorFactory } from './media-executor';
 import { geminiSettings, type ModelRef } from '../utils/settings-manager';
+import type { CreativeUserParams } from '../constants/model-config';
 import type {
   Workflow as EngineWorkflow,
   WorkflowEvent as EngineWorkflowEvent,
@@ -74,6 +75,8 @@ export interface WorkflowDefinition {
       count?: number;
       size?: string;
       duration?: string;
+      userParams?: CreativeUserParams;
+      creativeManaged?: boolean;
     };
     referenceImages?: string[];
   };
@@ -461,8 +464,9 @@ class WorkflowSubmissionService {
         input_video:
           extraParams?.input_video || parsedInput.selection.videos[0],
       };
-    } else if (parsedInput.userParams) {
-      args.userParams = parsedInput.userParams;
+    } else if (parsedInput.creativeManaged || parsedInput.userParams) {
+      args.userParams = parsedInput.userParams || {};
+      args.creativeManaged = true;
     } else if (extraParams) {
       args.params = extraParams;
     }
@@ -499,6 +503,11 @@ class WorkflowSubmissionService {
           count: parsedInput.count,
           size: parsedInput.size,
           duration: parsedInput.duration,
+          userParams:
+            parsedInput.creativeManaged || parsedInput.userParams
+              ? parsedInput.userParams || {}
+              : undefined,
+          creativeManaged: parsedInput.creativeManaged ? true : undefined,
         },
         referenceImages,
       },

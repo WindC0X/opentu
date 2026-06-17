@@ -21,6 +21,13 @@ import {
 import {
   getDefaultImageModel,
   IMAGE_PARAMS,
+  getCompatibleParams,
+  hasCreativeUserParams,
+  hasRuntimeParameterSchema,
+  isCreativeManagedImageTask,
+  isCreativeManagedModel,
+  sanitizeCreativeUserParamsForModel,
+  type CreativeUserParams,
 } from '../../constants/model-config';
 import { geminiSettings, type ModelRef } from '../../utils/settings-manager';
 import { getFallbackDefaultModelId } from '../../utils/runtime-model-discovery';
@@ -116,6 +123,10 @@ export interface ImageGenerationParams {
   globalIndex?: number;
   /** 额外参数（如 seedream_quality） */
   params?: Record<string, unknown>;
+  /** new-api runtime parameterSchema 对应的类型化用户参数 */
+  userParams?: CreativeUserParams;
+  /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
+  creativeManaged?: boolean;
   /** 自动插入的目标 Frame */
   targetFrameId?: string;
   /** 自动插入的目标 Frame 尺寸 */
@@ -149,6 +160,67 @@ function shouldUseEditSchema(params: ImageGenerationParams): boolean {
     params.generationMode === 'image_to_image' ||
     !!params.maskImage
   );
+}
+
+function isSchemaBackedCreativeImageParams(
+  params: ImageGenerationParams,
+  effectiveModel?: string,
+  effectiveModelRef?: ModelRef | null
+): boolean {
+  return (
+    isCreativeManagedImageTask(params) ||
+    isCreativeManagedModel(
+      effectiveModel || params.model || null,
+      effectiveModelRef || params.modelRef || null
+    ) ||
+    hasCreativeUserParams(params.userParams) ||
+    (!!(effectiveModel || params.model) &&
+      hasRuntimeParameterSchema(effectiveModel || params.model || ''))
+  );
+}
+
+function pickManagedCreativeRawParams(
+  params: ImageGenerationParams,
+  effectiveModel: string
+): Record<string, unknown> | undefined {
+  const schemaParamIds = new Set(
+    getCompatibleParams(effectiveModel)
+      .filter((param) => param.runtimeSchema)
+      .map((param) => param.id)
+  );
+  const rawParams =
+    params.params && typeof params.params === 'object'
+      ? params.params
+      : undefined;
+  if (!rawParams) {
+    return undefined;
+  }
+  const picked: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(rawParams)) {
+    if (schemaParamIds.has(key)) {
+      picked[key] = value;
+    }
+  }
+  return picked;
+}
+
+function sanitizeManagedCreativeUserParams(
+  params: ImageGenerationParams,
+  effectiveModel: string
+): CreativeUserParams {
+  if (params.userParams) {
+    return sanitizeCreativeUserParamsForModel(
+      effectiveModel,
+      params.userParams
+    );
+  }
+
+  const pickedParams = pickManagedCreativeRawParams(params, effectiveModel);
+  if (!pickedParams) {
+    return {};
+  }
+
+  return sanitizeCreativeUserParamsForModel(effectiveModel, pickedParams);
 }
 
 function buildAdapterParams(
@@ -219,6 +291,23 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
       };
     }
 
+    const schemaBacked = isSchemaBackedCreativeImageParams(
+      params,
+      requestedModel,
+      requestedModelRef
+    );
+    const userParams = schemaBacked
+      ? sanitizeManagedCreativeUserParams(params, requestedModel)
+      : undefined;
+    if (schemaBacked && !adapter.supportsCreativeUserParams) {
+      return {
+        success: false,
+        error:
+          'schema-backed Creative image requests require a managed userParams adapter',
+        type: 'error',
+      };
+    }
+
     const result = await adapter.generateImage(
       getAdapterContextFromSettings(
         'image',
@@ -231,7 +320,7 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
         prompt,
         model: requestedModel,
         modelRef: requestedModelRef,
-        size: size || '1x1',
+        size: schemaBacked ? undefined : size || '1x1',
         generationMode:
           params.generationMode ||
           (isGPTImageEditRequestSchema(preferredRequestSchema)
@@ -242,11 +331,12 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
             ? referenceImages
             : undefined,
         maskImage: params.maskImage,
-        inputFidelity: params.inputFidelity,
-        background: params.background,
-        outputFormat: params.outputFormat,
-        outputCompression: params.outputCompression,
-        params: buildAdapterParams(params),
+        inputFidelity: schemaBacked ? undefined : params.inputFidelity,
+        background: schemaBacked ? undefined : params.background,
+        outputFormat: schemaBacked ? undefined : params.outputFormat,
+        outputCompression: schemaBacked ? undefined : params.outputCompression,
+        params: schemaBacked ? undefined : buildAdapterParams(params),
+        userParams,
       }
     );
 
@@ -283,7 +373,6 @@ function getImageQueueConfig(params: ImageGenerationParams) {
     getDefaultModel: getCurrentImageModel,
     logPrefix: 'ImageGenerationTool',
     buildTaskPayload: () => {
-      const adapterParams = buildQueueAdapterParams(params);
       const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
         'image',
         params.model || null,
@@ -292,9 +381,20 @@ function getImageQueueConfig(params: ImageGenerationParams) {
       const model =
         embeddedModel?.modelId || params.model || getCurrentImageModel();
       const modelRef = embeddedModel?.modelRef || params.modelRef || null;
+      const schemaBacked = isSchemaBackedCreativeImageParams(
+        params,
+        model,
+        modelRef
+      );
+      const adapterParams = schemaBacked
+        ? undefined
+        : buildQueueAdapterParams(params);
+      const userParams = schemaBacked
+        ? sanitizeManagedCreativeUserParams(params, model)
+        : undefined;
       return {
         prompt: params.prompt,
-        size: params.size || '1x1',
+        size: schemaBacked ? undefined : params.size || '1x1',
         uploadedImages:
           uploadedImages && uploadedImages.length > 0
             ? uploadedImages
@@ -305,10 +405,10 @@ function getImageQueueConfig(params: ImageGenerationParams) {
             : undefined,
         generationMode: params.generationMode,
         maskImage: params.maskImage,
-        inputFidelity: params.inputFidelity,
-        background: params.background,
-        outputFormat: params.outputFormat,
-        outputCompression: params.outputCompression,
+        inputFidelity: schemaBacked ? undefined : params.inputFidelity,
+        background: schemaBacked ? undefined : params.background,
+        outputFormat: schemaBacked ? undefined : params.outputFormat,
+        outputCompression: schemaBacked ? undefined : params.outputCompression,
         model,
         modelRef,
         targetFrameId: params.targetFrameId,
@@ -323,6 +423,7 @@ function getImageQueueConfig(params: ImageGenerationParams) {
         comicCreatorRecordId: params.comicCreatorRecordId,
         comicCreatorPageId: params.comicCreatorPageId,
         ...(adapterParams ? { params: adapterParams } : {}),
+        ...(schemaBacked ? { userParams, creativeManaged: true } : {}),
       };
     },
     buildResultData: () => ({

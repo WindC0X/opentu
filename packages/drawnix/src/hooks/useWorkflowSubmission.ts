@@ -243,6 +243,8 @@ export function useWorkflowSubmission(
                 count: recoveredWorkflow.metadata?.count,
                 size: recoveredWorkflow.metadata?.size,
                 duration: recoveredWorkflow.metadata?.duration,
+                userParams: recoveredWorkflow.metadata?.userParams,
+                creativeManaged: recoveredWorkflow.metadata?.creativeManaged,
               },
               selection: { texts: [], images: [], videos: [], graphics: [] },
               finalPrompt: recoveredWorkflow.metadata?.prompt || '',
@@ -508,6 +510,12 @@ export function useWorkflowSubmission(
           count: parsedInput.count,
           size: parsedInput.size,
           duration: parsedInput.duration,
+          custom: parsedInput.extraParams,
+          userParams:
+            parsedInput.creativeManaged || parsedInput.userParams
+              ? parsedInput.userParams || {}
+              : undefined,
+          creativeManaged: parsedInput.creativeManaged ? true : undefined,
         },
         selection: parsedInput.selection || { texts: [], images: [], videos: [], graphics: [] },
         finalPrompt: parsedInput.prompt,
@@ -573,6 +581,9 @@ export function useWorkflowSubmission(
       count: workflowMessageData.count || 1,
       size: retryContext.aiContext.params.size,
       duration: retryContext.aiContext.params.duration,
+      extraParams: retryContext.aiContext.params.custom,
+      userParams: retryContext.aiContext.params.userParams,
+      creativeManaged: retryContext.aiContext.params.creativeManaged,
       scenario:
         retryContext.aiContext.model.type === 'agent'
           ? 'agent_flow'

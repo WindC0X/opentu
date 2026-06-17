@@ -9,6 +9,49 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../../constants/model-config', () => ({
   getDefaultImageModel: () => 'gpt-image-2',
+  setRuntimeModelConfigs: vi.fn(),
+  getStaticModelConfig: vi.fn(() => undefined),
+  getAllModels: vi.fn(() => []),
+  getAllModelConfigs: vi.fn(() => []),
+  getCompatibleParams: (model: unknown) =>
+    model === 'mock:gpt-image-2:preview'
+      ? [
+          { id: 'size', runtimeSchema: true },
+          { id: 'seed', runtimeSchema: true },
+          { id: 'oversea', runtimeSchema: true },
+        ]
+      : [],
+  hasCreativeUserParams: (userParams?: Record<string, unknown> | null) =>
+    !!userParams && Object.keys(userParams).length > 0,
+  hasRuntimeParameterSchema: (model: unknown) =>
+    model === 'mock:gpt-image-2:preview',
+  isCreativeManagedImageTask: (value?: { creativeManaged?: unknown } | null) =>
+    value?.creativeManaged === true,
+  isCreativeManagedModel: (
+    model: unknown,
+    modelRef?: { profileId?: string } | null
+  ) =>
+    model === 'mock:gpt-image-2:preview' ||
+    modelRef?.profileId === 'new-api-creative',
+  sanitizeCreativeUserParamsForModel: (
+    _model: unknown,
+    rawUserParams?: Record<string, unknown> | null
+  ) => {
+    const params: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(rawUserParams || {})) {
+      if (key === 'size' || key === 'seed' || key === 'oversea') {
+        if (
+          typeof value === 'string' ||
+          typeof value === 'number' ||
+          typeof value === 'boolean'
+        ) {
+          params[key] = value;
+        }
+      }
+    }
+    return params;
+  },
+  getFallbackDefaultModelId: () => 'gpt-image-2',
   IMAGE_PARAMS: [
     {
       id: 'size',
@@ -22,9 +65,29 @@ vi.mock('../../../constants/model-config', () => ({
 }));
 
 vi.mock('../../../utils/settings-manager', () => ({
+  LEGACY_DEFAULT_PROVIDER_PROFILE_ID: 'legacy-default',
   geminiSettings: {
     get: () => ({}),
   },
+  providerCatalogsSettings: {
+    get: () => [],
+    addListener: () => vi.fn(),
+  },
+  invocationPresetsSettings: {
+    get: () => [],
+    addListener: () => vi.fn(),
+  },
+  settingsManager: {
+    addListener: () => vi.fn(),
+  },
+}));
+
+vi.mock('../../../utils/runtime-model-discovery', () => ({
+  getFallbackDefaultModelId: () => 'gpt-image-2',
+}));
+
+vi.mock('../../../services/creative-embedded-model-guard', () => ({
+  resolveCreativeEmbeddedModelForGeneration: () => null,
 }));
 
 vi.mock('../../../services/media-api/utils', () => ({
@@ -212,6 +275,82 @@ describe('image-generation MCP tool', () => {
     });
   });
 
+  it('routes async schema-backed Creative userParams only through managed adapters', async () => {
+    mocks.resolveAdapterForInvocation.mockReturnValue({
+      id: 'new-api-creative-image-adapter',
+      kind: 'image',
+      supportsCreativeUserParams: true,
+      generateImage: mocks.generateImage,
+    });
+    mocks.generateImage.mockResolvedValue({
+      url: 'https://example.com/output.webp',
+      format: 'webp',
+    });
+
+    const result = await imageGenerationTool.execute(
+      {
+        prompt: 'Create a managed image',
+        model: 'mock:gpt-image-2:preview',
+        size: '16x9',
+        inputFidelity: 'high',
+        background: 'transparent',
+        outputFormat: 'png',
+        outputCompression: 80,
+        params: {
+          callback: 'https://evil.example/hook',
+        },
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+        creativeManaged: true,
+      },
+      { mode: 'async' }
+    );
+
+    expect(result.success).toBe(true);
+    const callArgs = mocks.generateImage.mock.calls[0]?.[1];
+    expect(callArgs).toMatchObject({
+      model: 'mock:gpt-image-2:preview',
+      userParams: {
+        size: '1024x1024',
+        seed: 42,
+        oversea: true,
+      },
+    });
+    expect(callArgs.params).toBeUndefined();
+    expect(callArgs.size).toBeUndefined();
+    expect(callArgs.inputFidelity).toBeUndefined();
+    expect(callArgs.background).toBeUndefined();
+    expect(callArgs.outputFormat).toBeUndefined();
+    expect(callArgs.outputCompression).toBeUndefined();
+  });
+
+  it('fails async schema-backed Creative requests before unsupported adapters run', async () => {
+    mocks.resolveAdapterForInvocation.mockReturnValue({
+      id: 'gpt-image-adapter',
+      kind: 'image',
+      generateImage: mocks.generateImage,
+    });
+
+    const result = await imageGenerationTool.execute(
+      {
+        prompt: 'Create a managed image',
+        model: 'mock:gpt-image-2:preview',
+        userParams: {
+          size: '1024x1024',
+        },
+        creativeManaged: true,
+      },
+      { mode: 'async' }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('managed userParams adapter');
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
   it('does not pass top-level count as adapter n in queue task params', async () => {
     mocks.createQueueTask.mockReturnValue({
       success: true,
@@ -241,6 +380,94 @@ describe('image-generation MCP tool', () => {
     });
     expect(queueConfig.buildTaskPayload().params).not.toHaveProperty('n');
     expect(queueConfig.buildTaskPayload().params).not.toHaveProperty('count');
+  });
+
+  it('migrates direct-tool schema UI params into sanitized userParams for managed queue payloads', async () => {
+    mocks.createQueueTask.mockReturnValue({
+      success: true,
+      type: 'image',
+      taskId: 'task-1',
+    });
+
+    await imageGenerationTool.execute(
+      {
+        prompt: 'Queue managed image from direct tool params',
+        model: 'mock:gpt-image-2:preview',
+        size: '16x9',
+        quality: 'high',
+        params: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+          callback: 'https://evil.example/hook',
+          quality: 'high',
+        },
+      },
+      { mode: 'queue' }
+    );
+
+    const queueConfig = mocks.createQueueTask.mock.calls[0]?.[2];
+    const payload = queueConfig.buildTaskPayload();
+
+    expect(payload).toMatchObject({
+      prompt: 'Queue managed image from direct tool params',
+      model: 'mock:gpt-image-2:preview',
+      userParams: {
+        size: '1024x1024',
+        seed: 42,
+        oversea: true,
+      },
+      creativeManaged: true,
+    });
+    expect(payload.params).toBeUndefined();
+    expect(payload.size).toBeUndefined();
+    expect(payload.quality).toBeUndefined();
+  });
+
+  it('preserves schema-backed userParams and creativeManaged in queue task payload', async () => {
+    mocks.createQueueTask.mockReturnValue({
+      success: true,
+      type: 'image',
+      taskId: 'task-1',
+    });
+
+    await imageGenerationTool.execute(
+      {
+        prompt: 'Queue managed image',
+        model: 'mock:gpt-image-2:preview',
+        size: '16x9',
+        resolution: '4k',
+        quality: 'high',
+        params: {
+          webhook: 'https://evil.example/hook',
+        },
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+        creativeManaged: true,
+      },
+      { mode: 'queue' }
+    );
+
+    const queueConfig = mocks.createQueueTask.mock.calls[0]?.[2];
+    const payload = queueConfig.buildTaskPayload();
+
+    expect(payload).toMatchObject({
+      prompt: 'Queue managed image',
+      model: 'mock:gpt-image-2:preview',
+      userParams: {
+        size: '1024x1024',
+        seed: 42,
+        oversea: true,
+      },
+      creativeManaged: true,
+    });
+    expect(payload.params).toBeUndefined();
+    expect(payload.size).toBeUndefined();
+    expect(payload.resolution).toBeUndefined();
+    expect(payload.quality).toBeUndefined();
   });
 
   it('passes PPT slide replacement metadata into queue task params', async () => {
@@ -274,5 +501,49 @@ describe('image-generation MCP tool', () => {
       pptSlideImage: true,
       pptReplaceElementId: 'old-image',
     });
+  });
+
+  it('passes schema-backed Creative userParams into queue task params without legacy params', async () => {
+    mocks.createQueueTask.mockReturnValue({
+      success: true,
+      type: 'image',
+      taskId: 'task-1',
+    });
+
+    await imageGenerationTool.execute(
+      {
+        prompt: 'Queue a managed Creative image',
+        model: 'mock:gpt-image-2:preview',
+        size: '16x9',
+        quality: 'high',
+        params: {
+          legacy: 'must-not-leak',
+        },
+        userParams: {
+          size: '1024x1024',
+          seed: 42,
+          oversea: true,
+        },
+        creativeManaged: true,
+      },
+      { mode: 'queue' }
+    );
+
+    const queueConfig = mocks.createQueueTask.mock.calls[0]?.[2];
+    const payload = queueConfig.buildTaskPayload();
+
+    expect(payload).toMatchObject({
+      prompt: 'Queue a managed Creative image',
+      model: 'mock:gpt-image-2:preview',
+      userParams: {
+        size: '1024x1024',
+        seed: 42,
+        oversea: true,
+      },
+      creativeManaged: true,
+    });
+    expect(payload.params).toBeUndefined();
+    expect(payload.size).toBeUndefined();
+    expect(payload.quality).toBeUndefined();
   });
 });

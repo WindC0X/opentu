@@ -6,6 +6,7 @@
 
 import type { ModelRef } from '../utils/settings-manager';
 import type { KnowledgeContextRef } from './task.types';
+import type { CreativeUserParams } from '../constants/model-config';
 
 // ============================================================================
 // Enums
@@ -117,7 +118,11 @@ export interface WorkflowRetryContext {
 }
 
 /** 后处理状态（图片拆分、插入画布等） */
-export type PostProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type PostProcessingStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed';
 
 /** 工作流数据接口（用于消息中嵌入工作流） */
 export interface WorkflowMessageData {
@@ -272,6 +277,10 @@ export interface AIInputContext {
     mv?: string;
     /** 其他自定义参数 */
     custom?: Record<string, string>;
+    /** new-api runtime parameterSchema 对应的类型化用户参数 */
+    userParams?: CreativeUserParams;
+    /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
+    creativeManaged?: boolean;
   };
 
   /** 选中的画布元素 */
@@ -327,9 +336,11 @@ export interface ChatDrawerRef {
   /** 获取当前打开状态 */
   isOpen: () => boolean;
   /** 从指定步骤重试工作流 */
-  retryWorkflowFromStep: (workflow: WorkflowMessageData, stepIndex: number) => Promise<void>;
+  retryWorkflowFromStep: (
+    workflow: WorkflowMessageData,
+    stepIndex: number
+  ) => Promise<void>;
 }
-
 
 /** SessionList 组件 Props */
 export interface SessionListProps {
