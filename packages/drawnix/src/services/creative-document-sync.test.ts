@@ -4,15 +4,44 @@ import {
   CreativeDocumentCloudAdapter,
   CreativeDocumentCloudSyncService,
   CREATIVE_DOCUMENT_CONFLICT_STORAGE_KEY,
+  CREATIVE_DOCUMENT_REVISION_STORAGE_KEY,
   CreativeDocumentConflictError,
+  initializeCreativeDocumentCloudSync,
+  resetCreativeDocumentCloudSyncForTests,
   type CreativeDocumentCloudAdapterLike,
   type CreativeDocumentSnapshot,
+  type CreativeWorkspaceCloudRepository,
 } from './creative-document-sync';
 import {
   clearCreativeSessionAuthMaterial,
+  resetCreativeAssetSyncConfigForTests,
+  setCreativeAssetSyncConfig,
   setCreativeSessionAuthMaterial,
 } from './creative-mode';
+import { workspaceService } from './workspace-service';
+import { workspaceStorageService } from './workspace-storage-service';
 import type { Board } from '../types/workspace.types';
+
+const githubSyncMocks = vi.hoisted(() => ({
+  markDirty: vi.fn(),
+  recordLocalDeletion: vi.fn(async () => undefined),
+  syncBoardDeletion: vi.fn(async () => ({ success: true })),
+  hasToken: vi.fn(() => false),
+}));
+
+vi.mock('./github-sync/sync-engine', () => ({
+  syncEngine: {
+    markDirty: githubSyncMocks.markDirty,
+    recordLocalDeletion: githubSyncMocks.recordLocalDeletion,
+    syncBoardDeletion: githubSyncMocks.syncBoardDeletion,
+  },
+}));
+
+vi.mock('./github-sync/token-service', () => ({
+  tokenService: {
+    hasToken: githubSyncMocks.hasToken,
+  },
+}));
 
 describe('CreativeDocumentCloudAdapter API contract', () => {
   async function expectSecretValueRejected(
@@ -93,7 +122,10 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
           success: true,
           data: {
             document: {
-              id: init?.method === 'POST' ? 'created-doc' : String(input).split('/').pop(),
+              id:
+                init?.method === 'POST'
+                  ? 'created-doc'
+                  : String(input).split('/').pop(),
               title: 'Board',
               snapshot: { elements: [] },
               revision: 3,
@@ -106,7 +138,9 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
       )) as typeof fetch;
     const adapter = new CreativeDocumentCloudAdapter(fetcher, '/documents');
 
-    await expect(adapter.create({ snapshot: { elements: [] } })).resolves.toEqual({
+    await expect(
+      adapter.create({ snapshot: { elements: [] } })
+    ).resolves.toEqual({
       id: 'created-doc',
       title: 'Board',
       snapshot: { elements: [] },
@@ -261,8 +295,7 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
             {
               id: 'element-1',
               type: 'text',
-              text:
-                'The draft accidentally includes sk-test-1234567890abcdefghijklmnopqrstuvwxyz.',
+              text: 'The draft accidentally includes sk-test-1234567890abcdefghijklmnopqrstuvwxyz.',
             },
           ],
         },
@@ -282,8 +315,7 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
         {
           title: 'Safe Board',
           snapshot: {
-            note:
-              'This note includes Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdef1234567890.signature',
+            note: 'This note includes Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdef1234567890.signature',
           },
         },
         7
@@ -342,7 +374,14 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
 
 describe('creative workspace document cloud sync', () => {
   afterEach(() => {
+    resetCreativeDocumentCloudSyncForTests();
+    resetCreativeAssetSyncConfigForTests();
     vi.restoreAllMocks();
+    githubSyncMocks.markDirty.mockClear();
+    githubSyncMocks.recordLocalDeletion.mockClear();
+    githubSyncMocks.syncBoardDeletion.mockClear();
+    githubSyncMocks.hasToken.mockClear();
+    githubSyncMocks.hasToken.mockReturnValue(false);
   });
 
   function createMemoryStorage(initial: Record<string, string> = {}): Storage {
@@ -408,7 +447,7 @@ describe('creative workspace document cloud sync', () => {
         ): Promise<CreativeDocumentSnapshot<TSnapshot>> => ({
           id: documentId,
           title: 'Remote Board',
-          snapshot: ({ elements: [] } as unknown) as TSnapshot,
+          snapshot: { elements: [] } as unknown as TSnapshot,
           revision: 5,
         })
       ),
@@ -427,6 +466,81 @@ describe('creative workspace document cloud sync', () => {
       get: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;
       delete: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  type WorkspaceServiceTestHarness = {
+    initialized: boolean;
+    initializationPromise: Promise<void> | null;
+    folders: Map<string, unknown>;
+    boardMetadata: Map<string, unknown>;
+    loadedBoards: Map<string, Board>;
+    boards: Map<string, Board>;
+    boardLocalMutationEpochs: Map<string, number>;
+    activeBoardLocalMutations: Map<string, number>;
+    state: {
+      currentBoardId: string | null;
+      expandedFolderIds: string[];
+      sidebarWidth: number;
+      sidebarCollapsed: boolean;
+    };
+  };
+
+  function cloneBoard(board: Board): Board {
+    return JSON.parse(JSON.stringify(board)) as Board;
+  }
+
+  function installWorkspaceServiceRaceHarness(
+    initialBoards: Board[]
+  ): () => void {
+    const harness = workspaceService as unknown as WorkspaceServiceTestHarness;
+    const previous = {
+      initialized: harness.initialized,
+      initializationPromise: harness.initializationPromise,
+      folders: harness.folders,
+      boardMetadata: harness.boardMetadata,
+      loadedBoards: harness.loadedBoards,
+      boards: harness.boards,
+      boardLocalMutationEpochs: harness.boardLocalMutationEpochs,
+      activeBoardLocalMutations: harness.activeBoardLocalMutations,
+      state: harness.state,
+    };
+
+    harness.initialized = true;
+    harness.initializationPromise = null;
+    harness.folders = new Map();
+    harness.loadedBoards = new Map(
+      initialBoards.map((board) => [board.id, cloneBoard(board)])
+    );
+    harness.boards = new Map(
+      initialBoards.map((board) => [board.id, cloneBoard(board)])
+    );
+    harness.boardMetadata = new Map(
+      initialBoards.map((board) => {
+        const { elements: _elements, ...metadata } = cloneBoard(board);
+        return [board.id, metadata];
+      })
+    );
+    harness.boardLocalMutationEpochs = new Map();
+    harness.activeBoardLocalMutations = new Map();
+    harness.state = {
+      currentBoardId: null,
+      expandedFolderIds: [],
+      sidebarWidth: 280,
+      sidebarCollapsed: false,
+    };
+
+    return () => {
+      harness.initialized = previous.initialized;
+      harness.initializationPromise = previous.initializationPromise;
+      harness.folders = previous.folders;
+      harness.boardMetadata = previous.boardMetadata;
+      harness.loadedBoards = previous.loadedBoards;
+      harness.boards = previous.boards;
+      harness.boardLocalMutationEpochs = previous.boardLocalMutationEpochs;
+      harness.activeBoardLocalMutations =
+        previous.activeBoardLocalMutations;
+      harness.state = previous.state;
     };
   }
 
@@ -483,9 +597,9 @@ describe('creative workspace document cloud sync', () => {
     );
     expect(adapter.put).not.toHaveBeenCalled();
     expect(service.getRevision('board-1')).toBe(1);
-    expect(JSON.stringify(storage.getItem('creative-document-cloud-revisions:v1'))).toContain(
-      'board-1'
-    );
+    expect(
+      JSON.stringify(storage.getItem('creative-document-cloud-revisions:v1'))
+    ).toContain('board-1');
   });
 
   it('puts known boards with the stored base revision', async () => {
@@ -516,7 +630,9 @@ describe('creative workspace document cloud sync', () => {
   });
 
   it('freezes duplicate creates with a safe conflict summary instead of overwriting unknown remote state', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
     const adapter = createAdapter();
     adapter.create.mockRejectedValueOnce(
       new CreativeDocumentConflictError({ message: 'duplicate document' })
@@ -569,7 +685,9 @@ describe('creative workspace document cloud sync', () => {
     expect(JSON.stringify(service.getStatus())).not.toMatch(
       /Remote Secret Title|server-private-content|remote-secret|apiKey/i
     );
-    expect(storage.getItem(CREATIVE_DOCUMENT_CONFLICT_STORAGE_KEY) || '').not.toMatch(
+    expect(
+      storage.getItem(CREATIVE_DOCUMENT_CONFLICT_STORAGE_KEY) || ''
+    ).not.toMatch(
       /Remote Secret Title|server-private-content|remote-secret|apiKey/i
     );
     expect(JSON.stringify(warnSpy.mock.calls)).not.toMatch(
@@ -593,7 +711,9 @@ describe('creative workspace document cloud sync', () => {
     const service = new CreativeDocumentCloudSyncService({
       adapter,
       storage: createMemoryStorage({
-        'creative-document-cloud-revisions:v1': JSON.stringify({ 'board-1': 8 }),
+        'creative-document-cloud-revisions:v1': JSON.stringify({
+          'board-1': 8,
+        }),
       }),
       debounceMs: 0,
     });
@@ -673,6 +793,30 @@ describe('creative workspace document cloud sync', () => {
     expect(adapter.delete).toHaveBeenCalledWith('board-1');
     expect(service.getRevision('board-1')).toBeUndefined();
     expect(service.getPendingMutationCount('board-1')).toBe(0);
+  });
+
+  it('clears a queued delete revision immediately before the remote delete flushes', () => {
+    const adapter = createAdapter();
+    const storage = createMemoryStorage({
+      [CREATIVE_DOCUMENT_REVISION_STORAGE_KEY]: JSON.stringify({ 'board-1': 8 }),
+    });
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage,
+      debounceMs: 10_000,
+    });
+
+    service.queueDelete('board-1');
+
+    expect(adapter.delete).not.toHaveBeenCalled();
+    expect(service.getRevision('board-1')).toBeUndefined();
+    expect(service.getStatus()).toMatchObject({
+      pendingDeleteCount: 1,
+      revisionsByBoardId: {},
+    });
+    expect(storage.getItem(CREATIVE_DOCUMENT_REVISION_STORAGE_KEY) || '').not.toContain(
+      'board-1'
+    );
   });
 
   it('exposes an initial idle sync status with no pending work or conflicts', () => {
@@ -759,7 +903,9 @@ describe('creative workspace document cloud sync', () => {
   });
 
   it('exposes conflict and frozen status while keeping the queued board frozen until delete', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
     const adapter = createAdapter();
     adapter.put.mockRejectedValue(
       new CreativeDocumentConflictError({
@@ -778,7 +924,9 @@ describe('creative workspace document cloud sync', () => {
     const service = new CreativeDocumentCloudSyncService({
       adapter,
       storage: createMemoryStorage({
-        'creative-document-cloud-revisions:v1': JSON.stringify({ 'board-1': 8 }),
+        'creative-document-cloud-revisions:v1': JSON.stringify({
+          'board-1': 8,
+        }),
       }),
       debounceMs: 1000,
     });
@@ -911,11 +1059,15 @@ describe('creative workspace document cloud sync', () => {
         message: 'remote changed',
       })
     );
-    const upload = vi.fn(async () => '/creative/api/assets/asset_image/content');
+    const upload = vi.fn(
+      async () => '/creative/api/assets/asset_image/content'
+    );
     const service = new CreativeDocumentCloudSyncService({
       adapter,
       storage: createMemoryStorage({
-        'creative-document-cloud-revisions:v1': JSON.stringify({ 'board-1': 8 }),
+        'creative-document-cloud-revisions:v1': JSON.stringify({
+          'board-1': 8,
+        }),
       }),
       debounceMs: 0,
       assetSyncEnabled: true,
@@ -983,6 +1135,1231 @@ describe('creative workspace document cloud sync', () => {
     expect(JSON.stringify(service.getStatus())).not.toContain(localImageUrl);
   });
 
+  it('keeps create, update, and delete mutations browser-local when cloud document sync is disabled', async () => {
+    const adapter = createAdapter();
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 0,
+      assetSyncEnabled: false,
+    });
+
+    service.handleWorkspaceEvent({
+      type: 'boardCreated',
+      payload: createBoard({ elements: [] }),
+      timestamp: 1,
+    });
+    service.handleWorkspaceEvent({
+      type: 'boardUpdated',
+      payload: createBoard({
+        elements: [{ id: 'shape-1', type: 'rectangle' }],
+      }),
+      timestamp: 2,
+    });
+    service.handleWorkspaceEvent({
+      type: 'boardDeleted',
+      payload: { id: 'board-to-delete' },
+      timestamp: 3,
+    });
+
+    await service.flushPending();
+
+    expect(adapter.create).not.toHaveBeenCalled();
+    expect(adapter.put).not.toHaveBeenCalled();
+    expect(adapter.delete).not.toHaveBeenCalled();
+    expect(service.getPendingMutationCount()).toBe(2);
+    expect(service.getStatus()).toMatchObject({
+      syncState: 'pending',
+      saveState: 'local-saved',
+      assetSyncEnabled: false,
+      lastAssetSyncError: { code: 'creative_asset_sync_disabled' },
+    });
+  });
+
+  it('updates a pre-bootstrap disabled singleton when bootstrap enables cloud document sync', async () => {
+    const adapter = createAdapter();
+    const storage = createMemoryStorage({
+      [CREATIVE_DOCUMENT_REVISION_STORAGE_KEY]: JSON.stringify({
+        'board-2': 4,
+      }),
+    });
+    const locationLike = { pathname: '/creative' };
+
+    setCreativeAssetSyncConfig({
+      assetSyncEnabled: false,
+      disabledReason: 'bootstrap_pending',
+    });
+    const service = initializeCreativeDocumentCloudSync({
+      adapter,
+      storage,
+      debounceMs: 0,
+      enableColdStartSync: false,
+      locationLike,
+    });
+    if (!service) {
+      throw new Error('expected embedded creative document sync service');
+    }
+
+    service.handleWorkspaceEvent({
+      type: 'boardCreated',
+      payload: createBoard({ id: 'board-1', elements: [] }),
+      timestamp: 1,
+    });
+    service.handleWorkspaceEvent({
+      type: 'boardUpdated',
+      payload: createBoard({
+        id: 'board-2',
+        elements: [{ id: 'shape-1', type: 'rectangle' }],
+      }),
+      timestamp: 2,
+    });
+    await service.flushPending();
+
+    expect(service.getStatus()).toMatchObject({
+      assetSyncEnabled: false,
+      pendingMutationCount: 2,
+      lastAssetSyncError: { code: 'creative_asset_sync_disabled' },
+    });
+    expect(adapter.create).not.toHaveBeenCalled();
+    expect(adapter.put).not.toHaveBeenCalled();
+
+    setCreativeAssetSyncConfig({ assetSyncEnabled: true });
+    const updated = initializeCreativeDocumentCloudSync({
+      adapter,
+      storage,
+      debounceMs: 0,
+      enableColdStartSync: false,
+      locationLike,
+    });
+
+    expect(updated).toBe(service);
+    expect(updated?.getStatus()).toMatchObject({
+      assetSyncEnabled: true,
+      pendingMutationCount: 2,
+    });
+
+    await updated?.flushPending();
+
+    expect(adapter.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'board-1' })
+    );
+    expect(adapter.put).toHaveBeenCalledWith(
+      'board-2',
+      expect.objectContaining({ id: 'board-2' }),
+      4
+    );
+    expect(updated?.getStatus()).toMatchObject({
+      assetSyncEnabled: true,
+      pendingMutationCount: 0,
+      saveState: 'cloud-saved',
+    });
+  });
+
+  it('does not cold-start import a pending-deleted board when bootstrap enables cloud document sync', async () => {
+    let resolveList:
+      | ((value: Array<{ id: string; title?: string; revision: number }>) => void)
+      | undefined;
+    const listPromise = new Promise<
+      Array<{ id: string; title?: string; revision: number }>
+    >((resolve) => {
+      resolveList = resolve;
+    });
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(() => listPromise),
+      get: vi.fn(async () => ({
+        id: 'remote-deleted',
+        title: 'Remote Deleted Board',
+        snapshot: { elements: [] },
+        metadata: {
+          folderId: null,
+          order: 0,
+        },
+        revision: 9,
+        createdAt: 1710000000,
+        updatedAt: 1710000001,
+      })),
+    } as CreativeDocumentCloudAdapterLike & {
+      create: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+      delete: ReturnType<typeof vi.fn>;
+      list: ReturnType<typeof vi.fn>;
+    };
+    const upsertBoardFromCloud = vi.fn(async () => true);
+    const storage = createMemoryStorage({
+      [CREATIVE_DOCUMENT_REVISION_STORAGE_KEY]: JSON.stringify({
+        'pending-update': 4,
+      }),
+    });
+    const locationLike = { pathname: '/creative' };
+
+    setCreativeAssetSyncConfig({
+      assetSyncEnabled: false,
+      disabledReason: 'bootstrap_pending',
+    });
+    const service = initializeCreativeDocumentCloudSync({
+      adapter,
+      storage,
+      debounceMs: 10_000,
+      locationLike,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+    if (!service) {
+      throw new Error('expected embedded creative document sync service');
+    }
+
+    service.handleWorkspaceEvent({
+      type: 'boardDeleted',
+      payload: { id: 'remote-deleted' },
+      timestamp: 1,
+    });
+    service.handleWorkspaceEvent({
+      type: 'boardCreated',
+      payload: createBoard({ id: 'pending-create', elements: [] }),
+      timestamp: 2,
+    });
+    service.handleWorkspaceEvent({
+      type: 'boardUpdated',
+      payload: createBoard({
+        id: 'pending-update',
+        elements: [{ id: 'shape-1', type: 'rectangle' }],
+      }),
+      timestamp: 3,
+    });
+    await service.flushPending();
+
+    expect(adapter.delete).not.toHaveBeenCalled();
+    expect(adapter.create).not.toHaveBeenCalled();
+    expect(adapter.put).not.toHaveBeenCalled();
+    expect(service.getPendingMutationCount()).toBe(3);
+
+    setCreativeAssetSyncConfig({ assetSyncEnabled: true });
+    const updated = initializeCreativeDocumentCloudSync({
+      adapter,
+      storage,
+      debounceMs: 10_000,
+      locationLike,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    expect(updated).toBe(service);
+    expect(adapter.list).toHaveBeenCalledTimes(1);
+
+    await updated?.flushPending();
+
+    expect(adapter.delete).toHaveBeenCalledWith('remote-deleted');
+    expect(adapter.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'pending-create' })
+    );
+    expect(adapter.put).toHaveBeenCalledWith(
+      'pending-update',
+      expect.objectContaining({ id: 'pending-update' }),
+      4
+    );
+    expect(updated?.getPendingMutationCount()).toBe(0);
+
+    resolveList?.([
+      {
+        id: 'remote-deleted',
+        title: 'Remote Deleted Board',
+        revision: 9,
+      },
+      {
+        id: 'pending-create',
+        title: 'Pending Create Board',
+        revision: 10,
+      },
+      {
+        id: 'pending-update',
+        title: 'Pending Update Board',
+        revision: 11,
+      },
+    ]);
+    await listPromise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.get).not.toHaveBeenCalledWith('remote-deleted');
+    expect(adapter.get).not.toHaveBeenCalledWith('pending-create');
+    expect(adapter.get).not.toHaveBeenCalledWith('pending-update');
+    expect(upsertBoardFromCloud).not.toHaveBeenCalled();
+  });
+
+  it('does not cold-start import a board deleted and flushed while the remote list is pending', async () => {
+    let resolveList:
+      | ((value: Array<{ id: string; title?: string; revision: number }>) => void)
+      | undefined;
+    const listPromise = new Promise<
+      Array<{ id: string; title?: string; revision: number }>
+    >((resolve) => {
+      resolveList = resolve;
+    });
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(() => listPromise),
+      get: vi.fn(async () => ({
+        id: 'remote-deleted',
+        title: 'Remote Deleted Board',
+        snapshot: { elements: [] },
+        metadata: {
+          folderId: null,
+          order: 0,
+        },
+        revision: 9,
+        createdAt: 1710000000,
+        updatedAt: 1710000001,
+      })),
+    } as CreativeDocumentCloudAdapterLike & {
+      create: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+      delete: ReturnType<typeof vi.fn>;
+      list: ReturnType<typeof vi.fn>;
+    };
+    const upsertBoardFromCloud = vi.fn(async () => true);
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    const coldStartPromise = service.syncRemoteDocumentsForColdStart();
+    expect(adapter.list).toHaveBeenCalledTimes(1);
+
+    service.queueDelete('remote-deleted');
+    await service.flushPending();
+
+    expect(adapter.delete).toHaveBeenCalledWith('remote-deleted');
+    expect(service.getPendingMutationCount('remote-deleted')).toBe(0);
+
+    resolveList?.([
+      {
+        id: 'remote-deleted',
+        title: 'Remote Deleted Board',
+        revision: 9,
+      },
+    ]);
+    await coldStartPromise;
+
+    expect(adapter.get).not.toHaveBeenCalledWith('remote-deleted');
+    expect(upsertBoardFromCloud).not.toHaveBeenCalled();
+  });
+
+  it('does not cold-start import a board deleted while the remote get is pending', async () => {
+    let resolveGet:
+      | ((
+          value: CreativeDocumentSnapshot<{
+            elements: Array<Record<string, unknown>>;
+          }>
+        ) => void)
+      | undefined;
+    const getPromise = new Promise<
+      CreativeDocumentSnapshot<{ elements: Array<Record<string, unknown>> }>
+    >((resolve) => {
+      resolveGet = resolve;
+    });
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: 'remote-get-deleted',
+          title: 'Remote Get Deleted Board',
+          revision: 12,
+        },
+      ]),
+      get: vi.fn(() => getPromise),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
+    const upsertBoardFromCloud = vi.fn();
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    const coldStartPromise = service.syncRemoteDocumentsForColdStart();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.get).toHaveBeenCalledWith('remote-get-deleted');
+
+    service.queueDelete('remote-get-deleted');
+    resolveGet?.({
+      id: 'remote-get-deleted',
+      title: 'Remote Get Deleted Board',
+      snapshot: { elements: [] },
+      metadata: { folderId: null, order: 0 },
+      revision: 12,
+    });
+    await coldStartPromise;
+
+    expect(upsertBoardFromCloud).not.toHaveBeenCalled();
+    expect(service.getRevision('remote-get-deleted')).toBeUndefined();
+    expect(service.getPendingMutationCount('remote-get-deleted')).toBe(1);
+  });
+
+  it('does not cold-start import a board updated while the remote get is pending', async () => {
+    let resolveGet:
+      | ((
+          value: CreativeDocumentSnapshot<{
+            elements: Array<Record<string, unknown>>;
+          }>
+        ) => void)
+      | undefined;
+    const getPromise = new Promise<
+      CreativeDocumentSnapshot<{ elements: Array<Record<string, unknown>> }>
+    >((resolve) => {
+      resolveGet = resolve;
+    });
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: 'remote-get-updated',
+          title: 'Remote Get Updated Board',
+          revision: 13,
+        },
+      ]),
+      get: vi.fn(() => getPromise),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
+    const upsertBoardFromCloud = vi.fn();
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    const coldStartPromise = service.syncRemoteDocumentsForColdStart();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(adapter.get).toHaveBeenCalledWith('remote-get-updated');
+
+    service.queueSnapshot(
+      createBoard({
+        id: 'remote-get-updated',
+        elements: [{ id: 'local-get-shape', type: 'ellipse' }],
+      })
+    );
+    resolveGet?.({
+      id: 'remote-get-updated',
+      title: 'Remote Get Updated Board',
+      snapshot: { elements: [{ id: 'remote-get-shape', type: 'rectangle' }] },
+      metadata: { folderId: null, order: 0 },
+      revision: 13,
+    });
+    await coldStartPromise;
+
+    expect(upsertBoardFromCloud).not.toHaveBeenCalled();
+    expect(service.getRevision('remote-get-updated')).toBeUndefined();
+    expect(service.getPendingMutationCount('remote-get-updated')).toBe(1);
+  });
+
+  it('does not commit a cold-start board deleted while repository upsert is pending', async () => {
+    let releaseUpsert: (() => void) | undefined;
+    let markUpsertStarted: (() => void) | undefined;
+    const upsertStarted = new Promise<void>((resolve) => {
+      markUpsertStarted = resolve;
+    });
+    const upsertRelease = new Promise<void>((resolve) => {
+      releaseUpsert = resolve;
+    });
+    const committedBoards: Board[] = [];
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: 'remote-deleted',
+          title: 'Remote Deleted Board',
+          revision: 9,
+        },
+      ]),
+      get: vi.fn(async () => ({
+        id: 'remote-deleted',
+        title: 'Remote Deleted Board',
+        snapshot: { elements: [] },
+        metadata: {
+          folderId: null,
+          order: 0,
+        },
+        revision: 9,
+        createdAt: 1710000000,
+        updatedAt: 1710000001,
+      })),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
+    const upsertBoardFromCloud = vi.fn<
+      CreativeWorkspaceCloudRepository['upsertBoardFromCloud']
+    >(async (board, _revision, options) => {
+      markUpsertStarted?.();
+      await upsertRelease;
+      if (options?.shouldApply?.() !== false) {
+        committedBoards.push(board);
+        return true;
+      }
+      return false;
+    });
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    const coldStartPromise = service.syncRemoteDocumentsForColdStart();
+    await upsertStarted;
+
+    service.queueDelete('remote-deleted');
+    releaseUpsert?.();
+    await coldStartPromise;
+
+    expect(upsertBoardFromCloud).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'remote-deleted' }),
+      9,
+      expect.objectContaining({
+        suppressOutboundSync: true,
+        shouldApply: expect.any(Function),
+      })
+    );
+    expect(committedBoards).toEqual([]);
+    expect(service.getRevision('remote-deleted')).toBeUndefined();
+  });
+
+  it('does not commit a cold-start board updated while repository upsert is pending', async () => {
+    let releaseUpsert: (() => void) | undefined;
+    let markUpsertStarted: (() => void) | undefined;
+    const upsertStarted = new Promise<void>((resolve) => {
+      markUpsertStarted = resolve;
+    });
+    const upsertRelease = new Promise<void>((resolve) => {
+      releaseUpsert = resolve;
+    });
+    const committedBoards: Board[] = [];
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: 'remote-updated',
+          title: 'Remote Updated Board',
+          revision: 10,
+        },
+      ]),
+      get: vi.fn(async () => ({
+        id: 'remote-updated',
+        title: 'Remote Updated Board',
+        snapshot: { elements: [{ id: 'remote-shape', type: 'rectangle' }] },
+        metadata: {
+          folderId: null,
+          order: 0,
+        },
+        revision: 10,
+        createdAt: 1710000000,
+        updatedAt: 1710000001,
+      })),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
+    const upsertBoardFromCloud = vi.fn<
+      CreativeWorkspaceCloudRepository['upsertBoardFromCloud']
+    >(async (board, _revision, options) => {
+      markUpsertStarted?.();
+      await upsertRelease;
+      if (options?.shouldApply?.() !== false) {
+        committedBoards.push(board);
+        return true;
+      }
+      return false;
+    });
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    const coldStartPromise = service.syncRemoteDocumentsForColdStart();
+    await upsertStarted;
+
+    service.queueSnapshot(
+      createBoard({
+        id: 'remote-updated',
+        elements: [{ id: 'local-shape', type: 'ellipse' }],
+      })
+    );
+    releaseUpsert?.();
+    await coldStartPromise;
+
+    expect(upsertBoardFromCloud).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'remote-updated' }),
+      10,
+      expect.objectContaining({
+        suppressOutboundSync: true,
+        shouldApply: expect.any(Function),
+      })
+    );
+    expect(committedBoards).toEqual([]);
+    expect(service.getRevision('remote-updated')).toBeUndefined();
+    expect(service.getPendingMutationCount('remote-updated')).toBe(1);
+  });
+
+  it('does not expose a staged workspace cloud upsert in public maps while storage save is pending', async () => {
+    const boardId = 'workspace-staged-import';
+    const remoteBoard = createBoard({
+      id: boardId,
+      name: 'Remote staged board',
+      elements: [{ id: 'remote-staged-shape', type: 'rectangle' }],
+    });
+    const restoreWorkspace = installWorkspaceServiceRaceHarness([]);
+    let releaseCloudSave: (() => void) | undefined;
+    let markCloudSaveStarted: (() => void) | undefined;
+    const cloudSaveStarted = new Promise<void>((resolve) => {
+      markCloudSaveStarted = resolve;
+    });
+    const cloudSaveRelease = new Promise<void>((resolve) => {
+      releaseCloudSave = resolve;
+    });
+    const storageState = new Map<string, Board>();
+    vi.spyOn(workspaceStorageService, 'saveBoard').mockImplementation(
+      async (board: Board) => {
+        markCloudSaveStarted?.();
+        await cloudSaveRelease;
+        storageState.set(board.id, cloneBoard(board));
+      }
+    );
+
+    try {
+      const upsertPromise = workspaceService.upsertBoardFromCloud(remoteBoard, {
+        suppressOutboundSync: true,
+        shouldApply: () => true,
+      });
+      await cloudSaveStarted;
+
+      expect(workspaceService.getBoard(boardId)).toBeUndefined();
+      expect(storageState.get(boardId)).toBeUndefined();
+
+      releaseCloudSave?.();
+      await upsertPromise;
+
+      expect(workspaceService.getBoard(boardId)?.elements).toEqual([
+        { id: 'remote-staged-shape', type: 'rectangle' },
+      ]);
+      expect(storageState.get(boardId)?.elements).toEqual([
+        { id: 'remote-staged-shape', type: 'rectangle' },
+      ]);
+    } finally {
+      releaseCloudSave?.();
+      restoreWorkspace();
+    }
+  });
+
+  it('rejects a cloud upsert when a local delete started before the import sampled epochs', async () => {
+    const localBoard = createBoard({
+      id: 'workspace-delete-before-upsert',
+      name: 'Local delete before upsert',
+      elements: [{ id: 'local-delete-before', type: 'ellipse' }],
+    });
+    const remoteBoard = createBoard({
+      id: localBoard.id,
+      name: 'Remote stale board',
+      elements: [{ id: 'remote-delete-before', type: 'rectangle' }],
+    });
+    const restoreWorkspace = installWorkspaceServiceRaceHarness([localBoard]);
+    const storageState = new Map<string, Board>([
+      [localBoard.id, cloneBoard(localBoard)],
+    ]);
+    let releaseLocalDelete: (() => void) | undefined;
+    let markLocalDeleteStarted: (() => void) | undefined;
+    const localDeleteStarted = new Promise<void>((resolve) => {
+      markLocalDeleteStarted = resolve;
+    });
+    const localDeleteRelease = new Promise<void>((resolve) => {
+      releaseLocalDelete = resolve;
+    });
+    const cloudSaveSpy = vi
+      .spyOn(workspaceStorageService, 'saveBoard')
+      .mockImplementation(async (board: Board) => {
+        storageState.set(board.id, cloneBoard(board));
+      });
+    vi.spyOn(workspaceStorageService, 'deleteBoard').mockImplementation(
+      async (boardId: string) => {
+        markLocalDeleteStarted?.();
+        await localDeleteRelease;
+        storageState.delete(boardId);
+      }
+    );
+    vi.spyOn(workspaceStorageService, 'saveState').mockResolvedValue();
+
+    try {
+      const deletePromise = workspaceService.deleteBoard(localBoard.id);
+      await localDeleteStarted;
+
+      await expect(
+        workspaceService.upsertBoardFromCloud(remoteBoard, {
+          suppressOutboundSync: true,
+          shouldApply: () => true,
+        })
+      ).resolves.toBe(false);
+
+      expect(cloudSaveSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: localBoard.id,
+          elements: [{ id: 'remote-delete-before', type: 'rectangle' }],
+        })
+      );
+      expect(workspaceService.getBoard(localBoard.id)).toBeUndefined();
+
+      releaseLocalDelete?.();
+      await deletePromise;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(storageState.get(localBoard.id)).toBeUndefined();
+      expect(githubSyncMocks.markDirty).not.toHaveBeenCalled();
+      expect(githubSyncMocks.recordLocalDeletion).not.toHaveBeenCalled();
+      expect(githubSyncMocks.syncBoardDeletion).not.toHaveBeenCalled();
+    } finally {
+      releaseLocalDelete?.();
+      restoreWorkspace();
+    }
+  });
+
+  it('rejects a cloud upsert when a local update started before the import sampled epochs', async () => {
+    const localBoard = createBoard({
+      id: 'workspace-update-before-upsert',
+      name: 'Local update before upsert',
+      elements: [{ id: 'local-update-before-original', type: 'ellipse' }],
+    });
+    const remoteBoard = createBoard({
+      id: localBoard.id,
+      name: 'Remote stale board',
+      elements: [{ id: 'remote-update-before', type: 'rectangle' }],
+    });
+    const restoreWorkspace = installWorkspaceServiceRaceHarness([localBoard]);
+    const storageState = new Map<string, Board>([
+      [localBoard.id, cloneBoard(localBoard)],
+    ]);
+    let releaseLocalSave: (() => void) | undefined;
+    let markLocalSaveStarted: (() => void) | undefined;
+    const localSaveStarted = new Promise<void>((resolve) => {
+      markLocalSaveStarted = resolve;
+    });
+    const localSaveRelease = new Promise<void>((resolve) => {
+      releaseLocalSave = resolve;
+    });
+    vi.spyOn(workspaceStorageService, 'saveBoard').mockImplementation(
+      async (board: Board) => {
+        const snapshot = cloneBoard(board);
+        if (snapshot.elements?.[0]?.id === 'local-update-before') {
+          markLocalSaveStarted?.();
+          await localSaveRelease;
+        }
+        storageState.set(snapshot.id, snapshot);
+      }
+    );
+
+    try {
+      const localSavePromise = workspaceService.saveBoard(localBoard.id, {
+        children: [
+          { id: 'local-update-before', type: 'ellipse' },
+        ] as Board['elements'],
+        viewport: { x: 31, y: 32, zoom: 1 },
+        theme: { colorMode: 'light' },
+      });
+      await localSaveStarted;
+
+      await expect(
+        workspaceService.upsertBoardFromCloud(remoteBoard, {
+          suppressOutboundSync: true,
+          shouldApply: () => true,
+        })
+      ).resolves.toBe(false);
+      expect(workspaceService.getBoard(localBoard.id)?.elements).toEqual([
+        { id: 'local-update-before', type: 'ellipse' },
+      ]);
+
+      releaseLocalSave?.();
+      await localSavePromise;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(storageState.get(localBoard.id)?.elements).toEqual([
+        { id: 'local-update-before', type: 'ellipse' },
+      ]);
+      expect(JSON.stringify(storageState.get(localBoard.id))).not.toContain(
+        'remote-update-before'
+      );
+      expect(githubSyncMocks.markDirty).not.toHaveBeenCalled();
+      expect(githubSyncMocks.syncBoardDeletion).not.toHaveBeenCalled();
+    } finally {
+      releaseLocalSave?.();
+      restoreWorkspace();
+    }
+  });
+
+  it('does not let a stale workspace cloud upsert resurrect storage after a local delete wins the race', async () => {
+    const localBoard = createBoard({
+      id: 'workspace-race-delete',
+      name: 'Local board',
+      elements: [{ id: 'local-original-shape', type: 'ellipse' }],
+    });
+    const remoteBoard = createBoard({
+      id: 'workspace-race-delete',
+      name: 'Remote stale board',
+      elements: [{ id: 'remote-shape', type: 'rectangle' }],
+    });
+    const restoreWorkspace = installWorkspaceServiceRaceHarness([localBoard]);
+    const storageState = new Map<string, Board>();
+    let saveCallCount = 0;
+    let releaseCloudSave: (() => void) | undefined;
+    let markCloudSaveStarted: (() => void) | undefined;
+    const cloudSaveStarted = new Promise<void>((resolve) => {
+      markCloudSaveStarted = resolve;
+    });
+    const cloudSaveRelease = new Promise<void>((resolve) => {
+      releaseCloudSave = resolve;
+    });
+    vi.spyOn(workspaceStorageService, 'deleteBoard').mockImplementation(
+      async (boardId: string) => {
+        storageState.delete(boardId);
+      }
+    );
+    vi.spyOn(workspaceStorageService, 'saveState').mockResolvedValue();
+    vi.spyOn(workspaceStorageService, 'saveBoard').mockImplementation(
+      async (board: Board) => {
+        const snapshot = cloneBoard(board);
+        saveCallCount += 1;
+        if (snapshot.id === remoteBoard.id && saveCallCount === 1) {
+          markCloudSaveStarted?.();
+          await cloudSaveRelease;
+        }
+        storageState.set(snapshot.id, snapshot);
+      }
+    );
+
+    try {
+      const upsertPromise = workspaceService.upsertBoardFromCloud(remoteBoard, {
+        suppressOutboundSync: true,
+        shouldApply: () => true,
+      });
+      await cloudSaveStarted;
+
+      await workspaceService.deleteBoard(remoteBoard.id);
+      releaseCloudSave?.();
+      await upsertPromise;
+
+      expect(workspaceService.getBoard(remoteBoard.id)).toBeUndefined();
+      expect(storageState.get(remoteBoard.id)).toBeUndefined();
+    } finally {
+      restoreWorkspace();
+    }
+  });
+
+  it('does not let a stale workspace cloud upsert overwrite storage after a local update wins the race', async () => {
+    const localBoard = createBoard({
+      id: 'workspace-race-update',
+      name: 'Local board',
+      elements: [{ id: 'local-original-shape', type: 'ellipse' }],
+    });
+    const remoteBoard = createBoard({
+      id: 'workspace-race-update',
+      name: 'Remote stale board',
+      elements: [{ id: 'remote-shape', type: 'rectangle' }],
+    });
+    const restoreWorkspace = installWorkspaceServiceRaceHarness([localBoard]);
+    const storageState = new Map<string, Board>();
+    let saveCallCount = 0;
+    let releaseCloudSave: (() => void) | undefined;
+    let markCloudSaveStarted: (() => void) | undefined;
+    const cloudSaveStarted = new Promise<void>((resolve) => {
+      markCloudSaveStarted = resolve;
+    });
+    const cloudSaveRelease = new Promise<void>((resolve) => {
+      releaseCloudSave = resolve;
+    });
+    vi.spyOn(workspaceStorageService, 'saveBoard').mockImplementation(
+      async (board: Board) => {
+        const snapshot = cloneBoard(board);
+        saveCallCount += 1;
+        if (snapshot.id === remoteBoard.id && saveCallCount === 1) {
+          markCloudSaveStarted?.();
+          await cloudSaveRelease;
+        }
+        storageState.set(snapshot.id, snapshot);
+      }
+    );
+
+    try {
+      const upsertPromise = workspaceService.upsertBoardFromCloud(remoteBoard, {
+        suppressOutboundSync: true,
+        shouldApply: () => true,
+      });
+      await cloudSaveStarted;
+
+      await workspaceService.saveBoard(remoteBoard.id, {
+        children: [
+          { id: 'local-shape', type: 'ellipse' },
+        ] as Board['elements'],
+        viewport: { x: 11, y: 12, zoom: 1 },
+        theme: { colorMode: 'light' },
+      });
+      releaseCloudSave?.();
+      await upsertPromise;
+
+      expect(storageState.get(remoteBoard.id)?.elements).toEqual([
+        { id: 'local-shape', type: 'ellipse' },
+      ]);
+      expect(workspaceService.getBoard(remoteBoard.id)?.elements).toEqual([
+        { id: 'local-shape', type: 'ellipse' },
+      ]);
+    } finally {
+      restoreWorkspace();
+    }
+  });
+
+  it('clears cold-start existing-board conflict residue when a local update wins the race', async () => {
+    const boardId = 'existing-local-update-race';
+    const storage = createMemoryStorage({
+      [CREATIVE_DOCUMENT_REVISION_STORAGE_KEY]: JSON.stringify({
+        [boardId]: 1,
+      }),
+    });
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: boardId,
+          title: 'Existing local update race',
+          revision: 2,
+        },
+      ]),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+    };
+    const put = vi.fn(async () => ({
+      id: boardId,
+      snapshot: { elements: [{ id: 'local-wins', type: 'ellipse' }] },
+      revision: 3,
+    }));
+    const service = new CreativeDocumentCloudSyncService({
+      adapter: {
+        ...adapter,
+        put,
+      },
+      storage,
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => true),
+        getStoredRevision: vi.fn(async () => 1),
+        upsertBoardFromCloud: vi.fn(async () => true),
+      },
+    });
+
+    await service.syncRemoteDocumentsForColdStart();
+
+    expect(service.getStatus()).toMatchObject({
+      conflictCount: 1,
+      frozenBoardCount: 1,
+      pendingMutationCount: 0,
+    });
+
+    service.queueSnapshot(
+      createBoard({
+        id: boardId,
+        elements: [{ id: 'local-wins', type: 'ellipse' }],
+      })
+    );
+
+    expect(service.getStatus()).toMatchObject({
+      conflictCount: 0,
+      frozenBoardCount: 0,
+      pendingMutationCount: 1,
+    });
+    expect(storage.getItem(CREATIVE_DOCUMENT_CONFLICT_STORAGE_KEY) || '').not.toContain(
+      boardId
+    );
+
+    await service.flushPending();
+
+    expect(put).toHaveBeenCalledWith(
+      boardId,
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          elements: [{ id: 'local-wins', type: 'ellipse' }],
+        }),
+      }),
+      1
+    );
+    expect(service.getRevision(boardId)).toBe(3);
+  });
+
+  it('clears cold-start existing-board conflict residue when a local delete wins the race', async () => {
+    const boardId = 'existing-local-delete-race';
+    const storage = createMemoryStorage({
+      [CREATIVE_DOCUMENT_REVISION_STORAGE_KEY]: JSON.stringify({
+        [boardId]: 1,
+      }),
+    });
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: boardId,
+          title: 'Existing local delete race',
+          revision: 2,
+        },
+      ]),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+    };
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage,
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => true),
+        getStoredRevision: vi.fn(async () => 1),
+        upsertBoardFromCloud: vi.fn(async () => true),
+      },
+    });
+
+    await service.syncRemoteDocumentsForColdStart();
+    service.queueDelete(boardId);
+    await service.flushPending();
+
+    expect(adapter.delete).toHaveBeenCalledWith(boardId);
+    expect(service.getStatus()).toMatchObject({
+      conflictCount: 0,
+      frozenBoardCount: 0,
+      pendingMutationCount: 0,
+    });
+    expect(service.getRevision(boardId)).toBeUndefined();
+    expect(storage.getItem(CREATIVE_DOCUMENT_CONFLICT_STORAGE_KEY) || '').not.toContain(
+      boardId
+    );
+    expect(storage.getItem(CREATIVE_DOCUMENT_REVISION_STORAGE_KEY) || '').not.toContain(
+      boardId
+    );
+  });
+
+  it('treats a stored local board without a cloud revision as a cold-start conflict instead of importing stale remote storage on restart', async () => {
+    const boardId = 'existing-no-revision-restart';
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: boardId,
+          title: 'Remote without local revision',
+          revision: 7,
+        },
+      ]),
+      get: vi.fn(async () => ({
+        id: boardId,
+        title: 'Remote without local revision',
+        snapshot: { elements: [{ id: 'remote-should-not-import' }] },
+        revision: 7,
+      })),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
+    const upsertBoardFromCloud = vi.fn(async () => true);
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage: createMemoryStorage(),
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => true),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud,
+      },
+    });
+
+    await service.syncRemoteDocumentsForColdStart();
+
+    expect(adapter.get).not.toHaveBeenCalled();
+    expect(upsertBoardFromCloud).not.toHaveBeenCalled();
+    expect(service.getStatus()).toMatchObject({
+      conflictCount: 1,
+      frozenBoardCount: 1,
+      pendingMutationCount: 0,
+    });
+    expect(service.getConflictStatus(boardId)).toMatchObject({
+      boardId,
+      revision: 7,
+      hasRemoteSnapshot: false,
+    });
+  });
+
+  it('does not persist a cloud revision when workspace rollback skips a stale cold-start upsert', async () => {
+    const boardId = 'workspace-race-revision';
+    const localBoard = createBoard({
+      id: boardId,
+      name: 'Local revision race board',
+      elements: [{ id: 'local-original-revision-shape', type: 'ellipse' }],
+    });
+    const remoteBoard = createBoard({
+      id: boardId,
+      name: 'Remote stale revision board',
+      elements: [{ id: 'remote-revision-shape', type: 'rectangle' }],
+    });
+    const restoreWorkspace = installWorkspaceServiceRaceHarness([localBoard]);
+    const storage = createMemoryStorage();
+    const storageState = new Map<string, Board>();
+    let saveCallCount = 0;
+    let releaseCloudSave: (() => void) | undefined;
+    let markCloudSaveStarted: (() => void) | undefined;
+    let releaseLocalSave: (() => void) | undefined;
+    let markLocalSaveStarted: (() => void) | undefined;
+    const cloudSaveStarted = new Promise<void>((resolve) => {
+      markCloudSaveStarted = resolve;
+    });
+    const cloudSaveRelease = new Promise<void>((resolve) => {
+      releaseCloudSave = resolve;
+    });
+    const localSaveStarted = new Promise<void>((resolve) => {
+      markLocalSaveStarted = resolve;
+    });
+    const localSaveRelease = new Promise<void>((resolve) => {
+      releaseLocalSave = resolve;
+    });
+    vi.spyOn(workspaceStorageService, 'saveBoard').mockImplementation(
+      async (board: Board) => {
+        const snapshot = cloneBoard(board);
+        saveCallCount += 1;
+        if (snapshot.id === boardId && saveCallCount === 1) {
+          markCloudSaveStarted?.();
+          await cloudSaveRelease;
+        } else if (snapshot.id === boardId && saveCallCount === 2) {
+          markLocalSaveStarted?.();
+          await localSaveRelease;
+        }
+        storageState.set(snapshot.id, snapshot);
+      }
+    );
+    vi.spyOn(workspaceStorageService, 'deleteBoard').mockImplementation(
+      async (id: string) => {
+        storageState.delete(id);
+      }
+    );
+    const adapter = {
+      ...createAdapter(),
+      list: vi.fn(async () => [
+        {
+          id: boardId,
+          title: 'Remote stale revision board',
+          revision: 15,
+        },
+      ]),
+      get: vi.fn(async () => ({
+        id: boardId,
+        title: 'Remote stale revision board',
+        snapshot: { elements: remoteBoard.elements },
+        metadata: {
+          folderId: remoteBoard.folderId,
+          order: remoteBoard.order,
+        },
+        revision: 15,
+        createdAt: remoteBoard.createdAt,
+        updatedAt: remoteBoard.updatedAt,
+      })),
+    } as CreativeDocumentCloudAdapterLike & {
+      list: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+    };
+    const service = new CreativeDocumentCloudSyncService({
+      adapter,
+      storage,
+      debounceMs: 10_000,
+      assetSyncEnabled: true,
+      workspaceRepository: {
+        hasBoard: vi.fn(async () => false),
+        getStoredRevision: vi.fn(async () => null),
+        upsertBoardFromCloud: async (board, _revision, options) =>
+          workspaceService.upsertBoardFromCloud(board, {
+            suppressOutboundSync: options?.suppressOutboundSync,
+            shouldApply: options?.shouldApply,
+          }),
+      },
+    });
+
+    try {
+      const coldStartPromise = service.syncRemoteDocumentsForColdStart();
+      await cloudSaveStarted;
+
+      const localSavePromise = workspaceService.saveBoard(boardId, {
+        children: [
+          { id: 'local-revision-shape', type: 'ellipse' },
+        ] as Board['elements'],
+        viewport: { x: 21, y: 22, zoom: 1 },
+        theme: { colorMode: 'light' },
+      });
+      await localSaveStarted;
+
+      releaseCloudSave?.();
+      await coldStartPromise;
+      releaseLocalSave?.();
+      await localSavePromise;
+
+      expect(service.getRevision(boardId)).toBeUndefined();
+      expect(storage.getItem(CREATIVE_DOCUMENT_REVISION_STORAGE_KEY) || '').not.toContain(
+        boardId
+      );
+      expect(storageState.get(boardId)?.elements).toEqual([
+        { id: 'local-revision-shape', type: 'ellipse' },
+      ]);
+    } finally {
+      releaseCloudSave?.();
+      releaseLocalSave?.();
+      restoreWorkspace();
+    }
+  });
+
   it('hydrates missing remote documents before cold-start workspace import', async () => {
     const cloudImageUrl = '/creative/api/assets/asset_remote/content';
     const adapter = {
@@ -1009,9 +2386,11 @@ describe('creative workspace document cloud sync', () => {
         updatedAt: 1710000001,
       })),
     } as CreativeDocumentCloudAdapterLike & {
-      list: () => Promise<Array<{ id: string; title?: string; revision: number }>>;
+      list: () => Promise<
+        Array<{ id: string; title?: string; revision: number }>
+      >;
     };
-    const upsertBoardFromCloud = vi.fn();
+    const upsertBoardFromCloud = vi.fn(async () => true);
     const service = new CreativeDocumentCloudSyncService({
       adapter,
       storage: createMemoryStorage(),
@@ -1054,7 +2433,7 @@ describe('creative workspace document cloud sync', () => {
         updatedAt: 1710000001000,
       }),
       3,
-      { suppressOutboundSync: true }
+      expect.objectContaining({ suppressOutboundSync: true })
     );
     expect(service.getRevision('remote-board')).toBe(3);
   });
@@ -1086,10 +2465,14 @@ describe('creative workspace document cloud sync', () => {
         updatedAt: 1710000001,
       })),
     } as CreativeDocumentCloudAdapterLike & {
-      list: () => Promise<Array<{ id: string; title?: string; revision: number }>>;
+      list: () => Promise<
+        Array<{ id: string; title?: string; revision: number }>
+      >;
     };
     const upsertBoardFromCloud = vi.fn();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
     const service = new CreativeDocumentCloudSyncService({
       adapter,
       storage: createMemoryStorage(),

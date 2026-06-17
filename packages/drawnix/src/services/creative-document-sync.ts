@@ -10,6 +10,7 @@ import {
 } from './creative-mode';
 import {
   creativeAssetCloudAdapter,
+  CreativeAssetSyncError,
   assertNoUnsafeCreativeAssetPersistenceRefs,
   getSafeCreativeAssetSyncErrorMessage,
   hydrateCreativeDocumentAssets,
@@ -59,6 +60,7 @@ export interface CreativeDocumentSyncConflict<TSnapshot = unknown> {
   revision?: string | number | null;
   snapshot?: CreativeDocumentSnapshot<TSnapshot>;
   hasRemoteSnapshot?: boolean;
+  source?: 'cold-start' | 'flush';
   message?: string;
   recordedAt: number;
 }
@@ -145,7 +147,9 @@ interface WorkspaceEventSubscription {
 
 export interface CreativeWorkspaceEventSource {
   observeEvents(): {
-    subscribe(next: (event: WorkspaceEvent) => void): WorkspaceEventSubscription;
+    subscribe(
+      next: (event: WorkspaceEvent) => void
+    ): WorkspaceEventSubscription;
   };
 }
 
@@ -155,8 +159,13 @@ export interface CreativeWorkspaceCloudRepository {
   upsertBoardFromCloud(
     board: Board,
     revision: string | number,
-    options?: { suppressOutboundSync?: boolean }
-  ): Promise<void>;
+    options?: CreativeWorkspaceCloudUpsertOptions
+  ): Promise<boolean>;
+}
+
+export interface CreativeWorkspaceCloudUpsertOptions {
+  suppressOutboundSync?: boolean;
+  shouldApply?: () => boolean;
 }
 
 export interface CreativeDocumentCloudSyncServiceOptions {
@@ -256,25 +265,41 @@ class DefaultCreativeWorkspaceCloudRepository
   async upsertBoardFromCloud(
     board: Board,
     _revision: string | number,
-    options: { suppressOutboundSync?: boolean } = {}
-  ): Promise<void> {
-    const serviceWithCloudImport = workspaceService as typeof workspaceService & {
-      upsertBoardFromCloud?: (
-        board: Board,
-        options?: { suppressOutboundSync?: boolean }
-      ) => Promise<void>;
-    };
+    options: CreativeWorkspaceCloudUpsertOptions = {}
+  ): Promise<boolean> {
+    if (options.shouldApply?.() === false) {
+      return false;
+    }
+    const serviceWithCloudImport =
+      workspaceService as typeof workspaceService & {
+        upsertBoardFromCloud?: (
+          board: Board,
+          options?: CreativeWorkspaceCloudUpsertOptions
+        ) => Promise<boolean | void>;
+      };
     if (typeof serviceWithCloudImport.upsertBoardFromCloud === 'function') {
-      await serviceWithCloudImport.upsertBoardFromCloud(board, options);
-      return;
+      const applied = await serviceWithCloudImport.upsertBoardFromCloud(
+        board,
+        options
+      );
+      return applied !== false;
+    }
+    if (options.shouldApply?.() === false) {
+      return false;
     }
     await workspaceStorageService.saveBoard(board);
+    if (options.shouldApply?.() === false) {
+      await workspaceStorageService.deleteBoard(board.id);
+      return false;
+    }
+    return true;
   }
 }
 
-function getDefaultStorage():
-  | Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-  | null {
+function getDefaultStorage(): Pick<
+  Storage,
+  'getItem' | 'setItem' | 'removeItem'
+> | null {
   try {
     return typeof window !== 'undefined' ? window.localStorage : null;
   } catch {
@@ -320,10 +345,6 @@ function writeStorageRecord(
     // Local-first sync must keep working in memory even when storage is full
     // or browser privacy settings block localStorage.
   }
-}
-
-function sortIds(ids: Iterable<string>): string[] {
-  return Array.from(ids).sort((left, right) => left.localeCompare(right));
 }
 
 function isConflictError<TSnapshot = unknown>(
@@ -488,7 +509,9 @@ function unwrapResponseData(payload: unknown): unknown {
   return isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
 }
 
-function unwrapDocumentListPayload(payload: unknown): CreativeDocumentSummary[] {
+function unwrapDocumentListPayload(
+  payload: unknown
+): CreativeDocumentSummary[] {
   const data = unwrapResponseData(payload);
   const documents =
     isRecord(data) && Array.isArray(data.documents) ? data.documents : data;
@@ -518,8 +541,8 @@ function unwrapConflictPayload<TSnapshot = unknown>(
     'document' in dataRecord
       ? dataRecord.document
       : 'snapshot' in dataRecord
-        ? dataRecord.snapshot
-        : undefined;
+      ? dataRecord.snapshot
+      : undefined;
   const snapshot =
     document !== undefined
       ? unwrapDocumentPayload<TSnapshot>({ data: { document } })
@@ -531,8 +554,8 @@ function unwrapConflictPayload<TSnapshot = unknown>(
     typeof dataRecord.message === 'string'
       ? dataRecord.message
       : typeof root.message === 'string'
-        ? root.message
-        : undefined;
+      ? root.message
+      : undefined;
 
   return {
     ...(revision !== undefined ? { revision } : {}),
@@ -600,9 +623,7 @@ export class CreativeDocumentCloudAdapter {
         Accept: 'application/json',
         ...requireCreativeSessionAuthHeaders(),
       },
-      body: JSON.stringify(
-        prepareOutboundCreativeDocumentPayload(snapshot)
-      ),
+      body: JSON.stringify(prepareOutboundCreativeDocumentPayload(snapshot)),
     });
     if (response.status === 409) {
       throw new CreativeDocumentConflictError(
@@ -618,11 +639,14 @@ export class CreativeDocumentCloudAdapter {
   async get<TSnapshot = unknown>(
     documentId: string
   ): Promise<CreativeDocumentSnapshot<TSnapshot>> {
-    const response = await this.fetcher(`${this.endpoint}/${encodeURIComponent(documentId)}`, {
-      method: 'GET',
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' },
-    });
+    const response = await this.fetcher(
+      `${this.endpoint}/${encodeURIComponent(documentId)}`,
+      {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      }
+    );
     if (!response.ok) {
       throw new Error(`文档读取同步失败: HTTP ${response.status}`);
     }
@@ -641,16 +665,19 @@ export class CreativeDocumentCloudAdapter {
         ? { baseRevision: normalizedBaseRevision }
         : {}),
     });
-    const response = await this.fetcher(`${this.endpoint}/${encodeURIComponent(documentId)}`, {
-      method: 'PUT',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...requireCreativeSessionAuthHeaders(),
-      },
-      body: JSON.stringify(body),
-    });
+    const response = await this.fetcher(
+      `${this.endpoint}/${encodeURIComponent(documentId)}`,
+      {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...requireCreativeSessionAuthHeaders(),
+        },
+        body: JSON.stringify(body),
+      }
+    );
 
     if (response.status === 409) {
       throw new CreativeDocumentConflictError(
@@ -665,11 +692,14 @@ export class CreativeDocumentCloudAdapter {
   }
 
   async delete(documentId: string): Promise<void> {
-    const response = await this.fetcher(`${this.endpoint}/${encodeURIComponent(documentId)}`, {
-      method: 'DELETE',
-      credentials: 'same-origin',
-      headers: requireCreativeSessionAuthHeaders(),
-    });
+    const response = await this.fetcher(
+      `${this.endpoint}/${encodeURIComponent(documentId)}`,
+      {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: requireCreativeSessionAuthHeaders(),
+      }
+    );
     if (!response.ok && response.status !== 404) {
       throw new Error(`文档删除同步失败: HTTP ${response.status}`);
     }
@@ -707,7 +737,7 @@ export class CreativeDocumentCloudSyncService {
   private readonly adapter: CreativeDocumentCloudAdapterLike;
   private readonly assetAdapter: CreativeAssetCloudAdapterLike;
   private readonly assetCache?: CreativeAssetCacheLike;
-  private readonly assetSyncEnabled: boolean;
+  private assetSyncEnabled: boolean;
   private readonly workspaceRepository: CreativeWorkspaceCloudRepository;
   private readonly workspace: CreativeWorkspaceEventSource;
   private readonly storage: Pick<
@@ -720,13 +750,15 @@ export class CreativeDocumentCloudSyncService {
     CreativeDocumentSnapshot<CreativeWorkspaceBoardSnapshot>
   >();
   private readonly pendingDeletes = new Set<string>();
+  private readonly activeColdStartSkipSets = new Set<Set<string>>();
   private readonly revisions = new Map<string, string | number>();
   private readonly conflicts = new Map<
     string,
     CreativeDocumentSyncConflict<CreativeWorkspaceBoardSnapshot>
   >();
   private readonly frozenBoards = new Set<string>();
-  private readonly statusListeners = new Set<CreativeDocumentCloudSyncStatusListener>();
+  private readonly statusListeners =
+    new Set<CreativeDocumentCloudSyncStatusListener>();
   private subscription: WorkspaceEventSubscription | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing = false;
@@ -739,15 +771,14 @@ export class CreativeDocumentCloudSyncService {
     this.adapter = options.adapter || creativeDocumentCloudAdapter;
     this.assetAdapter = options.assetAdapter || creativeAssetCloudAdapter;
     this.assetCache = options.assetCache;
-    this.assetSyncEnabled =
-      options.assetSyncEnabled ?? getCreativeAssetSyncConfig().assetSyncEnabled;
+    this.assetSyncEnabled = options.assetSyncEnabled ?? true;
     this.workspaceRepository =
-      options.workspaceRepository || new DefaultCreativeWorkspaceCloudRepository();
+      options.workspaceRepository ||
+      new DefaultCreativeWorkspaceCloudRepository();
     this.workspace = options.workspace || workspaceService;
     this.storage =
       options.storage === undefined ? getDefaultStorage() : options.storage;
-    this.debounceMs =
-      options.debounceMs ?? DEFAULT_DOCUMENT_SYNC_DEBOUNCE_MS;
+    this.debounceMs = options.debounceMs ?? DEFAULT_DOCUMENT_SYNC_DEBOUNCE_MS;
     this.enableColdStartSync = options.enableColdStartSync !== false;
     this.loadPersistedState();
   }
@@ -759,16 +790,7 @@ export class CreativeDocumentCloudSyncService {
     this.subscription = this.workspace.observeEvents().subscribe((event) => {
       this.handleWorkspaceEvent(event);
     });
-    if (this.enableColdStartSync && !this.coldStartSynced) {
-      this.coldStartSynced = true;
-      void this.syncRemoteDocumentsForColdStart().catch((error) => {
-        this.recordAssetSyncError(error);
-        console.warn(
-          '[CreativeDocumentCloudSync] cold-start sync failed:',
-          getSafeCreativeAssetSyncErrorMessage(error)
-        );
-      });
-    }
+    this.maybeStartColdStartSync();
   }
 
   stop(): void {
@@ -808,6 +830,8 @@ export class CreativeDocumentCloudSyncService {
     const document = buildCreativeWorkspaceDocumentSnapshot(board);
     this.pendingDeletes.delete(board.id);
     this.pendingSnapshots.set(board.id, document);
+    this.addActiveColdStartSkip(board.id);
+    this.clearColdStartConflict(board.id);
     this.notifyStatusListeners();
     if (!this.frozenBoards.has(board.id)) {
       this.scheduleFlush();
@@ -817,11 +841,46 @@ export class CreativeDocumentCloudSyncService {
   queueDelete(boardId: string): void {
     this.pendingSnapshots.delete(boardId);
     this.pendingDeletes.add(boardId);
+    this.addActiveColdStartSkip(boardId);
+    this.revisions.delete(boardId);
     this.frozenBoards.delete(boardId);
     this.conflicts.delete(boardId);
+    this.persistRevisions();
     this.persistConflicts();
     this.notifyStatusListeners();
     this.scheduleFlush();
+  }
+
+  setAssetSyncEnabled(assetSyncEnabled: boolean): void {
+    if (this.assetSyncEnabled === assetSyncEnabled) {
+      return;
+    }
+
+    this.assetSyncEnabled = assetSyncEnabled;
+    if (
+      assetSyncEnabled &&
+      this.lastAssetSyncError?.code === 'creative_asset_sync_disabled'
+    ) {
+      this.lastAssetSyncError = undefined;
+    }
+    if (!assetSyncEnabled && this.getPendingMutationCount() > 0) {
+      this.lastAssetSyncError = toCreativeAssetSyncErrorStatus(
+        new CreativeAssetSyncError(
+          'creative_asset_sync_disabled',
+          'document_sync_disabled'
+        )
+      );
+    }
+    this.notifyStatusListeners();
+
+    if (!assetSyncEnabled) {
+      return;
+    }
+
+    this.maybeStartColdStartSync();
+    if (this.getPendingMutationCount() > 0) {
+      this.scheduleFlush();
+    }
   }
 
   async flushPending(): Promise<void> {
@@ -831,6 +890,11 @@ export class CreativeDocumentCloudSyncService {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
+    }
+
+    if (!this.assetSyncEnabled) {
+      this.recordDocumentSyncDisabled();
+      return;
     }
 
     this.flushing = true;
@@ -972,12 +1036,67 @@ export class CreativeDocumentCloudSyncService {
     this.notifyStatusListeners();
   }
 
+  private recordDocumentSyncDisabled(): void {
+    this.lastAssetSyncError = toCreativeAssetSyncErrorStatus(
+      new CreativeAssetSyncError(
+        'creative_asset_sync_disabled',
+        'document_sync_disabled'
+      )
+    );
+    this.notifyStatusListeners();
+  }
+
   private clearAssetSyncError(): void {
     if (!this.lastAssetSyncError) {
       return;
     }
     this.lastAssetSyncError = undefined;
     this.notifyStatusListeners();
+  }
+
+  private addActiveColdStartSkip(boardId: string): void {
+    this.activeColdStartSkipSets.forEach((skipBoardIds) => {
+      skipBoardIds.add(boardId);
+    });
+  }
+
+  private clearColdStartConflict(boardId: string): boolean {
+    if (this.conflicts.get(boardId)?.source !== 'cold-start') {
+      return false;
+    }
+    this.conflicts.delete(boardId);
+    this.frozenBoards.delete(boardId);
+    this.persistConflicts();
+    return true;
+  }
+
+  private shouldSkipColdStartBoard(
+    boardId: string,
+    skipBoardIds: Set<string>
+  ): boolean {
+    return (
+      skipBoardIds.has(boardId) ||
+      this.pendingSnapshots.has(boardId) ||
+      this.pendingDeletes.has(boardId)
+    );
+  }
+
+  private maybeStartColdStartSync(): void {
+    if (
+      !this.enableColdStartSync ||
+      this.coldStartSynced ||
+      !this.assetSyncEnabled
+    ) {
+      return;
+    }
+    this.coldStartSynced = true;
+    void this.syncRemoteDocumentsForColdStart().catch((error) => {
+      this.recordAssetSyncError(error);
+      console.warn(
+        '[CreativeDocumentCloudSync] cold-start sync failed:',
+        getSafeCreativeAssetSyncErrorMessage(error)
+      );
+    });
   }
 
   private loadPersistedState(): void {
@@ -1010,6 +1129,10 @@ export class CreativeDocumentCloudSyncService {
           boardId,
           ...(revision !== undefined ? { revision } : {}),
           ...(hasRemoteSnapshot ? { hasRemoteSnapshot: true } : {}),
+          ...(safeConflict.source === 'cold-start' ||
+          safeConflict.source === 'flush'
+            ? { source: safeConflict.source }
+            : {}),
           ...(typeof safeConflict.message === 'string'
             ? { message: safeConflict.message }
             : {}),
@@ -1176,69 +1299,113 @@ export class CreativeDocumentCloudSyncService {
       return;
     }
 
-    const summaries = await this.adapter.list();
-    for (const summary of summaries) {
-      const boardId = typeof summary.id === 'string' ? summary.id : '';
-      if (!boardId) {
-        continue;
-      }
+    const coldStartSkipBoardIds = new Set<string>([
+      ...this.pendingSnapshots.keys(),
+      ...this.pendingDeletes,
+    ]);
+    this.activeColdStartSkipSets.add(coldStartSkipBoardIds);
+    try {
+      const summaries = await this.adapter.list();
+      for (const summary of summaries) {
+        const boardId = typeof summary.id === 'string' ? summary.id : '';
+        if (!boardId) {
+          continue;
+        }
+        if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+          continue;
+        }
 
-      const remoteRevision = normalizeCloudRevision(summary.revision);
-      if (await this.workspaceRepository.hasBoard(boardId)) {
-        const localRevision =
-          this.revisions.get(boardId) ??
-          (await this.workspaceRepository.getStoredRevision(boardId));
-        if (
-          localRevision !== null &&
-          localRevision !== undefined &&
-          remoteRevision !== undefined &&
-          String(localRevision) !== String(remoteRevision)
-        ) {
-          this.conflicts.set(boardId, {
-            boardId,
-            revision: remoteRevision,
-            hasRemoteSnapshot: false,
-            message:
-              'Remote document revision differs from the local board; manual review required',
-            recordedAt: Date.now(),
+        const remoteRevision = normalizeCloudRevision(summary.revision);
+        if (await this.workspaceRepository.hasBoard(boardId)) {
+          if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+            continue;
+          }
+          const localRevision =
+            this.revisions.get(boardId) ??
+            (await this.workspaceRepository.getStoredRevision(boardId));
+          if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+            continue;
+          }
+          if (
+            remoteRevision !== undefined &&
+            (localRevision === null ||
+              localRevision === undefined ||
+              String(localRevision) !== String(remoteRevision))
+          ) {
+            this.conflicts.set(boardId, {
+              boardId,
+              revision: remoteRevision,
+              hasRemoteSnapshot: false,
+              source: 'cold-start',
+              message:
+                'Remote document revision differs from the local board; manual review required',
+              recordedAt: Date.now(),
+            });
+            this.frozenBoards.add(boardId);
+            this.persistConflicts();
+            this.notifyStatusListeners();
+          }
+          continue;
+        }
+
+        if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+          continue;
+        }
+
+        try {
+          const remote = await this.adapter.get<CreativeWorkspaceBoardSnapshot>(
+            boardId
+          );
+          if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+            continue;
+          }
+          const hydrated = await hydrateCreativeDocumentAssets(remote, {
+            assetSyncEnabled: this.assetSyncEnabled,
+            assetAdapter: this.assetAdapter,
+            ...(this.assetCache ? { cache: this.assetCache } : {}),
           });
-          this.frozenBoards.add(boardId);
-          this.persistConflicts();
-          this.notifyStatusListeners();
+          if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+            continue;
+          }
+          const board = documentToBoard(hydrated);
+          if (!board) {
+            continue;
+          }
+          const revision = getDocumentRevision(hydrated) ?? remoteRevision;
+          if (revision === undefined) {
+            continue;
+          }
+          if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+            continue;
+          }
+          const applied = await this.workspaceRepository.upsertBoardFromCloud(
+            board,
+            revision,
+            {
+              suppressOutboundSync: true,
+              shouldApply: () =>
+                !this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds),
+            }
+          );
+          if (!applied) {
+            continue;
+          }
+          if (this.shouldSkipColdStartBoard(boardId, coldStartSkipBoardIds)) {
+            continue;
+          }
+          this.revisions.set(boardId, revision);
+          this.persistRevisions();
+          this.clearAssetSyncError();
+        } catch (error) {
+          this.recordAssetSyncError(error);
+          console.warn(
+            '[CreativeDocumentCloudSync] remote hydrate failed:',
+            getSafeCreativeAssetSyncErrorMessage(error)
+          );
         }
-        continue;
       }
-
-      try {
-        const remote = await this.adapter.get<CreativeWorkspaceBoardSnapshot>(
-          boardId
-        );
-        const hydrated = await hydrateCreativeDocumentAssets(remote, {
-          assetSyncEnabled: this.assetSyncEnabled,
-          assetAdapter: this.assetAdapter,
-          ...(this.assetCache ? { cache: this.assetCache } : {}),
-        });
-        const board = documentToBoard(hydrated);
-        if (!board) {
-          continue;
-        }
-        const revision = getDocumentRevision(hydrated) ?? remoteRevision;
-        if (revision === undefined) {
-          continue;
-        }
-        await this.workspaceRepository.upsertBoardFromCloud(board, revision, {
-          suppressOutboundSync: true,
-        });
-        this.revisions.set(boardId, revision);
-        this.persistRevisions();
-        this.clearAssetSyncError();
-      } catch (error) {
-        this.recordAssetSyncError(error);
-        console.warn(
-          '[CreativeDocumentCloudSync] remote hydrate failed:',
-          getSafeCreativeAssetSyncErrorMessage(error)
-        );
-      }
+    } finally {
+      this.activeColdStartSkipSets.delete(coldStartSkipBoardIds);
     }
   }
 
@@ -1272,7 +1439,7 @@ export class CreativeDocumentCloudSyncService {
       error
     );
     this.frozenBoards.add(boardId);
-    this.conflicts.set(boardId, conflict);
+    this.conflicts.set(boardId, { ...conflict, source: 'flush' });
     this.persistConflicts();
     this.notifyStatusListeners();
     console.warn(
@@ -1300,9 +1467,8 @@ export class CreativeDocumentCloudSyncService {
 
 export const creativeDocumentCloudAdapter = new CreativeDocumentCloudAdapter();
 
-let creativeDocumentCloudSyncService:
-  | CreativeDocumentCloudSyncService
-  | null = null;
+let creativeDocumentCloudSyncService: CreativeDocumentCloudSyncService | null =
+  null;
 
 export function initializeCreativeDocumentCloudSync(
   options: CreativeDocumentCloudSyncInitializeOptions = {}
@@ -1311,22 +1477,25 @@ export function initializeCreativeDocumentCloudSync(
     return null;
   }
 
-  creativeDocumentCloudSyncService ||= new CreativeDocumentCloudSyncService(
-    options
-  );
+  const assetSyncEnabled =
+    options.assetSyncEnabled ?? getCreativeAssetSyncConfig().assetSyncEnabled;
+  if (creativeDocumentCloudSyncService) {
+    creativeDocumentCloudSyncService.setAssetSyncEnabled(assetSyncEnabled);
+  } else {
+    creativeDocumentCloudSyncService = new CreativeDocumentCloudSyncService({
+      ...options,
+      assetSyncEnabled,
+    });
+  }
   creativeDocumentCloudSyncService.start();
   return creativeDocumentCloudSyncService;
 }
 
-export function getCreativeDocumentCloudSyncServiceForTests():
-  | CreativeDocumentCloudSyncService
-  | null {
+export function getCreativeDocumentCloudSyncServiceForTests(): CreativeDocumentCloudSyncService | null {
   return creativeDocumentCloudSyncService;
 }
 
-export function getCreativeDocumentCloudSyncService():
-  | CreativeDocumentCloudSyncService
-  | null {
+export function getCreativeDocumentCloudSyncService(): CreativeDocumentCloudSyncService | null {
   return creativeDocumentCloudSyncService;
 }
 

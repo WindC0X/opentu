@@ -1,10 +1,11 @@
 /**
  * Debug Fetch Wrapper for Service Worker Internal Requests
- * 
+ *
  * Since SW internal fetch() calls don't trigger the SW's fetch event,
  * we need to manually log them for debugging purposes.
  */
 
+import { isCreativePrivateApiPath } from '../creative-asset-pass-through';
 import { sanitizeRequestBody } from './utils/sanitize-utils';
 
 interface FormDataField {
@@ -93,13 +94,14 @@ export function clearInternalFetchLogs() {
  * @param responseBody - The final response body content
  */
 export function updateLogResponseBody(logId: string, responseBody: string) {
-  const log = internalFetchLogs.find(l => l.id === logId);
+  const log = internalFetchLogs.find((l) => l.id === logId);
   if (log) {
     // Truncate if too long
-    log.responseBody = responseBody.length > 5000 
-      ? responseBody.substring(0, 5000) + '...(truncated)' 
-      : responseBody;
-    
+    log.responseBody =
+      responseBody.length > 5000
+        ? responseBody.substring(0, 5000) + '...(truncated)'
+        : responseBody;
+
     // Broadcast updated log
     if (broadcastCallback) {
       broadcastCallback({ ...log });
@@ -124,7 +126,7 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
  */
 async function parseFormData(formData: FormData): Promise<FormDataField[]> {
   const fields: FormDataField[] = [];
-  
+
   for (const [name, value] of (formData as any).entries()) {
     if (value instanceof Blob) {
       const field: FormDataField = {
@@ -133,7 +135,7 @@ async function parseFormData(formData: FormData): Promise<FormDataField[]> {
         isFile: true,
         mimeType: value.type,
       };
-      
+
       // For images, convert to data URL for preview
       if (value.type.startsWith('image/') && value.size < 5 * 1024 * 1024) {
         try {
@@ -142,23 +144,36 @@ async function parseFormData(formData: FormData): Promise<FormDataField[]> {
           // Ignore conversion errors
         }
       }
-      
+
       if (value instanceof File) {
         field.fileName = value.name;
       }
-      
+
       fields.push(field);
     } else {
       fields.push({
         name,
-        value: String(value).length > 500 
-          ? String(value).substring(0, 500) + '...' 
-          : String(value),
+        value:
+          String(value).length > 500
+            ? String(value).substring(0, 500) + '...'
+            : String(value),
       });
     }
   }
-  
+
   return fields;
+}
+
+function isPrivateCreativeDebugFetchUrl(url: string): boolean {
+  try {
+    const baseHref =
+      typeof globalThis.location?.href === 'string'
+        ? globalThis.location.href
+        : 'https://opentu.local/';
+    return isCreativePrivateApiPath(new URL(url, baseHref).pathname);
+  } catch {
+    return false;
+  }
 }
 
 // Extended Response type with debug log ID
@@ -169,7 +184,7 @@ export interface DebugResponse extends Response {
 /**
  * Wrapper for fetch that logs API calls
  * Use this for important API calls that need to be visible in debug panel
- * 
+ *
  * For streaming responses, you can update the final response body using:
  * updateLogResponseBody(response.__debugLogId, finalContent)
  */
@@ -187,17 +202,26 @@ export async function debugFetch(
   if (!debugModeEnabled) {
     return fetch(input, init) as Promise<DebugResponse>;
   }
-  
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+  const url =
+    typeof input === 'string'
+      ? input
+      : input instanceof URL
+      ? input.href
+      : input.url;
+  if (isPrivateCreativeDebugFetchUrl(url)) {
+    return fetch(input, init) as Promise<DebugResponse>;
+  }
+
   const method = init?.method || 'GET';
   const startTime = Date.now();
   const id = Math.random().toString(36).substring(2, 10);
-  
+
   // Parse request body for logging
   let requestBody: string | undefined;
   let formData: FormDataField[] | undefined;
   let base64Images: Base64Image[] | undefined;
-  
+
   if (init?.body) {
     if (init.body instanceof FormData) {
       // Parse FormData with image support
@@ -208,16 +232,15 @@ export async function debugFetch(
       }
     } else if (options?.logRequestBody) {
       try {
-        const bodyStr = typeof init.body === 'string' 
-          ? init.body 
-          : JSON.stringify(init.body);
-        
+        const bodyStr =
+          typeof init.body === 'string' ? init.body : JSON.stringify(init.body);
+
         // Extract base64 images BEFORE truncating
         const imageRegex = /data:image\/([^;]+);base64,([A-Za-z0-9+/=]+)/g;
         let match;
         let imageIndex = 0;
         base64Images = [];
-        
+
         while ((match = imageRegex.exec(bodyStr)) !== null) {
           const mimeType = `image/${match[1]}`;
           const base64Data = match[2];
@@ -227,99 +250,106 @@ export async function debugFetch(
               key: `image[${imageIndex}]`,
               dataUrl: `data:${mimeType};base64,${base64Data}`,
               mimeType,
-              size: Math.round(base64Data.length * 0.75 / 1024)
+              size: Math.round((base64Data.length * 0.75) / 1024),
             });
             imageIndex++;
           }
         }
-        
+
         if (base64Images.length === 0) {
           base64Images = undefined;
         }
-        
+
         // Truncate display body (replace base64 with placeholder for display)
         let displayBody = bodyStr.replace(
           /data:image\/([^;]+);base64,[A-Za-z0-9+/=]+/g,
           (_, mimeType) => `[📷 image/${mimeType}]`
         );
-        
+
         // 对请求体进行脱敏处理，过滤 API Key 等敏感信息
         displayBody = sanitizeRequestBody(displayBody);
-        
+
         // 对于 chat/completions 接口，不截断请求体（用于调试和成本追踪）
         const isChatEndpoint = url.includes('/chat/completions');
-        requestBody = !isChatEndpoint && displayBody.length > 3000 
-          ? displayBody.substring(0, 3000) + '...(truncated)' 
-          : displayBody;
+        requestBody =
+          !isChatEndpoint && displayBody.length > 3000
+            ? displayBody.substring(0, 3000) + '...(truncated)'
+            : displayBody;
       } catch {
         requestBody = '[unable to serialize body]';
       }
     }
   }
-  
+
   const log: DebugFetchLog = {
     id,
     timestamp: startTime,
     url,
     method,
     requestType: 'sw-internal',
-    details: options?.label || `SW Internal: ${method} ${new URL(url).pathname}`,
+    details:
+      options?.label || `SW Internal: ${method} ${new URL(url).pathname}`,
     requestBody,
     formData,
     base64Images,
     isStreaming: options?.isStreaming,
   };
-  
+
   // Add to logs
   internalFetchLogs.unshift(log);
   if (internalFetchLogs.length > MAX_INTERNAL_LOGS) {
     internalFetchLogs.pop();
   }
-  
+
   // Broadcast initial log
   if (broadcastCallback) {
     broadcastCallback({ ...log });
   }
-  
+
   try {
     const response = await fetch(input, init);
-    
+
     // Update log with response info
     log.status = response.status;
     log.statusText = response.statusText;
     log.duration = Date.now() - startTime;
-    
+
     // Log response body if requested (skip for streaming responses)
     if (options?.isStreaming) {
       // Mark as streaming - can't capture response body
-      log.responseBody = '[流式响应 - 数据通过 SSE/Stream 实时传输，无法捕获完整响应体]';
+      log.responseBody =
+        '[流式响应 - 数据通过 SSE/Stream 实时传输，无法捕获完整响应体]';
     } else if (options?.logResponseBody) {
       try {
         const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('application/json') || contentType.includes('text/')) {
+        if (
+          contentType.includes('application/json') ||
+          contentType.includes('text/')
+        ) {
           const clone = response.clone();
           const text = await clone.text();
-          log.responseBody = text.length > 2000 
-            ? text.substring(0, 2000) + '...(truncated)' 
-            : text;
+          log.responseBody =
+            text.length > 2000
+              ? text.substring(0, 2000) + '...(truncated)'
+              : text;
         }
       } catch {
         // Ignore response body read errors
       }
     }
-    
+
     // Broadcast updated log
     if (broadcastCallback) {
       broadcastCallback({ ...log });
     }
-    
+
     // Attach log ID to response for later updates (e.g., streaming final content)
     (response as DebugResponse).__debugLogId = id;
-    
+
     return response as DebugResponse;
   } catch (error: any) {
     const errorMessage = error.message || String(error);
-    
+
     // Parse network error type for better display
     let errorType = 'NETWORK_ERROR';
     if (errorMessage.includes('ERR_CONNECTION_CLOSED')) {
@@ -328,30 +358,39 @@ export async function debugFetch(
       errorType = 'ERR_CONNECTION_REFUSED';
     } else if (errorMessage.includes('ERR_CONNECTION_RESET')) {
       errorType = 'ERR_CONNECTION_RESET';
-    } else if (errorMessage.includes('ERR_CONNECTION_TIMED_OUT') || errorMessage.includes('timeout')) {
+    } else if (
+      errorMessage.includes('ERR_CONNECTION_TIMED_OUT') ||
+      errorMessage.includes('timeout')
+    ) {
       errorType = 'ERR_TIMEOUT';
     } else if (errorMessage.includes('ERR_NAME_NOT_RESOLVED')) {
       errorType = 'ERR_DNS_FAILED';
     } else if (errorMessage.includes('ERR_INTERNET_DISCONNECTED')) {
       errorType = 'ERR_OFFLINE';
-    } else if (errorMessage.includes('ERR_SSL') || errorMessage.includes('certificate')) {
+    } else if (
+      errorMessage.includes('ERR_SSL') ||
+      errorMessage.includes('certificate')
+    ) {
       errorType = 'ERR_SSL';
     } else if (errorMessage.includes('Failed to fetch')) {
       errorType = 'FETCH_FAILED';
-    } else if (errorMessage.includes('AbortError') || errorMessage.includes('aborted')) {
+    } else if (
+      errorMessage.includes('AbortError') ||
+      errorMessage.includes('aborted')
+    ) {
       errorType = 'ABORTED';
     }
-    
+
     log.status = 0; // Use 0 to indicate network error (no HTTP response)
     log.statusText = errorType;
     log.error = errorMessage;
     log.duration = Date.now() - startTime;
-    
+
     // Broadcast error log
     if (broadcastCallback) {
       broadcastCallback({ ...log });
     }
-    
+
     throw error;
   }
 }

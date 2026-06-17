@@ -22,7 +22,7 @@ import {
   ValidationError,
 } from '../types/workspace.types';
 import { workspaceStorageService } from './workspace-storage-service';
-import { logDebug, logWarning, logError } from './github-sync/sync-log-service';
+import { logDebug, logError } from './github-sync/sync-log-service';
 import { registerWorkspaceRuntime } from './workspace-runtime-bridge';
 
 /**
@@ -50,8 +50,10 @@ class WorkspaceService {
   private boards: Map<string, Board> = new Map();
   private state: WorkspaceState;
   private events$: Subject<WorkspaceEvent> = new Subject();
-  private initialized: boolean = false;
+  private initialized = false;
   private initializationPromise: Promise<void> | null = null;
+  private boardLocalMutationEpochs: Map<string, number> = new Map();
+  private activeBoardLocalMutations: Map<string, number> = new Map();
 
   private constructor() {
     this.state = {
@@ -267,15 +269,20 @@ class WorkspaceService {
     const boards = this.getBoardsInFolder(id);
     if (boards.length > 0) {
       await Promise.all(boards.map(async board => {
-        board.folderId = null;
-        // 同步更新所有相关的 Map
-        this.boards.set(board.id, board);
-        const metadata = this.boardMetadata.get(board.id);
-        if (metadata) {
-          metadata.folderId = null;
-          metadata.updatedAt = Date.now();
+        const finishLocalMutation = this.beginBoardLocalMutation(board.id);
+        try {
+          board.folderId = null;
+          // 同步更新所有相关的 Map
+          this.boards.set(board.id, board);
+          const metadata = this.boardMetadata.get(board.id);
+          if (metadata) {
+            metadata.folderId = null;
+            metadata.updatedAt = Date.now();
+          }
+          await workspaceStorageService.saveBoard(board);
+        } finally {
+          finishLocalMutation();
         }
-        await workspaceStorageService.saveBoard(board);
       }));
     }
 
@@ -295,12 +302,17 @@ class WorkspaceService {
     const boards = this.getBoardsInFolder(id);
     if (boards.length > 0) {
       await Promise.all(boards.map(async board => {
-        // 同步删除所有相关的 Map
-        this.boards.delete(board.id);
-        this.boardMetadata.delete(board.id);
-        this.loadedBoards.delete(board.id);
-        await workspaceStorageService.deleteBoard(board.id);
-        this.emit('boardDeleted', board);
+        const finishLocalMutation = this.beginBoardLocalMutation(board.id);
+        try {
+          // 同步删除所有相关的 Map
+          this.boards.delete(board.id);
+          this.boardMetadata.delete(board.id);
+          this.loadedBoards.delete(board.id);
+          await workspaceStorageService.deleteBoard(board.id);
+          this.emit('boardDeleted', board);
+        } finally {
+          finishLocalMutation();
+        }
       }));
     }
 
@@ -444,13 +456,18 @@ class WorkspaceService {
       updatedAt: now,
     };
 
-    this.boards.set(boardId, board);
-    // 同步更新 boardMetadata（switchBoard 依赖它验证画板是否存在）
-    const { elements, ...metadata } = board;
-    this.boardMetadata.set(boardId, metadata);
-    await workspaceStorageService.saveBoard(board);
+    const finishLocalMutation = this.beginBoardLocalMutation(boardId);
+    try {
+      this.boards.set(boardId, board);
+      // 同步更新 boardMetadata（switchBoard 依赖它验证画板是否存在）
+      const { elements, ...metadata } = board;
+      this.boardMetadata.set(boardId, metadata);
+      await workspaceStorageService.saveBoard(board);
 
-    this.emit('boardCreated', board);
+      this.emit('boardCreated', board);
+    } finally {
+      finishLocalMutation();
+    }
     return board;
   }
 
@@ -504,48 +521,45 @@ class WorkspaceService {
     }
 
     const trimmedName = name.trim();
-    board.name = trimmedName;
-    board.updatedAt = Date.now();
+    const finishLocalMutation = this.beginBoardLocalMutation(id);
+    try {
+      board.name = trimmedName;
+      board.updatedAt = Date.now();
 
-    this.boards.set(id, board);
-    // 同步更新 boardMetadata
-    const metadata = this.boardMetadata.get(id);
-    if (metadata) {
-      metadata.name = trimmedName;
-      metadata.updatedAt = board.updatedAt;
+      this.boards.set(id, board);
+      // 同步更新 boardMetadata
+      const metadata = this.boardMetadata.get(id);
+      if (metadata) {
+        metadata.name = trimmedName;
+        metadata.updatedAt = board.updatedAt;
+      }
+      await workspaceStorageService.saveBoard(board);
+      this.emit('boardUpdated', board);
+    } finally {
+      finishLocalMutation();
     }
-    await workspaceStorageService.saveBoard(board);
-    this.emit('boardUpdated', board);
   }
 
   async deleteBoard(id: string): Promise<void> {
     const board = this.boards.get(id);
     if (!board) throw new Error(`Board ${id} not found`);
+    const finishLocalMutation = this.beginBoardLocalMutation(id);
 
-    // 异步同步删除到远程回收站（不阻塞本地删除）
-    import('./github-sync/sync-engine').then(({ syncEngine }) => {
-      syncEngine.syncBoardDeletion(id).then((result) => {
-        if (!result.success) {
-          logWarning('Failed to sync deletion to remote', { error: result.error });
-        }
-      }).catch((err) => {
-        logWarning('Could not sync deletion to remote', { error: String(err) });
-      });
-    }).catch((err) => {
-      logWarning('Could not load syncEngine', { error: String(err) });
-    });
+    try {
+      // Clear current if this board is active
+      if (this.state.currentBoardId === id) {
+        this.state.currentBoardId = null;
+        this.saveState();
+      }
 
-    // Clear current if this board is active
-    if (this.state.currentBoardId === id) {
-      this.state.currentBoardId = null;
-      this.saveState();
+      this.boards.delete(id);
+      this.boardMetadata.delete(id);
+      this.loadedBoards.delete(id);
+      await workspaceStorageService.deleteBoard(id);
+      this.emit('boardDeleted', board);
+    } finally {
+      finishLocalMutation();
     }
-
-    this.boards.delete(id);
-    this.boardMetadata.delete(id);
-    this.loadedBoards.delete(id);
-    await workspaceStorageService.deleteBoard(id);
-    this.emit('boardDeleted', board);
   }
 
   async moveBoard(
@@ -577,7 +591,7 @@ class WorkspaceService {
     const folderSiblings = this.getFolderChildren(targetFolder);
 
     // Build ordered list of all items
-    let allItems: Array<{ id: string; type: 'board' | 'folder' }> = [
+    const allItems: Array<{ id: string; type: 'board' | 'folder' }> = [
       ...folderSiblings.map((f) => ({ id: f.id, type: 'folder' as const })),
       ...boardSiblings.map((b) => ({ id: b.id, type: 'board' as const })),
     ].sort((a, b) => {
@@ -615,16 +629,21 @@ class WorkspaceService {
       if (item.type === 'board') {
         const b = this.boards.get(item.id);
         if (b) {
-          b.order = i;
-          this.boards.set(item.id, b);
-          // 同步更新 boardMetadata
-          const bMeta = this.boardMetadata.get(item.id);
-          if (bMeta) {
-            bMeta.order = i;
-            bMeta.folderId = b.folderId;
-            bMeta.updatedAt = b.updatedAt;
+          const finishLocalMutation = this.beginBoardLocalMutation(b.id);
+          try {
+            b.order = i;
+            this.boards.set(item.id, b);
+            // 同步更新 boardMetadata
+            const bMeta = this.boardMetadata.get(item.id);
+            if (bMeta) {
+              bMeta.order = i;
+              bMeta.folderId = b.folderId;
+              bMeta.updatedAt = b.updatedAt;
+            }
+            await workspaceStorageService.saveBoard(b);
+          } finally {
+            finishLocalMutation();
           }
-          await workspaceStorageService.saveBoard(b);
         }
       } else {
         const f = this.folders.get(item.id);
@@ -687,7 +706,7 @@ class WorkspaceService {
     const boardSiblings = this.getBoardsInFolder(targetParentId);
 
     // Build ordered list of all items
-    let allItems: Array<{ id: string; type: 'board' | 'folder' }> = [
+    const allItems: Array<{ id: string; type: 'board' | 'folder' }> = [
       ...folderSiblings.map((f) => ({ id: f.id, type: 'folder' as const })),
       ...boardSiblings.map((b) => ({ id: b.id, type: 'board' as const })),
     ].sort((a, b) => {
@@ -725,16 +744,21 @@ class WorkspaceService {
       if (item.type === 'board') {
         const b = this.boards.get(item.id);
         if (b) {
-          b.order = i;
-          this.boards.set(item.id, b);
-          // 同步更新 boardMetadata
-          const bMeta = this.boardMetadata.get(item.id);
-          if (bMeta) {
-            bMeta.order = i;
-            bMeta.folderId = b.folderId;
-            bMeta.updatedAt = b.updatedAt;
+          const finishLocalMutation = this.beginBoardLocalMutation(b.id);
+          try {
+            b.order = i;
+            this.boards.set(item.id, b);
+            // 同步更新 boardMetadata
+            const bMeta = this.boardMetadata.get(item.id);
+            if (bMeta) {
+              bMeta.order = i;
+              bMeta.folderId = b.folderId;
+              bMeta.updatedAt = b.updatedAt;
+            }
+            await workspaceStorageService.saveBoard(b);
+          } finally {
+            finishLocalMutation();
           }
-          await workspaceStorageService.saveBoard(b);
         }
       } else {
         const f = this.folders.get(item.id);
@@ -762,16 +786,21 @@ class WorkspaceService {
       if (item.type === 'board') {
         const board = this.boards.get(item.id);
         if (board) {
-          board.order = item.order;
-          board.updatedAt = now;
-          this.boards.set(item.id, board);
-          // 同步更新 boardMetadata
-          const bMeta = this.boardMetadata.get(item.id);
-          if (bMeta) {
-            bMeta.order = item.order;
-            bMeta.updatedAt = now;
+          const finishLocalMutation = this.beginBoardLocalMutation(board.id);
+          try {
+            board.order = item.order;
+            board.updatedAt = now;
+            this.boards.set(item.id, board);
+            // 同步更新 boardMetadata
+            const bMeta = this.boardMetadata.get(item.id);
+            if (bMeta) {
+              bMeta.order = item.order;
+              bMeta.updatedAt = now;
+            }
+            await workspaceStorageService.saveBoard(board);
+          } finally {
+            finishLocalMutation();
           }
-          await workspaceStorageService.saveBoard(board);
         }
       } else {
         const folder = this.folders.get(item.id);
@@ -937,38 +966,56 @@ class WorkspaceService {
 
   async saveBoard(boardId: string, data: BoardChangeData): Promise<void> {
     // 优先从已加载的画板获取
-    let board = this.loadedBoards.get(boardId) || this.boards.get(boardId);
+    const board = this.loadedBoards.get(boardId) || this.boards.get(boardId);
     if (!board) throw new Error(`Board ${boardId} not found`);
+    const finishLocalMutation = this.beginBoardLocalMutation(boardId);
 
-    board.elements = data.children;
-    board.viewport = data.viewport;
-    board.theme = data.theme;
-    board.updatedAt = Date.now();
+    try {
+      board.elements = data.children;
+      board.viewport = data.viewport;
+      board.theme = data.theme;
+      board.updatedAt = Date.now();
 
-    // 更新所有相关的 Map
-    this.loadedBoards.set(boardId, board);
-    this.boards.set(boardId, board);
-    
-    // 更新元数据
-    const metadata = this.boardMetadata.get(boardId);
-    if (metadata) {
-      metadata.viewport = data.viewport;
-      metadata.theme = data.theme;
-      metadata.updatedAt = board.updatedAt;
+      // 更新所有相关的 Map
+      this.loadedBoards.set(boardId, board);
+      this.boards.set(boardId, board);
+
+      // 更新元数据
+      const metadata = this.boardMetadata.get(boardId);
+      if (metadata) {
+        metadata.viewport = data.viewport;
+        metadata.theme = data.theme;
+        metadata.updatedAt = board.updatedAt;
+      }
+
+      await workspaceStorageService.saveBoard(board);
+
+      // 触发 boardUpdated 事件，让同步引擎感知变更
+      // 注意：之前这里没有 emit，导致画布变更不会触发自动同步
+      this.emit('boardUpdated', board);
+    } finally {
+      finishLocalMutation();
     }
-
-    await workspaceStorageService.saveBoard(board);
-    
-    // 触发 boardUpdated 事件，让同步引擎感知变更
-    // 注意：之前这里没有 emit，导致画布变更不会触发自动同步
-    this.emit('boardUpdated', board);
   }
 
   async upsertBoardFromCloud(
     board: Board,
-    options: { suppressOutboundSync?: boolean } = {}
-  ): Promise<void> {
+    options: {
+      suppressOutboundSync?: boolean;
+      shouldApply?: () => boolean;
+    } = {}
+  ): Promise<boolean> {
     await this.ensureInitialized();
+    if (options.shouldApply?.() === false) {
+      return false;
+    }
+    if (this.hasBoardLocalMutationInFlight(board.id)) {
+      return false;
+    }
+    const startLocalMutationEpoch = this.getBoardLocalMutationEpoch(board.id);
+    const previousLoadedBoard = this.loadedBoards.get(board.id);
+    const previousBoard = this.boards.get(board.id);
+    const previousMetadata = this.boardMetadata.get(board.id);
 
     const now = Date.now();
     const existing = this.loadedBoards.get(board.id) || this.boards.get(board.id);
@@ -987,18 +1034,49 @@ class WorkspaceService {
           : existing?.createdAt ?? now,
       updatedAt: typeof board.updatedAt === 'number' ? board.updatedAt : now,
     };
+    const { elements, ...metadata } = nextBoard;
+    const nextMetadata = metadata;
+
+    if (
+      options.shouldApply?.() === false ||
+      this.hasBoardLocalMutationInFlight(nextBoard.id) ||
+      this.getBoardLocalMutationEpoch(nextBoard.id) !== startLocalMutationEpoch
+    ) {
+      return false;
+    }
+
+    // Stage the imported board until the final race gate passes. Publishing to
+    // the public maps before this point lets a stale remote board become
+    // visible (and previously durable) even when a concurrent local mutation
+    // wins the race.
+    await workspaceStorageService.saveBoard(nextBoard);
+    if (
+      options.shouldApply?.() === false ||
+      this.hasBoardLocalMutationInFlight(nextBoard.id) ||
+      this.getBoardLocalMutationEpoch(nextBoard.id) !== startLocalMutationEpoch
+    ) {
+      await this.rollbackSkippedCloudUpsert(
+        nextBoard.id,
+        nextBoard,
+        nextMetadata,
+        startLocalMutationEpoch,
+        previousLoadedBoard,
+        previousBoard,
+        previousMetadata
+      );
+      return false;
+    }
 
     this.loadedBoards.set(nextBoard.id, nextBoard);
     this.boards.set(nextBoard.id, nextBoard);
-    const { elements, ...metadata } = nextBoard;
-    this.boardMetadata.set(nextBoard.id, metadata);
-    await workspaceStorageService.saveBoard(nextBoard);
+    this.boardMetadata.set(nextBoard.id, nextMetadata);
 
     if (options.suppressOutboundSync) {
       this.emit('treeChanged');
-      return;
+      return true;
     }
     this.emit(existing ? 'boardUpdated' : 'boardCreated', nextBoard);
+    return true;
   }
 
   /**
@@ -1269,6 +1347,105 @@ class WorkspaceService {
     }).catch(err => {
       logError('Failed to import sync modules', err instanceof Error ? err : new Error(String(err)));
     });
+  }
+
+  private markBoardLocalMutation(boardId: string): void {
+    this.boardLocalMutationEpochs.set(
+      boardId,
+      this.getBoardLocalMutationEpoch(boardId) + 1
+    );
+  }
+
+  private beginBoardLocalMutation(boardId: string): () => void {
+    this.markBoardLocalMutation(boardId);
+    this.activeBoardLocalMutations.set(
+      boardId,
+      (this.activeBoardLocalMutations.get(boardId) ?? 0) + 1
+    );
+
+    let finished = false;
+    return () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      const remaining =
+        (this.activeBoardLocalMutations.get(boardId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.activeBoardLocalMutations.set(boardId, remaining);
+      } else {
+        this.activeBoardLocalMutations.delete(boardId);
+      }
+    };
+  }
+
+  private hasBoardLocalMutationInFlight(boardId: string): boolean {
+    return (this.activeBoardLocalMutations.get(boardId) ?? 0) > 0;
+  }
+
+  private getBoardLocalMutationEpoch(boardId: string): number {
+    return this.boardLocalMutationEpochs.get(boardId) ?? 0;
+  }
+
+  private async rollbackSkippedCloudUpsert(
+    boardId: string,
+    importedBoard: Board,
+    importedMetadata: BoardMetadata,
+    startLocalMutationEpoch: number,
+    previousLoadedBoard: Board | undefined,
+    previousBoard: Board | undefined,
+    previousMetadata: BoardMetadata | undefined
+  ): Promise<void> {
+    const localMutationOccurred =
+      this.getBoardLocalMutationEpoch(boardId) !== startLocalMutationEpoch;
+    const currentBoard =
+      this.loadedBoards.get(boardId) || this.boards.get(boardId);
+
+    if (localMutationOccurred) {
+      if (currentBoard) {
+        const { elements: _elements, ...currentMetadata } = currentBoard;
+        this.loadedBoards.set(boardId, currentBoard);
+        this.boards.set(boardId, currentBoard);
+        this.boardMetadata.set(boardId, currentMetadata);
+        await workspaceStorageService.saveBoard(currentBoard);
+        return;
+      }
+      this.loadedBoards.delete(boardId);
+      this.boards.delete(boardId);
+      this.boardMetadata.delete(boardId);
+      await workspaceStorageService.deleteBoard(boardId);
+      return;
+    }
+
+    if (this.loadedBoards.get(boardId) === importedBoard) {
+      if (previousLoadedBoard) {
+        this.loadedBoards.set(boardId, previousLoadedBoard);
+      } else {
+        this.loadedBoards.delete(boardId);
+      }
+    }
+    if (this.boards.get(boardId) === importedBoard) {
+      if (previousBoard) {
+        this.boards.set(boardId, previousBoard);
+      } else {
+        this.boards.delete(boardId);
+      }
+    }
+    if (this.boardMetadata.get(boardId) === importedMetadata) {
+      if (previousMetadata) {
+        this.boardMetadata.set(boardId, previousMetadata);
+      } else {
+        this.boardMetadata.delete(boardId);
+      }
+    }
+
+    const restoredBoard =
+      this.loadedBoards.get(boardId) || this.boards.get(boardId);
+    if (restoredBoard) {
+      await workspaceStorageService.saveBoard(restoredBoard);
+    } else {
+      await workspaceStorageService.deleteBoard(boardId);
+    }
   }
 
   // ========== Initialization ==========

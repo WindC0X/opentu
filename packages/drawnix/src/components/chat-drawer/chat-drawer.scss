@@ -37,9 +37,7 @@ $drawer-input-height: 160px;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition:
-    transform $animation-duration ease-out,
-    opacity 160ms ease-out,
+  transition: transform $animation-duration ease-out, opacity 160ms ease-out,
     visibility 0s linear $animation-duration;
   color-scheme: light; // 强制光照模式配色，防止紫色干扰
 
@@ -48,9 +46,7 @@ $drawer-input-height: 160px;
     opacity: 1;
     visibility: visible;
     pointer-events: auto;
-    transition:
-      transform $animation-duration ease-out,
-      opacity 160ms ease-out;
+    transition: transform $animation-duration ease-out, opacity 160ms ease-out;
   }
 
   &--dragging {
@@ -194,6 +190,17 @@ $drawer-input-height: 160px;
     height: calc(100vh - #{$drawer-header-height});
   }
 
+  &__send-error {
+    margin: $spacing-sm $spacing-lg 0;
+    padding: 8px 10px;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 8px;
+    background: rgba(255, 251, 235, 0.96);
+    color: #92400e;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
   &__close-btn {
     width: 32px;
     height: 32px;
@@ -225,9 +232,7 @@ $drawer-input-height: 160px;
   right: var(--aitu-toolbar-right-dock-width, 0px);
 
   &.chat-drawer--open {
-    box-shadow:
-      100vw 0 0 100vw #ffffff,
-      -4px 0 16px rgba(0, 0, 0, 0.08);
+    box-shadow: 100vw 0 0 100vw #ffffff, -4px 0 16px rgba(0, 0, 0, 0.08);
   }
 }
 

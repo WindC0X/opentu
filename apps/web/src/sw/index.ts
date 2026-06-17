@@ -42,7 +42,7 @@ import {
   shouldUseOriginFirstPreload,
   shouldUseAppShellStrategy,
 } from './app-shell-routing';
-import { isCreativeAssetApiPath } from './creative-asset-pass-through';
+import { isCreativePrivateApiPath } from './creative-asset-pass-through';
 
 // fix: self redeclaration error and type casting
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -4056,10 +4056,7 @@ async function notifyImageCached(
 function shouldNotifyCacheFailure(url: string): boolean {
   const now = Date.now();
   const lastNotifiedAt = cacheFailureNotificationCache.get(url);
-  if (
-    lastNotifiedAt &&
-    now - lastNotifiedAt < CACHE_FAILURE_NOTIFICATION_TTL
-  ) {
+  if (lastNotifiedAt && now - lastNotifiedAt < CACHE_FAILURE_NOTIFICATION_TTL) {
     return false;
   }
 
@@ -4246,7 +4243,10 @@ sw.addEventListener('fetch', (event: FetchEvent) => {
     return;
   }
 
-  if (url.origin === location.origin && isCreativeAssetApiPath(url.pathname)) {
+  if (
+    url.origin === location.origin &&
+    isCreativePrivateApiPath(url.pathname)
+  ) {
     return;
   }
 
@@ -4871,10 +4871,8 @@ async function fetchQuick(
   request: Request,
   fetchOptions: any = {}
 ): Promise<Response> {
-  const {
-    timeoutMs = DEFAULT_QUICK_FETCH_TIMEOUT_MS,
-    ...boundedFetchOptions
-  } = fetchOptions || {};
+  const { timeoutMs = DEFAULT_QUICK_FETCH_TIMEOUT_MS, ...boundedFetchOptions } =
+    fetchOptions || {};
 
   if (
     boundedFetchOptions.signal ||

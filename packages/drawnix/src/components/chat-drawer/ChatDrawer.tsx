@@ -25,6 +25,7 @@ import { useChatHandler } from '../../hooks/useChatHandler';
 import {
   createModelRef,
   geminiSettings,
+  settingsManager,
   resolveInvocationRoute,
   type ModelRef,
 } from '../../utils/settings-manager';
@@ -45,6 +46,8 @@ import { useTextSelection } from '../../hooks/useTextSelection';
 
 import { analytics } from '../../utils/posthog-analytics';
 import { HoverTip } from '../shared';
+import { isCreativeEmbeddedMode } from '../../services/creative-mode';
+import { getChatDrawerSendReadiness } from './chat-drawer-readiness';
 import './chat-drawer.scss';
 
 const ChatMessagesArea = React.lazy(() => import('./ChatMessagesArea'));
@@ -152,6 +155,7 @@ export const ChatDrawer = forwardRef<ChatDrawerRef, ChatDrawerProps>(
     const [retryingWorkflowId, setRetryingWorkflowId] = useState<string | null>(
       null
     );
+    const [sendError, setSendError] = useState<string | null>(null);
 
     // 获取重试执行器和选中内容（从 Context），以及状态同步方法
     const {
@@ -786,21 +790,32 @@ export const ChatDrawer = forwardRef<ChatDrawerRef, ChatDrawerProps>(
             textLength: msg.parts
               .filter((part) => part.type === 'text')
               .reduce(
-                (total, part) => total + String((part as any).text || '').length,
+                (total, part) =>
+                  total + String((part as any).text || '').length,
                 0
               ),
           });
-          // Check if API key is configured
-          const settings = geminiSettings.get();
-          if (!settings?.apiKey) {
-            // Store message for sending after API key is configured
-            pendingMessageRef.current = msg;
-            // Open settings dialog to configure API key
-            setAppState({ ...appState, openSettings: true });
+          const isEmbedded = isCreativeEmbeddedMode();
+          const routeModel = sessionModelRef || sessionModel || null;
+          const readiness = getChatDrawerSendReadiness({
+            isEmbedded,
+            hasManagedSessionRoute:
+              settingsManager.hasInvocationRouteCredentials('text', routeModel),
+            hasLocalApiKey: Boolean(geminiSettings.get()?.apiKey),
+          });
+
+          if (!readiness.ready) {
+            setSendError(readiness.message || '当前聊天模型不可用');
+            if (readiness.shouldOpenSettings) {
+              pendingMessageRef.current = msg;
+              setAppState({ ...appState, openSettings: true });
+            } else {
+              pendingMessageRef.current = null;
+            }
             return;
           }
 
-          // Clear pending message since we're processing it
+          setSendError(null);
           pendingMessageRef.current = null;
 
           if (!activeSessionId) {
@@ -818,7 +833,14 @@ export const ChatDrawer = forwardRef<ChatDrawerRef, ChatDrawerProps>(
           pendingMessageRef.current = msg;
         }
       },
-      [activeSessionId, chatHandler, appState, setAppState]
+      [
+        activeSessionId,
+        chatHandler,
+        appState,
+        setAppState,
+        sessionModel,
+        sessionModelRef,
+      ]
     );
 
     // 发送工作流消息（创建新对话）
@@ -1444,6 +1466,15 @@ export const ChatDrawer = forwardRef<ChatDrawerRef, ChatDrawerProps>(
             )}
 
             <div className="chat-drawer__content">
+              {sendError && (
+                <div
+                  className="chat-drawer__send-error"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {sendError}
+                </div>
+              )}
               {shouldRenderChat && (
                 <Suspense
                   fallback={
