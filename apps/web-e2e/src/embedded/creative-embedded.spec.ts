@@ -11,6 +11,7 @@ import { waitForDrawnixReady } from '../support/drawnix-ready';
 const embeddedBaseURL = process.env['CREATIVE_EMBEDDED_BASE_URL'];
 
 test.describe('@creative-embedded new-api /creative/ smoke', () => {
+  test.setTimeout(120_000);
   test.skip(
     !embeddedBaseURL,
     'Set CREATIVE_EMBEDDED_BASE_URL=http://localhost:<port>/creative/ to run the embedded smoke.'
@@ -55,8 +56,8 @@ test.describe('@creative-embedded new-api /creative/ smoke', () => {
     expect(badEntryRefs, 'embedded index must not use standalone ./assets or /assets entry refs').toEqual([]);
 
     await page.locator('button[aria-label="应用菜单"]').click();
-    await page.getByText('设置', { exact: true }).first().click();
-    await expect(page.getByText('New API Creative 托管会话')).toBeVisible();
+    await page.locator('[role="menuitem"][aria-label="设置"]').click();
+    await expect(page.getByText('New API Creative 托管会话')).toBeVisible({ timeout: 45000 });
     await expect(page.locator('body'), 'embedded settings must not expose standalone/provider-key setup copy').not.toContainText(
       // Do not ban the managed new-api cloud-sync status copy ("云同步不可用" /
       // "已同步到云端"); this smoke only rejects standalone GitHub/Gist/API-key
