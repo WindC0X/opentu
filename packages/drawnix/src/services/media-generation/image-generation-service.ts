@@ -32,6 +32,7 @@ import {
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
+  isCreativeManagedModel,
 } from '../../constants/model-config';
 
 function buildStoredImageAdapterParams(
@@ -68,7 +69,7 @@ function buildStoredImageTaskParams(
   options: ImageGenerationOptions,
   schemaBacked = hasCreativeUserParams(options.userParams)
 ) {
-  const userParams = options.userParams || (schemaBacked ? {} : undefined);
+  const userParams = options.userParams ?? (schemaBacked ? {} : undefined);
   return {
     prompt,
     model: options.model,
@@ -146,9 +147,14 @@ export async function generateImage(
   const now = Date.now();
   const schemaBacked =
     isCreativeManagedImageTask(effectiveOptions) ||
+    isCreativeManagedModel(
+      effectiveOptions.model || null,
+      effectiveOptions.modelRef || null
+    ) ||
     hasCreativeUserParams(effectiveOptions.userParams) ||
     (!!effectiveOptions.model && hasRuntimeParameterSchema(effectiveOptions.model));
-  const userParams = effectiveOptions.userParams || (schemaBacked ? {} : undefined);
+  const userParams =
+    effectiveOptions.userParams ?? (schemaBacked ? {} : undefined);
   const persistedTaskParams = buildStoredImageTaskParams(
     sanitizedParams.prompt,
     effectiveOptions,

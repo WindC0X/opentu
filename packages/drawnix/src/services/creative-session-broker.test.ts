@@ -17,6 +17,14 @@ import type {
   ProviderCatalog,
   ProviderProfile,
 } from '../utils/settings-manager';
+import {
+  initializeCreativeManagedSessionBroker,
+  resetCreativeManagedSessionBrokerForTests,
+} from './creative-session-broker';
+import {
+  getCreativeDefaultVisibleModels,
+  getCreativeMoreModels,
+} from './creative-display-policy';
 
 const mocks = vi.hoisted(() => ({
   waitForInitialization: vi.fn(async () => undefined),
@@ -63,15 +71,6 @@ vi.mock('../utils/runtime-model-discovery', () => ({
   refreshRuntimeModelDiscoveryFromSettings:
     mocks.refreshRuntimeModelDiscoveryFromSettings,
 }));
-
-import {
-  initializeCreativeManagedSessionBroker,
-  resetCreativeManagedSessionBrokerForTests,
-} from './creative-session-broker';
-import {
-  getCreativeDefaultVisibleModels,
-  getCreativeMoreModels,
-} from './creative-display-policy';
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -439,6 +438,7 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     const model = result.models?.[0];
     expect(model).toMatchObject({
       id: 'grsai:gpt-image-2:generate',
+      creativeManaged: true,
       providerModelId: 'gpt-image-2',
       priceModelId: 'gpt-image-2-price',
       recommendedScore: 87,
@@ -450,12 +450,67 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     const catalog = getCreativeManagedCatalog(getFirstProviderCatalogsUpdate());
     expect(catalog.discoveredModels[0]).toMatchObject({
       id: 'grsai:gpt-image-2:generate',
+      creativeManaged: true,
       providerModelId: 'gpt-image-2',
       priceModelId: 'gpt-image-2-price',
     });
     expect(catalog.discoveredModels[0]?.parameterSchema?.[0]).toMatchObject({
       id: 'size',
       runtimeSchema: true,
+    });
+  });
+
+  it('keeps Creative managed identity when schema is empty or hidden-only', async () => {
+    const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-empty-schema',
+              nonce: 'nonce-empty-schema',
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({
+          data: [
+            {
+              id: 'mock:gpt-image-2:empty-schema',
+              providerModelId: 'gpt-image-2',
+              label: 'Empty Schema Image',
+              type: 'image',
+              parameterSchema: [
+                {
+                  id: 'server_only',
+                  label: 'Server Only',
+                  type: 'string',
+                  hidden: true,
+                },
+              ],
+            },
+          ],
+        });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    }) as unknown as typeof fetch;
+
+    const result = await initializeCreativeManagedSessionBroker(fetcher);
+
+    expect(result.status).toBe('ready');
+    expect(result.models?.[0]).toMatchObject({
+      id: 'mock:gpt-image-2:empty-schema',
+      sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+      creativeManaged: true,
+      parameterSchema: undefined,
+    });
+
+    const catalog = getCreativeManagedCatalog(getFirstProviderCatalogsUpdate());
+    expect(catalog.discoveredModels[0]).toMatchObject({
+      id: 'mock:gpt-image-2:empty-schema',
+      creativeManaged: true,
+      parameterSchema: undefined,
     });
   });
 

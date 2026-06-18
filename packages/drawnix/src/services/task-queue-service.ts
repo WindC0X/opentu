@@ -40,6 +40,7 @@ import {
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
+  isCreativeManagedModel,
 } from '../constants/model-config';
 import { cacheRemoteUrl } from './media-executor/fallback-utils';
 import {
@@ -926,9 +927,10 @@ class TaskQueueService {
             | undefined;
           const schemaBacked =
             isCreativeManagedImageTask(task.params) ||
+            isCreativeManagedModel(effectiveModel || null, effectiveModelRef) ||
             hasCreativeUserParams(rawUserParams) ||
             hasRuntimeParameterSchema(effectiveModel || '');
-          const userParams = rawUserParams || (schemaBacked ? {} : undefined);
+          const userParams = rawUserParams ?? (schemaBacked ? {} : undefined);
           // 从 params.params 中提取额外参数，并补齐新图像契约字段。
           // Schema-backed Creative bindings must keep userParams separate and
           // must not rehydrate legacy adapter params during retries/resume.

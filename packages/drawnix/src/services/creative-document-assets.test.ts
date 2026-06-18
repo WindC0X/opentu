@@ -361,6 +361,44 @@ describe('CreativeAssetCloudAdapter', () => {
     );
   });
 
+  it('uses an injected fetcher without rebinding it to the browser owner', async () => {
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-injected-fetch',
+      nonce: 'nonce-injected-fetch',
+    });
+    const browserOwner = typeof window !== 'undefined' ? window : globalThis;
+    const fetchContexts: unknown[] = [];
+    const fetcher = vi.fn<typeof fetch>(async function (
+      this: unknown,
+      _input,
+      _init
+    ) {
+      fetchContexts.push(this);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            asset: {
+              id: 'asset_injected_fetch',
+              url: '/creative/api/assets/asset_injected_fetch/content',
+            },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    });
+    const adapter = new CreativeAssetCloudAdapter(fetcher);
+
+    await expect(
+      adapter.upload(new Blob(['image-bytes'], { type: 'image/png' }), {
+        mediaType: 'image',
+      })
+    ).resolves.toBe('/creative/api/assets/asset_injected_fetch/content');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetchContexts).toEqual([adapter]);
+    expect(fetchContexts[0]).not.toBe(browserOwner);
+  });
+
   it('fails unsafe asset uploads locally when session auth material is missing', async () => {
     const fetcher = vi.fn(async () => new Response('{}', { status: 200 }));
     const adapter = new CreativeAssetCloudAdapter(
@@ -373,5 +411,138 @@ describe('CreativeAssetCloudAdapter', () => {
       })
     ).rejects.toThrow(/Creative.*CSRF.*nonce/i);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('binds the default browser fetcher when uploading assets', async () => {
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-default-fetch-upload',
+      nonce: 'nonce-default-fetch-upload',
+    });
+    const owner = typeof window !== 'undefined' ? window : globalThis;
+    const originalGlobalFetch = globalThis.fetch;
+    const originalWindowFetch =
+      typeof window !== 'undefined' ? window.fetch : undefined;
+    const fetchContexts: unknown[] = [];
+    const fetcher = vi.fn<typeof fetch>(async function (
+      this: unknown,
+      _input,
+      _init
+    ) {
+      fetchContexts.push(this);
+      if (this !== owner) {
+        throw new TypeError('Illegal invocation');
+      }
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            asset: {
+              id: 'asset_default_fetch_upload',
+              url: '/creative/api/assets/asset_default_fetch_upload/content',
+            },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    });
+
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: fetcher,
+    });
+    if (typeof window !== 'undefined') {
+      Object.defineProperty(window, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: fetcher,
+      });
+    }
+
+    try {
+      const adapter = new CreativeAssetCloudAdapter();
+
+      await expect(
+        adapter.upload(new Blob(['image-bytes'], { type: 'image/png' }), {
+          mediaType: 'image',
+        })
+      ).resolves.toBe(
+        '/creative/api/assets/asset_default_fetch_upload/content'
+      );
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetchContexts).toEqual([owner]);
+    } finally {
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: originalGlobalFetch,
+      });
+      if (typeof window !== 'undefined') {
+        Object.defineProperty(window, 'fetch', {
+          configurable: true,
+          writable: true,
+          value: originalWindowFetch,
+        });
+      }
+    }
+  });
+
+  it('binds the default browser fetcher when downloading assets', async () => {
+    const owner = typeof window !== 'undefined' ? window : globalThis;
+    const originalGlobalFetch = globalThis.fetch;
+    const originalWindowFetch =
+      typeof window !== 'undefined' ? window.fetch : undefined;
+    const fetchContexts: unknown[] = [];
+    const fetcher = vi.fn<typeof fetch>(async function (
+      this: unknown,
+      _input,
+      _init
+    ) {
+      fetchContexts.push(this);
+      if (this !== owner) {
+        throw new TypeError('Illegal invocation');
+      }
+      return new Response('asset-bytes', {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      });
+    });
+
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: fetcher,
+    });
+    if (typeof window !== 'undefined') {
+      Object.defineProperty(window, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: fetcher,
+      });
+    }
+
+    try {
+      const adapter = new CreativeAssetCloudAdapter();
+
+      const blob = await adapter.download(
+        '/creative/api/assets/asset_default_fetch_download/content'
+      );
+      await expect(blob.text()).resolves.toBe('asset-bytes');
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetchContexts).toEqual([owner]);
+    } finally {
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: originalGlobalFetch,
+      });
+      if (typeof window !== 'undefined') {
+        Object.defineProperty(window, 'fetch', {
+          configurable: true,
+          writable: true,
+          value: originalWindowFetch,
+        });
+      }
+    }
   });
 });

@@ -627,6 +627,34 @@ describe('Media Executor Module', () => {
       const { FallbackMediaExecutor } = await import(
         '../media-executor/fallback-executor'
       );
+      const {
+        ModelVendor,
+        normalizeCreativeParameterSchema,
+        setRuntimeModelConfigs,
+      } = await import('../../constants/model-config');
+      setRuntimeModelConfigs([
+        {
+          id: 'mock:gpt-image-2:preview',
+          label: 'Mock GPT Image 2',
+          type: 'image',
+          vendor: ModelVendor.OTHER,
+          sourceProfileId: 'new-api-creative',
+          creativeManaged: true,
+          parameterSchema: normalizeCreativeParameterSchema(
+            [
+              {
+                id: 'size',
+                label: '尺寸',
+                type: 'enum',
+                options: [{ value: '1024x1024', label: '1024×1024' }],
+              },
+              { id: 'seed', label: 'Seed', type: 'integer' },
+            ],
+            'image',
+            'mock:gpt-image-2:preview'
+          ),
+        },
+      ]);
       const executor = new FallbackMediaExecutor();
 
       await executor.generateImage({
@@ -641,15 +669,253 @@ describe('Media Executor Module', () => {
       expect(resolveAdapterForInvocation).not.toHaveBeenCalled();
       expect(cacheMediaFromBlob).toHaveBeenCalledWith(
         '/__aitu_cache__/image/creative-task-1.png',
-        expect.any(Blob),
+        expect.any(Object),
         'image',
         expect.objectContaining({ taskId: 'creative-task-1' })
       );
       expect(completeTask).toHaveBeenCalledWith('task-schema', {
         url: '/__aitu_cache__/image/creative-task-1.png',
         format: 'png',
-        size: 9,
+        size: expect.any(Number),
       });
+    }, 15000);
+
+    it('routes Creative managed image models with empty schema through the managed task endpoint', async () => {
+      const completeTask = vi.fn(async () => undefined);
+      const updateStatus = vi.fn(async () => undefined);
+      const cacheMediaFromBlob = vi.fn(async () => undefined);
+      const resolveAdapterForInvocation = vi.fn();
+      const fetchMock = vi.fn(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.endsWith('/creative/relay/v1/images/tasks')) {
+            expect(init?.method).toBe('POST');
+            const body = JSON.parse(String(init?.body));
+            expect(body).toEqual({
+              model: 'mock:gpt-image-2:empty-schema',
+              prompt: 'A cat',
+              userParams: {},
+            });
+            return new Response(
+              JSON.stringify({
+                task_id: 'creative-task-empty-schema',
+                status: 'succeeded',
+                result: {
+                  url: '/creative/relay/v1/images/tasks/creative-task-empty-schema/content',
+                  mimeType: 'image/png',
+                },
+              }),
+              { status: 202, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          if (
+            url.endsWith(
+              '/creative/relay/v1/images/tasks/creative-task-empty-schema/content'
+            )
+          ) {
+            return new Response(new Blob(['png-bytes'], { type: 'image/png' }), {
+              status: 200,
+              headers: { 'Content-Type': 'image/png' },
+            });
+          }
+          throw new Error(`unexpected fetch ${url}`);
+        }
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      vi.doMock('../creative-mode', () => ({
+        CREATIVE_MANAGED_PROFILE_ID: 'new-api-creative',
+        CREATIVE_RELAY_BASE_URL: '/creative/relay/v1',
+        isCreativeEmbeddedMode: () => false,
+        requireCreativeSessionAuthHeaders: () => ({
+          'X-Creative-CSRF': 'csrf-token',
+          'X-Creative-Nonce': 'nonce-token',
+        }),
+      }));
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
+      }));
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          updateStatus,
+          completeTask,
+          failTask: vi.fn(async () => undefined),
+        },
+      }));
+      vi.doMock('../unified-cache-service', () => ({
+        unifiedCacheService: {
+          getImageForAI: vi.fn(),
+          isCached: vi.fn(async () => false),
+          cacheMediaFromBlob,
+        },
+      }));
+      vi.doMock('../../utils/settings-manager', async (importOriginal) => {
+        const actual = await importOriginal<
+          typeof import('../../utils/settings-manager')
+        >();
+        return {
+          ...actual,
+          geminiSettings: {
+            get: () => ({ apiKey: '', baseUrl: '/creative/relay/v1' }),
+          },
+        };
+      });
+      vi.doMock('../model-adapters', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../model-adapters')>();
+        return {
+          ...actual,
+          resolveAdapterForInvocation,
+        };
+      });
+
+      const { FallbackMediaExecutor } = await import(
+        '../media-executor/fallback-executor'
+      );
+      const { ModelVendor, setRuntimeModelConfigs } = await import(
+        '../../constants/model-config'
+      );
+      setRuntimeModelConfigs([
+        {
+          id: 'mock:gpt-image-2:empty-schema',
+          label: 'Mock GPT Image 2 Empty Schema',
+          type: 'image',
+          vendor: ModelVendor.OTHER,
+          sourceProfileId: 'new-api-creative',
+          creativeManaged: true,
+        },
+      ]);
+      const executor = new FallbackMediaExecutor();
+
+      await executor.generateImage({
+        taskId: 'task-empty-schema',
+        prompt: 'A cat',
+        model: 'mock:gpt-image-2:empty-schema',
+        size: '16x9',
+        params: { webhook: 'https://evil.example/hook' },
+      });
+
+      expect(resolveAdapterForInvocation).not.toHaveBeenCalled();
+      expect(cacheMediaFromBlob).toHaveBeenCalledWith(
+        '/__aitu_cache__/image/creative-task-empty-schema.png',
+        expect.any(Object),
+        'image',
+        expect.objectContaining({ taskId: 'creative-task-empty-schema' })
+      );
+      expect(completeTask).toHaveBeenCalledWith('task-empty-schema', {
+        url: '/__aitu_cache__/image/creative-task-empty-schema.png',
+        format: 'png',
+        size: expect.any(Number),
+      });
+    }, 15000);
+
+    it('rejects malicious managed image userParams before the task fetch body is sent', async () => {
+      const failTask = vi.fn(async () => undefined);
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      vi.doMock('../creative-mode', () => ({
+        CREATIVE_MANAGED_PROFILE_ID: 'new-api-creative',
+        CREATIVE_RELAY_BASE_URL: '/creative/relay/v1',
+        isCreativeEmbeddedMode: () => false,
+        requireCreativeSessionAuthHeaders: () => ({
+          'X-Creative-CSRF': 'csrf-token',
+          'X-Creative-Nonce': 'nonce-token',
+        }),
+      }));
+      vi.doMock('../media-executor/llm-api-logger', () => ({
+        startLLMApiLog: vi.fn(() => 'log-id'),
+        completeLLMApiLog: vi.fn(),
+        failLLMApiLog: vi.fn(),
+        updateLLMApiLogMetadata: vi.fn(),
+      }));
+      vi.doMock('../media-executor/task-storage-writer', () => ({
+        taskStorageWriter: {
+          completeTask: vi.fn(async () => undefined),
+          failTask,
+        },
+      }));
+      vi.doMock('../unified-cache-service', () => ({
+        unifiedCacheService: {
+          getImageForAI: vi.fn(),
+          isCached: vi.fn(async () => false),
+          cacheMediaFromBlob: vi.fn(async () => undefined),
+        },
+      }));
+
+      const { executeCreativeManagedImageTask } = await import(
+        '../media-executor/fallback-adapter-routes'
+      );
+      const {
+        ModelVendor,
+        normalizeCreativeParameterSchema,
+        setRuntimeModelConfigs,
+      } = await import('../../constants/model-config');
+      setRuntimeModelConfigs([
+        {
+          id: 'mock:gpt-image-2:preview',
+          label: 'Mock GPT Image 2',
+          type: 'image',
+          vendor: ModelVendor.OTHER,
+          sourceProfileId: 'new-api-creative',
+          creativeManaged: true,
+          parameterSchema: normalizeCreativeParameterSchema(
+            [
+              {
+                id: 'size',
+                label: '尺寸',
+                type: 'enum',
+                options: [{ value: '1024x1024', label: '1024×1024' }],
+              },
+            ],
+            'image',
+            'mock:gpt-image-2:preview'
+          ),
+        },
+      ]);
+
+      await expect(
+        executeCreativeManagedImageTask('task-malicious', {
+          prompt: 'A cat',
+          model: 'mock:gpt-image-2:preview',
+          userParams: {
+            size: '1024x1024',
+            callback: 'https://evil.example/hook',
+            headers: 'Authorization: Bearer bad',
+            sourceProfileId: 'new-api-creative',
+            modelRef: 'override',
+          },
+        })
+      ).rejects.toThrow(/Disallowed Creative userParams field: callback/);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(failTask).toHaveBeenCalledWith(
+        'task-malicious',
+        expect.objectContaining({
+          code: 'IMAGE_GENERATION_ERROR',
+        })
+      );
+
+      fetchMock.mockClear();
+      failTask.mockClear();
+
+      await expect(
+        executeCreativeManagedImageTask('task-malformed-user-params', {
+          prompt: 'A cat',
+          model: 'mock:gpt-image-2:preview',
+          userParams: false as never,
+        })
+      ).rejects.toThrow(/Creative userParams must be an object/);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(failTask).toHaveBeenCalledWith(
+        'task-malformed-user-params',
+        expect.objectContaining({
+          code: 'IMAGE_GENERATION_ERROR',
+        })
+      );
     }, 15000);
 
     it('fails schema-backed managed image tasks with reference images before submit', async () => {

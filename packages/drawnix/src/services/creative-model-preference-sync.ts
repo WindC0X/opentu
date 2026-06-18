@@ -288,13 +288,27 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   return JSON.parse(text);
 }
 
+function getDefaultCreativeFetch(): typeof fetch {
+  const fetchOwner =
+    typeof window !== 'undefined' && typeof window.fetch === 'function'
+      ? window
+      : globalThis;
+  const fetcher = fetchOwner.fetch;
+  if (typeof fetcher !== 'function') {
+    throw new Error('fetch is not available for Creative model sync');
+  }
+  return fetcher.bind(fetchOwner) as typeof fetch;
+}
+
 export class CreativeModelPreferenceSyncService {
   private revision: number | null = null;
   private unsubscribeLocal: (() => void) | null = null;
   private applyingRemote = false;
   private pendingTimer: number | null = null;
 
-  constructor(private readonly fetcher: typeof fetch = fetch) {}
+  constructor(
+    private readonly fetcher: typeof fetch = getDefaultCreativeFetch()
+  ) {}
 
   private async sendPatch(
     patch: CreativeModelPreferencePatch

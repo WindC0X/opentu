@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildCreativeModelPreferencePatch,
   CreativeModelPreferenceSyncService,
@@ -140,6 +140,73 @@ describe('creative model preference sync sanitization', () => {
     });
     expect(JSON.stringify(calls[1])).not.toContain('leak');
     expect(patched.revision).toBe(4);
+  });
+
+  it('binds the default browser fetcher when fetching cloud preferences', async () => {
+    const owner = typeof window !== 'undefined' ? window : globalThis;
+    const originalGlobalFetch = globalThis.fetch;
+    const originalWindowFetch =
+      typeof window !== 'undefined' ? window.fetch : undefined;
+    const fetchContexts: unknown[] = [];
+    const fetcher = vi.fn<typeof fetch>(async function (
+      this: unknown,
+      _input,
+      _init
+    ) {
+      fetchContexts.push(this);
+      if (this !== owner) {
+        throw new TypeError('Illegal invocation');
+      }
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            revision: 12,
+            preference: {
+              default: { image: { modelId: 'mock:binding:image' } },
+            },
+          },
+        }),
+        { status: 200 }
+      );
+    });
+
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: fetcher,
+    });
+    if (typeof window !== 'undefined') {
+      Object.defineProperty(window, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: fetcher,
+      });
+    }
+
+    try {
+      const service = new CreativeModelPreferenceSyncService();
+
+      await expect(service.fetchPreference()).resolves.toEqual({
+        revision: 12,
+        default: { image: { modelId: 'mock:binding:image' } },
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetchContexts).toEqual([owner]);
+    } finally {
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: originalGlobalFetch,
+      });
+      if (typeof window !== 'undefined') {
+        Object.defineProperty(window, 'fetch', {
+          configurable: true,
+          writable: true,
+          value: originalWindowFetch,
+        });
+      }
+    }
   });
 
   it('rebases one revision conflict onto the latest remote preference without persisting server policy or auth material', async () => {

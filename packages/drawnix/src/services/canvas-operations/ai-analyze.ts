@@ -149,6 +149,8 @@ export async function analyzeWithAI(
             defaultModelRefs: context.defaultModelRefs,
             contextModel: context.model,
             contextModelRef: modelRef || null,
+            creativeUserParams: context.params.userParams,
+            creativeManaged: context.params.creativeManaged,
             fallbackModels: {
               image: getCanvasFallbackModel('image', settings.imageModelName),
               video: getCanvasFallbackModel('video', settings.videoModelName),

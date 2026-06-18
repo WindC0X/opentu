@@ -29,6 +29,48 @@ describe('media-model-routing', () => {
     expect(args.model).toBe('seedance-1.5-pro');
   });
 
+  it('为 schema-backed 图片工具注入 typed userParams 并清理 legacy 参数', () => {
+    const args = applyMediaModelDefaultsToArgs(
+      'generate_image',
+      {
+        prompt: 'cat',
+        size: '1x1',
+        params: { callback: 'https://evil.example/hook' },
+      },
+      {
+        contextModel: { id: 'mock:gpt-image-2:preview', type: 'image' },
+        creativeUserParams: { size: '1024x1024', seed: 42 },
+        creativeManaged: true,
+      }
+    );
+
+    expect(args).toMatchObject({
+      model: 'mock:gpt-image-2:preview',
+      userParams: { size: '1024x1024', seed: 42 },
+      creativeManaged: true,
+    });
+    expect(args.size).toBeUndefined();
+    expect(args.params).toBeUndefined();
+  });
+
+  it('schema-backed 空 userParams 仍保留 managed 标记', () => {
+    const args = applyMediaModelDefaultsToArgs(
+      'generate_image',
+      { prompt: 'cat', size: '1x1' },
+      {
+        contextModel: { id: 'mock:gpt-image-2:preview', type: 'image' },
+        creativeManaged: true,
+      }
+    );
+
+    expect(args).toMatchObject({
+      model: 'mock:gpt-image-2:preview',
+      userParams: {},
+      creativeManaged: true,
+    });
+    expect(args.size).toBeUndefined();
+  });
+
   it('为 PPT 只同步文本模型字段', () => {
     const imageRef = { profileId: 'profile-b', modelId: 'gpt-image-2' };
     const textRef = { profileId: 'profile-text', modelId: 'deepseek-v3.2' };

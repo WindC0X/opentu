@@ -175,8 +175,8 @@ function getRuntimeOrigin(): string {
   const locationLike =
     typeof window !== 'undefined'
       ? window.location
-      : typeof self !== 'undefined'
-      ? self.location
+      : typeof globalThis !== 'undefined' && 'location' in globalThis
+      ? (globalThis as typeof globalThis & { location?: Location }).location
       : null;
   return locationLike?.origin || 'http://localhost';
 }
@@ -778,9 +778,19 @@ function getUploadFileName(metadata?: CreativeAssetUploadMetadata): string {
   return `creative-asset.${extension || 'bin'}`;
 }
 
+function getDefaultCreativeAssetFetch(): typeof fetch {
+  if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
+    return window.fetch.bind(window);
+  }
+  if (typeof globalThis.fetch === 'function') {
+    return globalThis.fetch.bind(globalThis);
+  }
+  throw new Error('Creative asset sync requires fetch');
+}
+
 export class CreativeAssetCloudAdapter implements CreativeAssetCloudAdapterLike {
   constructor(
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly fetcher: typeof fetch = getDefaultCreativeAssetFetch(),
     private readonly endpoint = CREATIVE_ASSETS_ENDPOINT
   ) {}
 

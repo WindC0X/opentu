@@ -581,6 +581,34 @@ describe('workflow-converter', () => {
         knowledgeContextRefs
       );
     });
+
+    it('schema-backed Agent 上下文应保留 typed userParams 与 managed 标记', () => {
+      const params = createMockParams({
+        scenario: 'agent_flow',
+        generationType: 'image',
+        modelId: 'mock:gpt-image-2:preview',
+        prompt: '根据描述生成图片',
+        size: '1x1',
+        extraParams: { webhook: 'https://evil.example/hook' },
+        userParams: {},
+        creativeManaged: true,
+      });
+
+      const workflow = convertAgentFlowToWorkflow(params);
+      const context = workflow.steps[0].args.context as any;
+
+      expect(context.params).toMatchObject({
+        count: 1,
+        userParams: {},
+        creativeManaged: true,
+      });
+      expect(context.params.size).toBeUndefined();
+      expect(context.params.webhook).toBeUndefined();
+      expect(workflow.metadata).toMatchObject({
+        userParams: {},
+        creativeManaged: true,
+      });
+    });
   });
 
   describe('convertToWorkflow', () => {
@@ -660,6 +688,41 @@ describe('workflow-converter', () => {
       expect(workflow.metadata.knowledgeContextRefs).toEqual(
         knowledgeContextRefs
       );
+    });
+
+    it('schema-backed Skill DSL 图片步骤应携带 userParams 且不透传 legacy params', async () => {
+      const params = createMockParams({
+        scenario: 'agent_flow',
+        generationType: 'image',
+        modelId: 'mock:gpt-image-2:preview',
+        prompt: '生成猫咪海报',
+        size: '1x1',
+        extraParams: { callback: 'https://evil.example/hook' },
+        userParams: { size: '1024x1024', seed: 42 },
+        creativeManaged: true,
+      });
+
+      const workflow = await convertSkillFlowToWorkflow(params, {
+        id: 'poster',
+        name: '海报图',
+        type: 'system',
+        mcpTool: 'generate_image',
+        outputType: 'image',
+        description: '调用 generate_image\n- prompt: {{input}}\n- size: 1x1',
+      });
+
+      expect(workflow.steps[0].mcp).toBe('generate_image');
+      expect(workflow.steps[0].args).toMatchObject({
+        model: 'mock:gpt-image-2:preview',
+        userParams: { size: '1024x1024', seed: 42 },
+        creativeManaged: true,
+      });
+      expect(workflow.steps[0].args.size).toBeUndefined();
+      expect(workflow.steps[0].args.params).toBeUndefined();
+      expect(workflow.metadata).toMatchObject({
+        userParams: { size: '1024x1024', seed: 42 },
+        creativeManaged: true,
+      });
     });
 
     it('PPT Skill 只将文本模型和参考图片透传给 generate_ppt', async () => {

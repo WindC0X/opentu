@@ -572,6 +572,18 @@ async function readJson(response: Response): Promise<unknown> {
   return JSON.parse(text);
 }
 
+function getDefaultCreativeFetch(): typeof fetch {
+  const fetchOwner =
+    typeof window !== 'undefined' && typeof window.fetch === 'function'
+      ? window
+      : globalThis;
+  const fetcher = fetchOwner.fetch;
+  if (typeof fetcher !== 'function') {
+    throw new Error('fetch is not available for Creative document sync');
+  }
+  return fetcher.bind(fetchOwner) as typeof fetch;
+}
+
 export function buildCreativeWorkspaceDocumentSnapshot(
   board: Board
 ): CreativeDocumentSnapshot<CreativeWorkspaceBoardSnapshot> {
@@ -596,7 +608,7 @@ export class CreativeDocumentCloudAdapter {
   private readonly queue: Array<CreativeDocumentMutation> = [];
 
   constructor(
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly fetcher: typeof fetch = getDefaultCreativeFetch(),
     private readonly endpoint = CREATIVE_DOCUMENTS_ENDPOINT
   ) {}
 

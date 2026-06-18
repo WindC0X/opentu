@@ -169,6 +169,8 @@ function applyMediaDefaultsToWorkflowSteps(
     | 'modelId'
     | 'modelRef'
     | 'generationType'
+    | 'userParams'
+    | 'creativeManaged'
   >,
   overrideSpecifiedModel = false
 ): WorkflowStep[] {
@@ -189,6 +191,8 @@ function applyMediaDefaultsToWorkflowSteps(
         },
         contextModelRef: params.modelRef,
         overrideSpecifiedModel,
+        creativeUserParams: params.userParams,
+        creativeManaged: params.creativeManaged,
       }
     ),
   }));
@@ -314,6 +318,8 @@ export function convertDirectGenerationToWorkflow(
       }
       // 透传额外参数（如 seedream_quality）
       if (creativeManaged || userParams) {
+        delete imageArgs.size;
+        delete imageArgs.params;
         imageArgs.userParams = userParams || {};
         imageArgs.creativeManaged = true;
       } else if (extraParams) {
@@ -528,7 +534,7 @@ export function convertDirectGenerationToWorkflow(
       referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
       selection,
       userParams: creativeManaged || userParams ? userParams || {} : undefined,
-      creativeManaged: creativeManaged ? true : undefined,
+      creativeManaged: creativeManaged || userParams ? true : undefined,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs
@@ -588,9 +594,16 @@ export function convertAgentFlowToWorkflow(
     },
     params: {
       count,
-      size,
-      duration,
-      ...extraParams,
+      ...(creativeManaged || userParams
+        ? {
+            userParams: userParams || {},
+            creativeManaged: true,
+          }
+        : {
+            size,
+            duration,
+            ...extraParams,
+          }),
     },
     defaultModels,
     defaultModelRefs,
@@ -678,7 +691,7 @@ export function convertAgentFlowToWorkflow(
       referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
       selection,
       userParams: creativeManaged || userParams ? userParams || {} : undefined,
-      creativeManaged: creativeManaged ? true : undefined,
+      creativeManaged: creativeManaged || userParams ? true : undefined,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs
@@ -818,9 +831,9 @@ export async function convertSkillFlowToWorkflow(
   // 构建 DSL 变量（保留兼容性）
   const dslVariables: SkillDSLVariables = {
     input: userInputText,
-    count,
-    size,
-    model: modelId,
+      count,
+      size,
+      model: modelId,
   };
 
   // ─── 路径 A：正则解析（SkillDSLParser）───────────────────────────────────
@@ -862,6 +875,8 @@ export async function convertSkillFlowToWorkflow(
         referenceImages:
           referenceImages.length > 0 ? referenceImages : undefined,
         selection,
+        userParams: creativeManaged || userParams ? userParams || {} : undefined,
+        creativeManaged: creativeManaged || userParams ? true : undefined,
         knowledgeContextRefs:
           normalizedKnowledgeContextRefs.length > 0
             ? normalizedKnowledgeContextRefs
@@ -889,7 +904,18 @@ export async function convertSkillFlowToWorkflow(
           : (generationType as 'image' | 'video' | 'audio' | 'text'),
       isExplicit: isModelExplicit,
     },
-    params: { count, size, duration },
+    params: {
+      count,
+      ...(creativeManaged || userParams
+        ? {
+            userParams: userParams || {},
+            creativeManaged: true,
+          }
+        : {
+            size,
+            duration,
+          }),
+    },
     defaultModels,
     defaultModelRefs,
     selection,
@@ -1016,6 +1042,8 @@ export async function convertSkillFlowToWorkflow(
         referenceImages:
           referenceImages.length > 0 ? referenceImages : undefined,
         selection,
+        userParams: creativeManaged || userParams ? userParams || {} : undefined,
+        creativeManaged: creativeManaged || userParams ? true : undefined,
         knowledgeContextRefs:
           normalizedKnowledgeContextRefs.length > 0
             ? normalizedKnowledgeContextRefs
@@ -1095,7 +1123,7 @@ export async function convertSkillFlowToWorkflow(
       referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
       selection,
       userParams: creativeManaged || userParams ? userParams || {} : undefined,
-      creativeManaged: creativeManaged ? true : undefined,
+      creativeManaged: creativeManaged || userParams ? true : undefined,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs

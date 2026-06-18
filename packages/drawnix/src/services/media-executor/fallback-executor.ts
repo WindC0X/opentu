@@ -73,6 +73,7 @@ import {
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
+  isCreativeManagedModel,
 } from '../../constants/model-config';
 import {
   assertTaskInvocationRouteAvailable,
@@ -228,6 +229,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
 
     const schemaBacked =
       isCreativeManagedImageTask(params) ||
+      isCreativeManagedModel(modelName, effectiveModelRef) ||
       hasCreativeUserParams(params.userParams) ||
       hasRuntimeParameterSchema(modelName);
     if (schemaBacked) {
@@ -238,7 +240,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           model: modelName,
           modelRef: effectiveModelRef,
           referenceImages,
-          userParams: params.userParams || {},
+          userParams: params.userParams ?? {},
           assetMetadata: params.assetMetadata,
         },
         options,

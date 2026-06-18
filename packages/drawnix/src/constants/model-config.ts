@@ -80,6 +80,19 @@ export type ParamValueType = 'enum' | 'number' | 'string' | 'boolean';
 export type CreativeParamPrimitive = string | number | boolean;
 export type CreativeUserParamValue = CreativeParamPrimitive;
 export type CreativeUserParams = Record<string, CreativeUserParamValue>;
+type CreativeManagedModelRefLike = {
+  profileId?: string | null;
+  modelId?: string | null;
+};
+
+const CREATIVE_MANAGED_PROFILE_ID_FOR_MODEL_CONFIG = 'new-api-creative';
+const CREATIVE_RUNTIME_SCHEMA_TYPES = new Set([
+  'enum',
+  'string',
+  'number',
+  'integer',
+  'boolean',
+]);
 
 export function hasCreativeUserParams(
   userParams?: CreativeUserParams | null
@@ -91,6 +104,34 @@ export function isCreativeManagedImageTask(
   value?: { creativeManaged?: unknown } | null
 ): boolean {
   return value?.creativeManaged === true;
+}
+
+export function isCreativeManagedModelConfig(
+  modelConfig?: ModelConfig | null
+): boolean {
+  return (
+    modelConfig?.creativeManaged === true ||
+    modelConfig?.sourceProfileId === CREATIVE_MANAGED_PROFILE_ID_FOR_MODEL_CONFIG
+  );
+}
+
+export function isCreativeManagedModel(
+  modelIdOrConfig?: string | ModelConfig | null,
+  modelRef?: CreativeManagedModelRefLike | null
+): boolean {
+  if (modelRef?.profileId === CREATIVE_MANAGED_PROFILE_ID_FOR_MODEL_CONFIG) {
+    return true;
+  }
+
+  if (!modelIdOrConfig) {
+    return false;
+  }
+
+  const modelConfig =
+    typeof modelIdOrConfig === 'string'
+      ? getModelConfig(modelRef?.modelId || modelIdOrConfig)
+      : modelIdOrConfig;
+  return isCreativeManagedModelConfig(modelConfig);
 }
 
 export interface CreativeParameterSchemaOption {
@@ -224,6 +265,8 @@ export interface ModelConfig {
   priceModelId?: string;
   /** new-api 下发的运行时参数 schema，优先于静态参数 */
   parameterSchema?: ParamConfig[];
+  /** 是否为 new-api Creative 托管 catalog 下发的 binding */
+  creativeManaged?: boolean;
   /** 服务端推荐分/排序，仅托管 Creative catalog 使用 */
   sortOrder?: number;
 }
@@ -1749,9 +1792,6 @@ const GEMINI_IMAGE_MODEL_IDS_EXCLUDING_FLASH31 = GEMINI_IMAGE_MODEL_IDS.filter(
   (id) => !GEMINI_31_FLASH_IMAGE_MODEL_IDS.includes(id)
 );
 
-/** 所有图片模型 ID */
-const ALL_IMAGE_MODEL_IDS = IMAGE_MODELS.map((m) => m.id);
-
 /**
  * 视频参数配置
  * 根据 video-model-config.ts 中各模型的实际参数配置
@@ -2654,6 +2694,22 @@ function runtimeSchemaValueToString(value: CreativeParamPrimitive): string {
   return String(value);
 }
 
+function isCreativeRuntimeSchemaType(
+  value: unknown
+): value is CreativeParameterSchemaItem['type'] {
+  return (
+    typeof value === 'string' && CREATIVE_RUNTIME_SCHEMA_TYPES.has(value)
+  );
+}
+
+function isCreativeParamPrimitive(value: unknown): value is CreativeParamPrimitive {
+  return (
+    typeof value === 'string' ||
+    (typeof value === 'number' && Number.isFinite(value)) ||
+    typeof value === 'boolean'
+  );
+}
+
 function isSafeCreativeRuntimeParamId(id: string): boolean {
   const trimmed = id.trim();
   if (!/^[a-zA-Z][a-zA-Z0-9_:-]{0,63}$/.test(trimmed)) {
@@ -2729,6 +2785,19 @@ export function normalizeCreativeParameterSchema(
     .slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .map<ParamConfig | null>((item) => {
+      if (!isCreativeRuntimeSchemaType(item.type)) {
+        return null;
+      }
+
+      const defaultValue = isCreativeParamPrimitive(item.defaultValue)
+        ? item.defaultValue
+        : undefined;
+      const runtimeOptions = item.options
+        ?.filter((option) => isCreativeParamPrimitive(option.value))
+        .map((option) => ({
+          value: option.value,
+          label: option.label || runtimeSchemaValueToString(option.value),
+        }));
       const valueType: ParamValueType =
         item.type === 'integer'
           ? 'number'
@@ -2741,7 +2810,7 @@ export function normalizeCreativeParameterSchema(
               { value: 'true', label: '开启' },
               { value: 'false', label: '关闭' },
             ]
-          : item.options?.map((option) => ({
+          : runtimeOptions?.map((option) => ({
               value: runtimeSchemaValueToString(option.value),
               label: option.label || runtimeSchemaValueToString(option.value),
             }));
@@ -2758,9 +2827,9 @@ export function normalizeCreativeParameterSchema(
         valueType,
         options,
         defaultValue:
-          item.defaultValue === undefined
+          defaultValue === undefined
             ? undefined
-            : runtimeSchemaValueToString(item.defaultValue),
+            : runtimeSchemaValueToString(defaultValue),
         min: item.min,
         max: item.max,
         step: item.step,
@@ -2768,8 +2837,8 @@ export function normalizeCreativeParameterSchema(
         compatibleModels: [compatibleModelId],
         modelType,
         runtimeValueType: item.type,
-        runtimeDefaultValue: item.defaultValue,
-        runtimeOptions: item.options,
+        runtimeDefaultValue: defaultValue,
+        runtimeOptions,
         runtimeSchema: true,
       };
     })
@@ -2788,34 +2857,54 @@ export function hasRuntimeParameterSchema(
   return !!modelConfig?.parameterSchema?.some((param) => param.runtimeSchema);
 }
 
-function castCreativeRuntimeParamValue(
+function castCreativeRuntimeParamInput(
   param: ParamConfig,
-  selectedValue: string
+  rawValue: unknown
 ): CreativeUserParamValue | undefined {
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return undefined;
+  }
+
   if (param.runtimeValueType === 'boolean') {
-    if (selectedValue === 'true') return true;
-    if (selectedValue === 'false') return false;
+    if (typeof rawValue === 'boolean') return rawValue;
+    if (rawValue === 'true') return true;
+    if (rawValue === 'false') return false;
     return undefined;
   }
 
   if (param.runtimeValueType === 'number' || param.runtimeValueType === 'integer') {
-    const numeric = Number(selectedValue);
+    const numeric = Number(rawValue);
     if (!Number.isFinite(numeric)) {
       return undefined;
     }
-    return param.runtimeValueType === 'integer'
+    const casted = param.runtimeValueType === 'integer'
       ? Math.trunc(numeric)
       : numeric;
+    if (param.min !== undefined && casted < param.min) {
+      return undefined;
+    }
+    if (param.max !== undefined && casted > param.max) {
+      return undefined;
+    }
+    return casted;
   }
 
   if (param.runtimeValueType === 'enum') {
+    if (!isCreativeParamPrimitive(rawValue)) {
+      return undefined;
+    }
+    const selectedValue = runtimeSchemaValueToString(rawValue);
     const option = param.runtimeOptions?.find(
       (candidate) => runtimeSchemaValueToString(candidate.value) === selectedValue
     );
-    return option ? option.value : selectedValue;
+    return option ? option.value : undefined;
   }
 
-  return selectedValue;
+  if (!isCreativeParamPrimitive(rawValue)) {
+    return undefined;
+  }
+
+  return runtimeSchemaValueToString(rawValue);
 }
 
 export function buildCreativeUserParams(
@@ -2842,13 +2931,61 @@ export function buildCreativeUserParams(
     if (!param) {
       continue;
     }
-    const value = castCreativeRuntimeParamValue(param, rawValue);
+    const value = castCreativeRuntimeParamInput(param, rawValue);
     if (value !== undefined) {
       userParams[key] = value;
     }
   }
 
   return Object.keys(userParams).length > 0 ? userParams : undefined;
+}
+
+function getRuntimeUserParamSchemaParams(
+  modelIdOrConfig: string | ModelConfig
+): ParamConfig[] {
+  return getCompatibleParams(modelIdOrConfig).filter(
+    (param) => param.runtimeSchema
+  );
+}
+
+function describeCreativeUserParamKey(key: string): string {
+  return key.length > 64 ? `${key.slice(0, 61)}...` : key;
+}
+
+export function sanitizeCreativeUserParamsForModel(
+  modelIdOrConfig: string | ModelConfig,
+  rawUserParams?: Record<string, unknown> | null
+): CreativeUserParams {
+  if (rawUserParams === undefined || rawUserParams === null) {
+    return {};
+  }
+
+  if (typeof rawUserParams !== 'object' || Array.isArray(rawUserParams)) {
+    throw new Error('Creative userParams must be an object');
+  }
+
+  const params = getRuntimeUserParamSchemaParams(modelIdOrConfig);
+  const schemaParams = new Map(params.map((param) => [param.id, param]));
+  const userParams: CreativeUserParams = {};
+
+  for (const [key, rawValue] of Object.entries(rawUserParams)) {
+    const param = schemaParams.get(key);
+    if (!param || !isSafeCreativeRuntimeParamId(key)) {
+      throw new Error(
+        `Disallowed Creative userParams field: ${describeCreativeUserParamKey(key)}`
+      );
+    }
+
+    const value = castCreativeRuntimeParamInput(param, rawValue);
+    if (value === undefined) {
+      throw new Error(
+        `Invalid Creative userParams value for field: ${describeCreativeUserParamKey(key)}`
+      );
+    }
+    userParams[key] = value;
+  }
+
+  return userParams;
 }
 
 /**
@@ -2865,8 +3002,11 @@ export function getCompatibleParams(
       : modelIdOrConfig;
   if (!modelConfig) return [];
 
-  if (modelConfig.parameterSchema && modelConfig.parameterSchema.length > 0) {
+  if (Array.isArray(modelConfig.parameterSchema)) {
     return modelConfig.parameterSchema;
+  }
+  if (isCreativeManagedModelConfig(modelConfig)) {
+    return [];
   }
 
   // 构建模型标签集合：显式标签 + 类型 + 厂商 + 基于 ID 的启发式

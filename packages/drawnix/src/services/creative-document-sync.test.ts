@@ -111,6 +111,108 @@ describe('CreativeDocumentCloudAdapter API contract', () => {
     ]);
   });
 
+  it('binds the default browser fetcher for document list and create paths', async () => {
+    setCreativeSessionAuthMaterial({
+      csrfToken: 'csrf-default-fetch',
+      nonce: 'nonce-default-fetch',
+    });
+    const owner = typeof window !== 'undefined' ? window : globalThis;
+    const originalGlobalFetch = globalThis.fetch;
+    const originalWindowFetch =
+      typeof window !== 'undefined' ? window.fetch : undefined;
+    const fetchContexts: unknown[] = [];
+    const fetcher = vi.fn<typeof fetch>(async function (
+      this: unknown,
+      _input,
+      init
+    ) {
+      fetchContexts.push(this);
+      if (this !== owner) {
+        throw new TypeError('Illegal invocation');
+      }
+      if (init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              document: {
+                id: 'created-doc',
+                title: 'Created Board',
+                snapshot: { elements: [] },
+                revision: 3,
+              },
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            documents: [
+              {
+                id: 'doc-1',
+                title: 'Board',
+                revision: 2,
+              },
+            ],
+          },
+        }),
+        { status: 200 }
+      );
+    });
+
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: fetcher,
+    });
+    if (typeof window !== 'undefined') {
+      Object.defineProperty(window, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: fetcher,
+      });
+    }
+
+    try {
+      const adapter = new CreativeDocumentCloudAdapter();
+
+      await expect(adapter.list()).resolves.toEqual([
+        { id: 'doc-1', title: 'Board', revision: 2 },
+      ]);
+      await expect(
+        adapter.create({ id: 'created-doc', snapshot: { elements: [] } })
+      ).resolves.toEqual({
+        id: 'created-doc',
+        title: 'Created Board',
+        snapshot: { elements: [] },
+        revision: 3,
+      });
+
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(fetchContexts).toEqual([owner, owner]);
+      expect(fetcher.mock.calls[1]?.[1]?.headers).toMatchObject({
+        'X-Creative-CSRF': 'csrf-default-fetch',
+        'X-Creative-Nonce': 'nonce-default-fetch',
+      });
+    } finally {
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: originalGlobalFetch,
+      });
+      if (typeof window !== 'undefined') {
+        Object.defineProperty(window, 'fetch', {
+          configurable: true,
+          writable: true,
+          value: originalWindowFetch,
+        });
+      }
+    }
+  });
+
   it('unwraps single document wrappers from create and get responses', async () => {
     setCreativeSessionAuthMaterial({
       csrfToken: 'csrf-doc-wrapper',

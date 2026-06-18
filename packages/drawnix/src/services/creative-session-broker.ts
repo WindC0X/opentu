@@ -325,6 +325,7 @@ function normalizeCreativeModel(
     sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
     sourceProfileName: CREATIVE_MANAGED_PROFILE_NAME,
     selectionKey: `${CREATIVE_MANAGED_PROFILE_ID}::${id}`,
+    creativeManaged: true,
     providerModelId,
     priceModelId,
     parameterSchema,

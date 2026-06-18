@@ -28,7 +28,6 @@ import {
   isAsyncImageModel,
   DEFAULT_IMAGE_MODEL_ID,
   hasCreativeUserParams,
-  hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
 } from '../constants/model-config';
 import {
@@ -440,10 +439,11 @@ class GenerationAPIService {
       const effectiveModel = embeddedModel?.modelId || requestedModel;
       const effectiveModelRef =
         embeddedModel?.modelRef || requestedModelRef || null;
+      const rawCreativeUserParams = (params as any).userParams;
       if (
         isCreativeManagedImageTask(params as any) ||
-        hasCreativeUserParams((params as any).userParams) ||
-        hasRuntimeParameterSchema(effectiveModel || '')
+        rawCreativeUserParams !== undefined ||
+        hasCreativeUserParams(rawCreativeUserParams)
       ) {
         throw new Error(
           'schema-backed Creative image requests require the managed image task route'

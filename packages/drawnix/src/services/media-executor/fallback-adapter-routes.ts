@@ -10,6 +10,7 @@ import type { GenerationParams } from '../../types/shared/core.types';
 import {
   hasCreativeUserParams,
   isCreativeManagedImageTask,
+  sanitizeCreativeUserParamsForModel,
   type CreativeUserParams,
 } from '../../constants/model-config';
 import type { ExecutionOptions } from './types';
@@ -237,6 +238,10 @@ export async function executeCreativeManagedImageTask(
       );
     }
     const idempotencyKey = createCreativeImageTaskIdempotencyKey(taskId);
+    const userParams = sanitizeCreativeUserParamsForModel(
+      params.model,
+      params.userParams
+    );
     options?.onProgress?.({ progress: 10, phase: 'submitting' });
     const submitResponse = await fetch(creativeImageTaskPath(), {
       method: 'POST',
@@ -250,7 +255,7 @@ export async function executeCreativeManagedImageTask(
       body: JSON.stringify({
         model: params.model,
         prompt: params.prompt,
-        userParams: params.userParams,
+        userParams,
       }),
       signal: options?.signal,
     });

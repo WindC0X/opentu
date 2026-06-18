@@ -1,4 +1,7 @@
-import { getModelType } from '../../constants/model-config';
+import {
+  getModelType,
+  type CreativeUserParams,
+} from '../../constants/model-config';
 import type { ModelRef } from '../../utils/settings-manager';
 
 export type MediaModelType = 'image' | 'video' | 'audio';
@@ -23,6 +26,8 @@ export interface MediaModelRoutingOptions {
   };
   contextModelRef?: ModelRef | null;
   overrideSpecifiedModel?: boolean;
+  creativeUserParams?: CreativeUserParams;
+  creativeManaged?: boolean;
 }
 
 export function getMediaTypeForTool(
@@ -50,7 +55,7 @@ export function applyMediaModelDefaultsToArgs(
 
   const selectedModel = resolveSelectedMediaModel(mediaType, options);
   if (!selectedModel) {
-    return args;
+    return applyCreativeManagedImageParams(mediaType, args, options);
   }
 
   const selectedModelRef = resolveSelectedMediaModelRef(
@@ -75,7 +80,7 @@ export function applyMediaModelDefaultsToArgs(
       delete args.modelRef;
     }
 
-    return args;
+    return applyCreativeManagedImageParams(mediaType, args, options);
   }
 
   if (selectedModelRef && selectedModelRef.modelId === specifiedModel) {
@@ -84,6 +89,29 @@ export function applyMediaModelDefaultsToArgs(
     delete args.modelRef;
   }
 
+  return applyCreativeManagedImageParams(mediaType, args, options);
+}
+
+function applyCreativeManagedImageParams(
+  mediaType: MediaModelType,
+  args: Record<string, unknown>,
+  options: MediaModelRoutingOptions
+): Record<string, unknown> {
+  if (
+    mediaType !== 'image' ||
+    (options.creativeManaged !== true &&
+      options.creativeUserParams === undefined)
+  ) {
+    return args;
+  }
+
+  // Schema-backed Creative image requests must carry only typed userParams.
+  // Drop legacy OpenTU adapter fields before a Skill/Agent generated image
+  // step can reach queue/retry/MCP execution.
+  delete args.params;
+  delete args.size;
+  args.userParams = options.creativeUserParams ?? {};
+  args.creativeManaged = true;
   return args;
 }
 

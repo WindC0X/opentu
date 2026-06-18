@@ -5,8 +5,11 @@ import {
   getStaticModelConfig,
   buildCreativeUserParams,
   hasRuntimeParameterSchema,
+  isCreativeManagedModel,
   normalizeCreativeParameterSchema,
+  sanitizeCreativeUserParamsForModel,
   ModelVendor,
+  type CreativeParameterSchemaItem,
   type ModelConfig,
 } from '../model-config';
 
@@ -94,6 +97,100 @@ describe('model-config image size options', () => {
       seed: 42,
       oversea: true,
     });
+  });
+
+  it('按 runtime schema allowlist 净化并转换直接传入的 userParams', () => {
+    const parameterSchema = normalizeCreativeParameterSchema(
+      [
+        {
+          id: 'size',
+          label: '尺寸',
+          type: 'enum',
+          options: [
+            { value: '1024x1024', label: '1024×1024' },
+            { value: '2048x2048', label: '2048×2048' },
+          ],
+        },
+        { id: 'seed', label: 'Seed', type: 'integer', min: 0, max: 100 },
+        { id: 'oversea', label: '海外', type: 'boolean' },
+      ],
+      'image',
+      'mock:gpt-image-2:preview'
+    );
+    const runtimeModel: ModelConfig = {
+      id: 'mock:gpt-image-2:preview',
+      label: 'Mock GPT Image 2',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      parameterSchema,
+      creativeManaged: true,
+    };
+
+    expect(
+      sanitizeCreativeUserParamsForModel(runtimeModel, {
+        size: '2048x2048',
+        seed: '42.8',
+        oversea: 'false',
+      })
+    ).toEqual({
+      size: '2048x2048',
+      seed: 42,
+      oversea: false,
+    });
+
+    expect(() =>
+      sanitizeCreativeUserParamsForModel(runtimeModel, {
+        callback: 'https://evil.example/hook',
+      })
+    ).toThrow(/Disallowed Creative userParams field: callback/);
+
+    expect(() =>
+      sanitizeCreativeUserParamsForModel(runtimeModel, {
+        size: 'not-in-schema',
+      })
+    ).toThrow(/Invalid Creative userParams value/);
+  });
+
+  it('忽略未知 runtime schema type，且托管标记不依赖非空 schema', () => {
+    const malformedSchema = [
+      {
+        id: 'style',
+        label: 'Style',
+        type: 'json',
+      },
+      {
+        id: 'hidden_size',
+        label: 'Hidden Size',
+        type: 'string',
+        hidden: true,
+      },
+    ] as unknown as CreativeParameterSchemaItem[];
+    const parameterSchema = normalizeCreativeParameterSchema(
+      malformedSchema,
+      'image',
+      'mock:gpt-image-2:empty-schema'
+    );
+    const runtimeModel: ModelConfig = {
+      id: 'mock:gpt-image-2:empty-schema',
+      label: 'Mock GPT Image 2 Empty Schema',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      providerModelId: 'gpt-image-2',
+      sourceProfileId: 'new-api-creative',
+      creativeManaged: true,
+      parameterSchema,
+    };
+
+    expect(parameterSchema).toBeUndefined();
+    expect(hasRuntimeParameterSchema(runtimeModel)).toBe(false);
+    expect(isCreativeManagedModel(runtimeModel)).toBe(true);
+    expect(sanitizeCreativeUserParamsForModel(runtimeModel, {})).toEqual({});
+    expect(() =>
+      sanitizeCreativeUserParamsForModel(runtimeModel, {
+        style: 'watercolor',
+      })
+    ).toThrow(/Disallowed Creative userParams field: style/);
+    expect(getCompatibleParams(runtimeModel)).toEqual([]);
   });
 
   it('拒绝 runtime parameterSchema 中的危险控制字段 ID', () => {
