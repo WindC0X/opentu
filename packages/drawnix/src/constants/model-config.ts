@@ -2988,6 +2988,22 @@ export function sanitizeCreativeUserParamsForModel(
   return userParams;
 }
 
+function getCreativeManagedStaticParamFallbackConfig(
+  modelConfig: ModelConfig
+): ModelConfig | undefined {
+  const candidateIds = [modelConfig.providerModelId, modelConfig.id];
+  for (const candidateId of candidateIds) {
+    if (!candidateId) {
+      continue;
+    }
+    const staticConfig = getStaticModelConfig(candidateId);
+    if (staticConfig?.type === modelConfig.type) {
+      return staticConfig;
+    }
+  }
+  return undefined;
+}
+
 /**
  * 根据模型 ID 获取兼容的参数列表
  */
@@ -3005,16 +3021,21 @@ export function getCompatibleParams(
   if (Array.isArray(modelConfig.parameterSchema)) {
     return modelConfig.parameterSchema;
   }
-  if (isCreativeManagedModelConfig(modelConfig)) {
+
+  const paramModelConfig = isCreativeManagedModelConfig(modelConfig)
+    ? getCreativeManagedStaticParamFallbackConfig(modelConfig)
+    : modelConfig;
+  if (!paramModelConfig) {
     return [];
   }
 
   // 构建模型标签集合：显式标签 + 类型 + 厂商 + 基于 ID 的启发式
   const modelTags = new Set<string>();
-  (modelConfig.tags || []).forEach((t) => modelTags.add(t.toLowerCase()));
-  if (modelConfig.type) modelTags.add(modelConfig.type.toLowerCase());
-  if (modelConfig.vendor) modelTags.add(modelConfig.vendor.toLowerCase());
-  const idLower = modelConfig.id.toLowerCase();
+  (paramModelConfig.tags || []).forEach((t) => modelTags.add(t.toLowerCase()));
+  if (paramModelConfig.type) modelTags.add(paramModelConfig.type.toLowerCase());
+  if (paramModelConfig.vendor)
+    modelTags.add(paramModelConfig.vendor.toLowerCase());
+  const idLower = paramModelConfig.id.toLowerCase();
   if (idLower.includes('seedream')) modelTags.add('seedream');
   if (idLower.startsWith('mj') || idLower.includes('midjourney'))
     modelTags.add('mj');
@@ -3034,15 +3055,21 @@ export function getCompatibleParams(
 
   return ALL_PARAMS.filter((param) => {
     // 检查模型类型是否匹配
-    if (param.modelType !== modelConfig.type) return false;
+    if (param.modelType !== paramModelConfig.type) return false;
     // 检查是否在兼容 ID 列表（空数组表示所有模型都兼容）
-    const lookupIds = new Set([
-      normalizeModelIdForLookup(modelId),
-      normalizeModelIdForLookup(modelConfig.id),
-      ...(modelConfig.providerModelId
-        ? [normalizeModelIdForLookup(modelConfig.providerModelId)]
-        : []),
-    ]);
+    const lookupIds = new Set(
+      [
+        modelId,
+        modelConfig.id,
+        paramModelConfig.id,
+        modelConfig.providerModelId,
+      ]
+        .filter(
+          (candidate): candidate is string =>
+            typeof candidate === 'string' && candidate.trim().length > 0
+        )
+        .map((candidate) => normalizeModelIdForLookup(candidate))
+    );
     const idMatched =
       param.compatibleModels.length === 0 ||
       param.compatibleModels.some((compatibleModelId) =>

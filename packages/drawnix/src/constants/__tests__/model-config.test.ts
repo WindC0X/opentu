@@ -41,6 +41,8 @@ describe('model-config image size options', () => {
       label: 'GrsAI GPT Image 2',
       type: 'image',
       vendor: ModelVendor.OTHER,
+      providerModelId: 'gpt-image-2',
+      creativeManaged: true,
       parameterSchema,
     };
 
@@ -175,7 +177,7 @@ describe('model-config image size options', () => {
       label: 'Mock GPT Image 2 Empty Schema',
       type: 'image',
       vendor: ModelVendor.OTHER,
-      providerModelId: 'gpt-image-2',
+      providerModelId: 'unknown-provider-model',
       sourceProfileId: 'new-api-creative',
       creativeManaged: true,
       parameterSchema,
@@ -238,12 +240,27 @@ describe('model-config image size options', () => {
 
   it('binding 没有 runtime schema 时按 providerModelId 继续匹配静态参数', () => {
     const runtimeModel: ModelConfig = {
-      id: 'grsai:gpt-image-2:generate',
+      id: 'grsai-image-binding',
       providerModelId: 'gpt-image-2',
       priceModelId: 'unrelated-price-model',
       label: 'GrsAI GPT Image 2',
       type: 'image',
       vendor: ModelVendor.OTHER,
+      creativeManaged: true,
+    };
+
+    expect(getCompatibleParams(runtimeModel).map((param) => param.id)).toEqual(
+      expect.arrayContaining(['size', 'resolution', 'quality'])
+    );
+  });
+
+  it('creative managed 直连 catalog id 可匹配已知静态模型参数', () => {
+    const runtimeModel: ModelConfig = {
+      id: 'Gpt-image-2',
+      label: 'Channel GPT Image 2',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      creativeManaged: true,
     };
 
     expect(getCompatibleParams(runtimeModel).map((param) => param.id)).toEqual(
@@ -259,6 +276,20 @@ describe('model-config image size options', () => {
       label: 'Billing only binding',
       type: 'image',
       vendor: ModelVendor.OTHER,
+      creativeManaged: true,
+    };
+
+    expect(getCompatibleParams(runtimeModel)).toEqual([]);
+  });
+
+  it('未知 creative managed 模型没有 runtime schema 时不回退到静态参数', () => {
+    const runtimeModel: ModelConfig = {
+      id: 'unknown-image-binding',
+      providerModelId: 'unknown-provider-model',
+      label: 'Unknown Image Binding',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      creativeManaged: true,
     };
 
     expect(getCompatibleParams(runtimeModel)).toEqual([]);
