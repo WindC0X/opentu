@@ -22,6 +22,8 @@ import {
   getDefaultImageModel,
   IMAGE_PARAMS,
   getCompatibleParams,
+  getModelConfig,
+  getRuntimeModelConfigs,
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
@@ -127,6 +129,8 @@ export interface ImageGenerationParams {
   userParams?: CreativeUserParams;
   /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
   creativeManaged?: boolean;
+  /** Local-only provider model id used to preserve static fallback params for managed no-schema bindings across retry/resume. */
+  creativeParameterFallbackModelId?: string;
   /** 自动插入的目标 Frame */
   targetFrameId?: string;
   /** 自动插入的目标 Frame 尺寸 */
@@ -169,14 +173,38 @@ function isSchemaBackedCreativeImageParams(
 ): boolean {
   return (
     isCreativeManagedImageTask(params) ||
-    isCreativeManagedModel(
-      effectiveModel || params.model || null,
-      effectiveModelRef || params.modelRef || null
-    ) ||
     hasCreativeUserParams(params.userParams) ||
     (!!(effectiveModel || params.model) &&
       hasRuntimeParameterSchema(effectiveModel || params.model || ''))
   );
+}
+
+function supportsLegacyCreativeImageParams(
+  model: string,
+  modelRef?: ModelRef | null,
+  fallbackModelId?: string | null
+): boolean {
+  if (!isCreativeManagedModel(model, modelRef || null)) {
+    return true;
+  }
+  const fallbackParams = fallbackModelId
+    ? getCompatibleParams(fallbackModelId)
+    : [];
+  if (fallbackParams.some((param) => !param.runtimeSchema)) {
+    return true;
+  }
+
+  const lookupId = modelRef?.modelId || model;
+  const normalizedLookupId = lookupId.trim().toLowerCase();
+  const modelConfig =
+    getModelConfig(lookupId) ||
+    getRuntimeModelConfigs().find(
+      (candidate) => candidate.id.trim().toLowerCase() === normalizedLookupId
+    );
+  const params = modelConfig
+    ? getCompatibleParams(modelConfig)
+    : getCompatibleParams(model);
+  return params.some((param) => !param.runtimeSchema);
 }
 
 function pickManagedCreativeRawParams(
@@ -296,6 +324,13 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
       requestedModel,
       requestedModelRef
     );
+    const legacyParamsAllowed =
+      !schemaBacked &&
+      supportsLegacyCreativeImageParams(
+        requestedModel,
+        requestedModelRef,
+        params.creativeParameterFallbackModelId
+      );
     const userParams = schemaBacked
       ? sanitizeManagedCreativeUserParams(params, requestedModel)
       : undefined;
@@ -320,7 +355,7 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
         prompt,
         model: requestedModel,
         modelRef: requestedModelRef,
-        size: schemaBacked ? undefined : size || '1x1',
+        size: legacyParamsAllowed ? size || '1x1' : undefined,
         generationMode:
           params.generationMode ||
           (isGPTImageEditRequestSchema(preferredRequestSchema)
@@ -331,11 +366,13 @@ async function executeAsync(params: ImageGenerationParams): Promise<MCPResult> {
             ? referenceImages
             : undefined,
         maskImage: params.maskImage,
-        inputFidelity: schemaBacked ? undefined : params.inputFidelity,
-        background: schemaBacked ? undefined : params.background,
-        outputFormat: schemaBacked ? undefined : params.outputFormat,
-        outputCompression: schemaBacked ? undefined : params.outputCompression,
-        params: schemaBacked ? undefined : buildAdapterParams(params),
+        inputFidelity: legacyParamsAllowed ? params.inputFidelity : undefined,
+        background: legacyParamsAllowed ? params.background : undefined,
+        outputFormat: legacyParamsAllowed ? params.outputFormat : undefined,
+        outputCompression: legacyParamsAllowed
+          ? params.outputCompression
+          : undefined,
+        params: legacyParamsAllowed ? buildAdapterParams(params) : undefined,
         userParams,
       }
     );
@@ -386,7 +423,14 @@ function getImageQueueConfig(params: ImageGenerationParams) {
         model,
         modelRef
       );
-      const adapterParams = schemaBacked
+      const legacyParamsAllowed =
+        !schemaBacked &&
+        supportsLegacyCreativeImageParams(
+          model,
+          modelRef,
+          params.creativeParameterFallbackModelId
+        );
+      const adapterParams = !legacyParamsAllowed
         ? undefined
         : buildQueueAdapterParams(params);
       const userParams = schemaBacked
@@ -394,7 +438,7 @@ function getImageQueueConfig(params: ImageGenerationParams) {
         : undefined;
       return {
         prompt: params.prompt,
-        size: schemaBacked ? undefined : params.size || '1x1',
+        size: legacyParamsAllowed ? params.size || '1x1' : undefined,
         uploadedImages:
           uploadedImages && uploadedImages.length > 0
             ? uploadedImages
@@ -405,10 +449,12 @@ function getImageQueueConfig(params: ImageGenerationParams) {
             : undefined,
         generationMode: params.generationMode,
         maskImage: params.maskImage,
-        inputFidelity: schemaBacked ? undefined : params.inputFidelity,
-        background: schemaBacked ? undefined : params.background,
-        outputFormat: schemaBacked ? undefined : params.outputFormat,
-        outputCompression: schemaBacked ? undefined : params.outputCompression,
+        inputFidelity: legacyParamsAllowed ? params.inputFidelity : undefined,
+        background: legacyParamsAllowed ? params.background : undefined,
+        outputFormat: legacyParamsAllowed ? params.outputFormat : undefined,
+        outputCompression: legacyParamsAllowed
+          ? params.outputCompression
+          : undefined,
         model,
         modelRef,
         targetFrameId: params.targetFrameId,
@@ -422,6 +468,8 @@ function getImageQueueConfig(params: ImageGenerationParams) {
         comicCreatorAction: params.comicCreatorAction,
         comicCreatorRecordId: params.comicCreatorRecordId,
         comicCreatorPageId: params.comicCreatorPageId,
+        creativeParameterFallbackModelId:
+          params.creativeParameterFallbackModelId,
         ...(adapterParams ? { params: adapterParams } : {}),
         ...(schemaBacked ? { userParams, creativeManaged: true } : {}),
       };

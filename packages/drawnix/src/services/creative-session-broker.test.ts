@@ -25,6 +25,10 @@ import {
   getCreativeDefaultVisibleModels,
   getCreativeMoreModels,
 } from './creative-display-policy';
+import {
+  getCompatibleParams,
+  hasRuntimeParameterSchema,
+} from '../constants/model-config';
 
 const mocks = vi.hoisted(() => ({
   waitForInitialization: vi.fn(async () => undefined),
@@ -460,7 +464,7 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     });
   });
 
-  it('keeps Creative managed identity when schema is empty or hidden-only', async () => {
+  it('keeps explicit empty/hidden-only schema authoritative for Creative managed models', async () => {
     const fetcher = vi.fn(async (endpoint: RequestInfo | URL) => {
       if (String(endpoint) === '/creative/api/bootstrap') {
         return jsonResponse({
@@ -477,6 +481,13 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
         return jsonResponse({
           data: [
             {
+              id: 'mock:gpt-image-2:explicit-empty',
+              providerModelId: 'gpt-image-2',
+              label: 'Explicit Empty Schema Image',
+              type: 'image',
+              parameterSchema: [],
+            },
+            {
               id: 'mock:gpt-image-2:empty-schema',
               providerModelId: 'gpt-image-2',
               label: 'Empty Schema Image',
@@ -487,6 +498,16 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
                   label: 'Server Only',
                   type: 'string',
                   hidden: true,
+                },
+                {
+                  id: 'callback',
+                  label: 'Callback',
+                  type: 'string',
+                },
+                {
+                  id: 'invalid_enum',
+                  label: 'Invalid enum',
+                  type: 'enum',
                 },
               ],
             },
@@ -499,18 +520,45 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     const result = await initializeCreativeManagedSessionBroker(fetcher);
 
     expect(result.status).toBe('ready');
-    expect(result.models?.[0]).toMatchObject({
+    const explicitEmptyModel = result.models?.find(
+      (model) => model.id === 'mock:gpt-image-2:explicit-empty'
+    );
+    const hiddenOnlyModel = result.models?.find(
+      (model) => model.id === 'mock:gpt-image-2:empty-schema'
+    );
+    expect(explicitEmptyModel).toMatchObject({
+      id: 'mock:gpt-image-2:explicit-empty',
+      sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
+      creativeManaged: true,
+      parameterSchema: [],
+    });
+    expect(hiddenOnlyModel).toMatchObject({
       id: 'mock:gpt-image-2:empty-schema',
       sourceProfileId: CREATIVE_MANAGED_PROFILE_ID,
       creativeManaged: true,
-      parameterSchema: undefined,
+      parameterSchema: [],
     });
+    expect(hasRuntimeParameterSchema(explicitEmptyModel!)).toBe(true);
+    expect(hasRuntimeParameterSchema(hiddenOnlyModel!)).toBe(true);
+    expect(getCompatibleParams(explicitEmptyModel!)).toEqual([]);
+    expect(getCompatibleParams(hiddenOnlyModel!)).toEqual([]);
 
     const catalog = getCreativeManagedCatalog(getFirstProviderCatalogsUpdate());
-    expect(catalog.discoveredModels[0]).toMatchObject({
+    const catalogExplicitEmpty = catalog.discoveredModels.find(
+      (model) => model.id === 'mock:gpt-image-2:explicit-empty'
+    );
+    const catalogHiddenOnly = catalog.discoveredModels.find(
+      (model) => model.id === 'mock:gpt-image-2:empty-schema'
+    );
+    expect(catalogExplicitEmpty).toMatchObject({
+      id: 'mock:gpt-image-2:explicit-empty',
+      creativeManaged: true,
+      parameterSchema: [],
+    });
+    expect(catalogHiddenOnly).toMatchObject({
       id: 'mock:gpt-image-2:empty-schema',
       creativeManaged: true,
-      parameterSchema: undefined,
+      parameterSchema: [],
     });
   });
 

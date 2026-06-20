@@ -15,7 +15,7 @@ import {
 import type { ParsedGenerationParams } from '../../../utils/ai-input-parser';
 
 vi.hoisted(() => {
-  const requestWithResult = <T,>(result: T) => {
+  const requestWithResult = <T>(result: T) => {
     const request: {
       onsuccess: ((event: Event) => void) | null;
       onerror: ((event: Event) => void) | null;
@@ -73,7 +73,9 @@ vi.hoisted(() => {
           error: null;
           onsuccess: ((event: Event) => void) | null;
           onerror: ((event: Event) => void) | null;
-          onupgradeneeded: ((event: { target: MockIndexedDbRequest }) => void) | null;
+          onupgradeneeded:
+            | ((event: { target: MockIndexedDbRequest }) => void)
+            | null;
           onblocked: ((event: Event) => void) | null;
           transaction: null;
         };
@@ -99,7 +101,9 @@ vi.hoisted(() => {
 });
 
 // Helper to create mock ParsedGenerationParams
-const createMockParams = (overrides: Partial<ParsedGenerationParams> = {}): ParsedGenerationParams => ({
+const createMockParams = (
+  overrides: Partial<ParsedGenerationParams> = {}
+): ParsedGenerationParams => ({
   scenario: 'direct_generation',
   generationType: 'image',
   modelId: 'gemini-3-pro-image-preview',
@@ -218,9 +222,15 @@ describe('workflow-converter', () => {
           generationType: 'image',
           prompt: '风格转换',
         });
-        const referenceImages = ['https://example.com/ref1.jpg', 'https://example.com/ref2.jpg'];
+        const referenceImages = [
+          'https://example.com/ref1.jpg',
+          'https://example.com/ref2.jpg',
+        ];
 
-        const workflow = convertDirectGenerationToWorkflow(params, referenceImages);
+        const workflow = convertDirectGenerationToWorkflow(
+          params,
+          referenceImages
+        );
 
         expect(workflow.steps[0].args.referenceImages).toEqual(referenceImages);
       });
@@ -281,6 +291,48 @@ describe('workflow-converter', () => {
           userParams: {},
           creativeManaged: true,
         });
+      });
+
+      it('managed no-schema 静态 fallback 图片步骤保留 legacy size 与 params', () => {
+        const params = createMockParams({
+          generationType: 'image',
+          modelId: 'grsai-image-binding',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'grsai-image-binding',
+          },
+          size: '16x9',
+          extraParams: {
+            resolution: '2k',
+            quality: 'high',
+          },
+          creativeParameterFallbackModelId: 'gpt-image-2',
+          userParams: undefined,
+          creativeManaged: undefined,
+        });
+
+        const workflow = convertDirectGenerationToWorkflow(params);
+
+        expect(workflow.steps[0].args).toMatchObject({
+          model: 'grsai-image-binding',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'grsai-image-binding',
+          },
+          size: '16x9',
+          params: {
+            resolution: '2k',
+            quality: 'high',
+          },
+          creativeParameterFallbackModelId: 'gpt-image-2',
+        });
+        expect(workflow.steps[0].args.userParams).toBeUndefined();
+        expect(workflow.steps[0].args.creativeManaged).toBeUndefined();
+        expect(workflow.metadata.userParams).toBeUndefined();
+        expect(workflow.metadata.creativeManaged).toBeUndefined();
+        expect(workflow.metadata.creativeParameterFallbackModelId).toBe(
+          'gpt-image-2'
+        );
       });
 
       it('单张图片带蒙版时应该创建 image_edit 请求参数', () => {
@@ -553,10 +605,16 @@ describe('workflow-converter', () => {
       const workflow = convertAgentFlowToWorkflow(params, referenceImages);
 
       expect(workflow.steps[0].args.context).toBeDefined();
-      expect((workflow.steps[0].args.context as any).finalPrompt).toBe('复杂任务描述');
+      expect((workflow.steps[0].args.context as any).finalPrompt).toBe(
+        '复杂任务描述'
+      );
       expect((workflow.steps[0].args.context as any).selection).toBeDefined();
-      expect((workflow.steps[0].args.context as any).defaultModels.image).toBe('gpt-image-2');
-      expect((workflow.steps[0].args.context as any).defaultModelRefs.image).toEqual({
+      expect((workflow.steps[0].args.context as any).defaultModels.image).toBe(
+        'gpt-image-2'
+      );
+      expect(
+        (workflow.steps[0].args.context as any).defaultModelRefs.image
+      ).toEqual({
         profileId: 'image-profile',
         modelId: 'gpt-image-2',
       });
@@ -574,9 +632,9 @@ describe('workflow-converter', () => {
       expect(workflow.steps[0].args.knowledgeContextRefs).toEqual(
         knowledgeContextRefs
       );
-      expect((workflow.steps[0].args.context as any).knowledgeContextRefs).toEqual(
-        knowledgeContextRefs
-      );
+      expect(
+        (workflow.steps[0].args.context as any).knowledgeContextRefs
+      ).toEqual(knowledgeContextRefs);
       expect(workflow.metadata.knowledgeContextRefs).toEqual(
         knowledgeContextRefs
       );
@@ -723,6 +781,87 @@ describe('workflow-converter', () => {
         userParams: { size: '1024x1024', seed: 42 },
         creativeManaged: true,
       });
+      expect(workflow.steps[0].args.creativeParameterFallbackModelId).toBeUndefined();
+      expect(workflow.metadata.creativeParameterFallbackModelId).toBeUndefined();
+    });
+
+    it('managed no-schema Skill DSL 图片步骤应携带 fallback id 并保留 legacy params', async () => {
+      const params = createMockParams({
+        scenario: 'agent_flow',
+        generationType: 'image',
+        modelId: 'grsai-image-binding',
+        modelRef: {
+          profileId: 'new-api-creative',
+          modelId: 'grsai-image-binding',
+        },
+        prompt: '生成猫咪海报',
+        size: '16x9',
+        extraParams: { resolution: '2k', quality: 'high' },
+        creativeParameterFallbackModelId: 'gpt-image-2',
+        userParams: undefined,
+        creativeManaged: undefined,
+      });
+
+      const workflow = await convertSkillFlowToWorkflow(params, {
+        id: 'poster',
+        name: '海报图',
+        type: 'system',
+        mcpTool: 'generate_image',
+        outputType: 'image',
+        description: '调用 generate_image\n- prompt: {{input}}\n- size: 16x9',
+      });
+
+      expect(workflow.steps[0].mcp).toBe('generate_image');
+      expect(workflow.steps[0].args).toMatchObject({
+        model: 'grsai-image-binding',
+        modelRef: {
+          profileId: 'new-api-creative',
+          modelId: 'grsai-image-binding',
+        },
+        size: '16x9',
+        creativeParameterFallbackModelId: 'gpt-image-2',
+      });
+      expect(workflow.steps[0].args.userParams).toBeUndefined();
+      expect(workflow.steps[0].args.creativeManaged).toBeUndefined();
+      expect(workflow.metadata.creativeParameterFallbackModelId).toBe(
+        'gpt-image-2'
+      );
+    });
+
+    it('managed no-schema Skill Agent 回退上下文应携带 fallback id', async () => {
+      const params = createMockParams({
+        scenario: 'agent_flow',
+        generationType: 'image',
+        modelId: 'grsai-image-binding',
+        modelRef: {
+          profileId: 'new-api-creative',
+          modelId: 'grsai-image-binding',
+        },
+        prompt: '做一张小红书封面图，春日露营咖啡氛围',
+        userInstruction: '做一张小红书封面图，春日露营咖啡氛围',
+        rawInput: '做一张小红书封面图，春日露营咖啡氛围',
+        size: '16x9',
+        creativeParameterFallbackModelId: 'gpt-image-2',
+        hasExtraContent: true,
+      });
+
+      const workflow = await convertSkillFlowToWorkflow(params, {
+        id: 'xhs-image-skill',
+        name: '小红书图',
+        type: 'external',
+        outputType: 'image',
+        content:
+          '你是小红书图片设计专家。先分析主题，再产出适合封面的高质量图片提示词。不要只返回文案。',
+      });
+
+      expect(workflow.steps[0].mcp).toBe('ai_analyze');
+      expect(
+        (workflow.steps[0].args.context as any).params
+          .creativeParameterFallbackModelId
+      ).toBe('gpt-image-2');
+      expect(workflow.metadata.creativeParameterFallbackModelId).toBe(
+        'gpt-image-2'
+      );
     });
 
     it('PPT Skill 只将文本模型和参考图片透传给 generate_ppt', async () => {
@@ -792,7 +931,9 @@ describe('workflow-converter', () => {
         content: string;
       }>;
       expect(messages[0].content).toContain('generate_image');
-      expect(messages[0].content).toContain('必须实际调用 `generate_image` 工具');
+      expect(messages[0].content).toContain(
+        '必须实际调用 `generate_image` 工具'
+      );
     });
 
     it('Skill 回退到 Agent 路径时应携带知识库上下文 refs', async () => {
@@ -816,9 +957,9 @@ describe('workflow-converter', () => {
       expect(workflow.steps[0].args.knowledgeContextRefs).toEqual(
         knowledgeContextRefs
       );
-      expect((workflow.steps[0].args.context as any).knowledgeContextRefs).toEqual(
-        knowledgeContextRefs
-      );
+      expect(
+        (workflow.steps[0].args.context as any).knowledgeContextRefs
+      ).toEqual(knowledgeContextRefs);
     });
   });
 
@@ -827,7 +968,11 @@ describe('workflow-converter', () => {
       const response = JSON.stringify({
         content: 'analysis',
         next: [
-          { mcp: 'generate_image', args: { prompt: 'test' }, description: '生成图片' },
+          {
+            mcp: 'generate_image',
+            args: { prompt: 'test' },
+            description: '生成图片',
+          },
           { mcp: 'add_text', args: { text: 'hello' }, description: '添加文字' },
         ],
       });
@@ -924,9 +1069,27 @@ describe('workflow-converter', () => {
       scenarioType: 'direct_generation',
       generationType: 'image',
       steps: [
-        { id: 'step-1', mcp: 'test1', args: {}, description: 'Step 1', status: 'pending' },
-        { id: 'step-2', mcp: 'test2', args: {}, description: 'Step 2', status: 'pending' },
-        { id: 'step-3', mcp: 'test3', args: {}, description: 'Step 3', status: 'pending' },
+        {
+          id: 'step-1',
+          mcp: 'test1',
+          args: {},
+          description: 'Step 1',
+          status: 'pending',
+        },
+        {
+          id: 'step-2',
+          mcp: 'test2',
+          args: {},
+          description: 'Step 2',
+          status: 'pending',
+        },
+        {
+          id: 'step-3',
+          mcp: 'test3',
+          args: {},
+          description: 'Step 3',
+          status: 'pending',
+        },
       ],
       metadata: createWorkflowMetadata(),
       createdAt: Date.now(),
@@ -956,7 +1119,13 @@ describe('workflow-converter', () => {
       const workflow = createMockWorkflow();
       const error = 'Generation failed';
 
-      const updated = updateStepStatus(workflow, 'step-1', 'failed', undefined, error);
+      const updated = updateStepStatus(
+        workflow,
+        'step-1',
+        'failed',
+        undefined,
+        error
+      );
 
       expect(updated.steps[0].status).toBe('failed');
       expect(updated.steps[0].error).toBe(error);
@@ -965,7 +1134,14 @@ describe('workflow-converter', () => {
     it('应该更新步骤的 duration', () => {
       const workflow = createMockWorkflow();
 
-      const updated = updateStepStatus(workflow, 'step-1', 'completed', undefined, undefined, 5000);
+      const updated = updateStepStatus(
+        workflow,
+        'step-1',
+        'completed',
+        undefined,
+        undefined,
+        5000
+      );
 
       expect(updated.steps[0].duration).toBe(5000);
     });
@@ -998,7 +1174,15 @@ describe('workflow-converter', () => {
       description: 'Test',
       scenarioType: 'agent_flow',
       generationType: 'image',
-      steps: [{ id: 'step-1', mcp: 'analyze', args: {}, description: 'Analyze', status: 'completed' }],
+      steps: [
+        {
+          id: 'step-1',
+          mcp: 'analyze',
+          args: {},
+          description: 'Analyze',
+          status: 'completed',
+        },
+      ],
       metadata: createWorkflowMetadata(),
       createdAt: Date.now(),
     });
@@ -1006,7 +1190,13 @@ describe('workflow-converter', () => {
     it('应该添加新步骤到工作流', () => {
       const workflow = createMockWorkflow();
       const newSteps: WorkflowStep[] = [
-        { id: 'step-2', mcp: 'generate', args: {}, description: 'Generate', status: 'pending' },
+        {
+          id: 'step-2',
+          mcp: 'generate',
+          args: {},
+          description: 'Generate',
+          status: 'pending',
+        },
       ];
 
       const updated = addStepsToWorkflow(workflow, newSteps);
@@ -1018,7 +1208,13 @@ describe('workflow-converter', () => {
     it('应该保持原有步骤不变', () => {
       const workflow = createMockWorkflow();
       const newSteps: WorkflowStep[] = [
-        { id: 'step-2', mcp: 'new', args: {}, description: 'New', status: 'pending' },
+        {
+          id: 'step-2',
+          mcp: 'new',
+          args: {},
+          description: 'New',
+          status: 'pending',
+        },
       ];
 
       const updated = addStepsToWorkflow(workflow, newSteps);
@@ -1029,9 +1225,27 @@ describe('workflow-converter', () => {
     it('应该支持添加多个步骤', () => {
       const workflow = createMockWorkflow();
       const newSteps: WorkflowStep[] = [
-        { id: 'step-2', mcp: 'step2', args: {}, description: 'Step 2', status: 'pending' },
-        { id: 'step-3', mcp: 'step3', args: {}, description: 'Step 3', status: 'pending' },
-        { id: 'step-4', mcp: 'step4', args: {}, description: 'Step 4', status: 'pending' },
+        {
+          id: 'step-2',
+          mcp: 'step2',
+          args: {},
+          description: 'Step 2',
+          status: 'pending',
+        },
+        {
+          id: 'step-3',
+          mcp: 'step3',
+          args: {},
+          description: 'Step 3',
+          status: 'pending',
+        },
+        {
+          id: 'step-4',
+          mcp: 'step4',
+          args: {},
+          description: 'Step 4',
+          status: 'pending',
+        },
       ];
 
       const updated = addStepsToWorkflow(workflow, newSteps);
@@ -1042,7 +1256,13 @@ describe('workflow-converter', () => {
     it('应该保持不可变性', () => {
       const workflow = createMockWorkflow();
       const newSteps: WorkflowStep[] = [
-        { id: 'step-2', mcp: 'new', args: {}, description: 'New', status: 'pending' },
+        {
+          id: 'step-2',
+          mcp: 'new',
+          args: {},
+          description: 'New',
+          status: 'pending',
+        },
       ];
 
       const updated = addStepsToWorkflow(workflow, newSteps);
@@ -1053,7 +1273,9 @@ describe('workflow-converter', () => {
   });
 
   describe('getWorkflowStatus', () => {
-    const createWorkflowWithSteps = (statuses: WorkflowStep['status'][]): WorkflowDefinition => ({
+    const createWorkflowWithSteps = (
+      statuses: WorkflowStep['status'][]
+    ): WorkflowDefinition => ({
       id: 'test',
       name: 'Test',
       description: 'Test',
@@ -1071,7 +1293,11 @@ describe('workflow-converter', () => {
     });
 
     it('应该在所有步骤完成时返回 completed', () => {
-      const workflow = createWorkflowWithSteps(['completed', 'completed', 'completed']);
+      const workflow = createWorkflowWithSteps([
+        'completed',
+        'completed',
+        'completed',
+      ]);
 
       const status = getWorkflowStatus(workflow);
 
@@ -1081,7 +1307,11 @@ describe('workflow-converter', () => {
     });
 
     it('应该在有失败步骤时返回 failed', () => {
-      const workflow = createWorkflowWithSteps(['completed', 'failed', 'pending']);
+      const workflow = createWorkflowWithSteps([
+        'completed',
+        'failed',
+        'pending',
+      ]);
 
       const status = getWorkflowStatus(workflow);
 
@@ -1089,7 +1319,11 @@ describe('workflow-converter', () => {
     });
 
     it('应该在有运行中步骤时返回 running', () => {
-      const workflow = createWorkflowWithSteps(['completed', 'running', 'pending']);
+      const workflow = createWorkflowWithSteps([
+        'completed',
+        'running',
+        'pending',
+      ]);
 
       const status = getWorkflowStatus(workflow);
 
@@ -1099,7 +1333,11 @@ describe('workflow-converter', () => {
     });
 
     it('应该在所有步骤都是 pending 时返回 pending', () => {
-      const workflow = createWorkflowWithSteps(['pending', 'pending', 'pending']);
+      const workflow = createWorkflowWithSteps([
+        'pending',
+        'pending',
+        'pending',
+      ]);
 
       const status = getWorkflowStatus(workflow);
 
@@ -1107,7 +1345,12 @@ describe('workflow-converter', () => {
     });
 
     it('应该正确计算已完成步骤数', () => {
-      const workflow = createWorkflowWithSteps(['completed', 'completed', 'running', 'pending']);
+      const workflow = createWorkflowWithSteps([
+        'completed',
+        'completed',
+        'running',
+        'pending',
+      ]);
 
       const status = getWorkflowStatus(workflow);
 
@@ -1116,7 +1359,11 @@ describe('workflow-converter', () => {
     });
 
     it('应该返回当前运行中的步骤', () => {
-      const workflow = createWorkflowWithSteps(['completed', 'running', 'pending']);
+      const workflow = createWorkflowWithSteps([
+        'completed',
+        'running',
+        'pending',
+      ]);
 
       const status = getWorkflowStatus(workflow);
 
@@ -1125,7 +1372,11 @@ describe('workflow-converter', () => {
     });
 
     it('应该在没有运行中步骤时返回第一个 pending 步骤', () => {
-      const workflow = createWorkflowWithSteps(['completed', 'completed', 'pending']);
+      const workflow = createWorkflowWithSteps([
+        'completed',
+        'completed',
+        'pending',
+      ]);
 
       const status = getWorkflowStatus(workflow);
 

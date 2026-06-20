@@ -89,6 +89,7 @@ export interface WorkflowContext {
     duration?: string;
     userParams?: CreativeUserParams;
     creativeManaged?: boolean;
+    creativeParameterFallbackModelId?: string;
   };
   /** 参考图片 */
   referenceImages?: string[];

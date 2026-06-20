@@ -169,6 +169,8 @@ export interface GenerationParams {
   userParams?: CreativeUserParams;
   /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
   creativeManaged?: boolean;
+  /** Local-only provider model id used to preserve static fallback params for managed no-schema bindings across retry/resume. */
+  creativeParameterFallbackModelId?: string;
   /** Image generation mode for providers that distinguish generation/edit */
   generationMode?: 'text_to_image' | 'image_to_image' | 'image_edit';
   /** Whether this image task is generating a PPT slide image */

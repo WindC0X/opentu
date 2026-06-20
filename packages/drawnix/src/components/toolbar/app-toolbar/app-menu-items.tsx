@@ -6,7 +6,6 @@ import {
   TrashIcon,
   GithubIcon,
   BackupRestoreIcon,
-  DebugLogIcon,
   BookOpenIcon,
   CloudIcon,
   CleanBrokenLinksIcon,
@@ -205,23 +204,6 @@ export const CloudSync = ({
   );
 };
 CloudSync.displayName = 'CloudSync';
-
-export const DebugPanel = () => {
-  const { t } = useI18n();
-  return (
-    <MenuItem
-      icon={<DebugLogIcon />}
-      data-track="toolbar_click_menu_debug"
-      onSelect={() => {
-        window.location.href = './sw-debug.html';
-      }}
-      aria-label={t('menu.debugPanel')}
-    >
-      {t('menu.debugPanel')}
-    </MenuItem>
-  );
-};
-DebugPanel.displayName = 'DebugPanel';
 
 export const Settings = () => {
   const { appState, setAppState } = useDrawnix();

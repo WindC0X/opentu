@@ -158,6 +158,43 @@ describe('generation-api-service embedded Creative model guard', () => {
     expect(mocks.resolveAdapterForInvocation).not.toHaveBeenCalled();
     expect(mocks.adapterGenerateImage).not.toHaveBeenCalled();
   });
+
+  it('treats an explicit empty runtime parameterSchema as schema-backed on the direct image path', async () => {
+    const schemaBackedModel: ModelConfig = {
+      ...managedImageModel,
+      id: 'schema-empty-image',
+      label: 'Schema Empty Image',
+      creativeManaged: true,
+      parameterSchema: [],
+    };
+    mocks.getSelectableModels.mockReturnValue([schemaBackedModel]);
+    mocks.getPinnedSelectableModel.mockImplementation((_type, modelId) =>
+      modelId === schemaBackedModel.id ? schemaBackedModel : null
+    );
+    const { setRuntimeModelConfigs } = await import(
+      '../../constants/model-config'
+    );
+    setRuntimeModelConfigs([schemaBackedModel]);
+    const { generationAPIService } = await import('../generation-api-service');
+
+    await expect(
+      generationAPIService.generate(
+        'schema-empty-direct-path',
+        {
+          prompt: 'draw a cat',
+          model: schemaBackedModel.id,
+          size: '1024x1024',
+          quality: 'high',
+          params: { webhook: 'https://evil.example/hook' },
+        },
+        TaskType.IMAGE
+      )
+    ).rejects.toThrow(/managed image task route/);
+
+    expect(mocks.resolveAdapterForInvocation).not.toHaveBeenCalled();
+    expect(mocks.adapterGenerateImage).not.toHaveBeenCalled();
+  });
+
   it('replaces a missing request model with the managed default instead of a static fallback', async () => {
     mocks.getSelectableModels.mockReturnValue([managedImageModel]);
     mocks.getPinnedSelectableModel.mockImplementation((_type, modelId) =>

@@ -178,6 +178,8 @@ export const aiAnalyzeTool: MCPTool = {
               contextModelRef: modelRef || null,
               creativeUserParams: executionContext.params.userParams,
               creativeManaged: executionContext.params.creativeManaged,
+              creativeParameterFallbackModelId:
+                executionContext.params.creativeParameterFallbackModelId,
               fallbackModels: {
                 image: getMediaFallbackModel('image', settings.imageModelName),
                 video: getMediaFallbackModel('video', settings.videoModelName),

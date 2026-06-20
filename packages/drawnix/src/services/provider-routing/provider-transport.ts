@@ -120,14 +120,37 @@ function normalizeSessionBrokerMaterialKey(name: string): string {
   return name
     .trim()
     .toLowerCase()
-    .replace(/[-_\s]/g, '');
+    .replace(/[-_.\s]/g, '');
 }
 
 function isSensitiveSessionBrokerRoutingHeaderName(name: string): boolean {
   const normalized = normalizeSessionBrokerMaterialKey(name);
+  const dePrefixed = normalized.startsWith('x')
+    ? normalized.slice(1)
+    : normalized;
   if (
     normalized.startsWith('upstream') ||
-    normalized.replace(/^x/, '').startsWith('upstream')
+    dePrefixed.startsWith('upstream') ||
+    normalized.startsWith('notify') ||
+    dePrefixed.startsWith('notify') ||
+    normalized.includes('notification') ||
+    dePrefixed.includes('notification') ||
+    normalized.includes('callback') ||
+    dePrefixed.includes('callback') ||
+    normalized.includes('webhook') ||
+    dePrefixed.includes('webhook') ||
+    normalized.includes('selectedkey') ||
+    dePrefixed.includes('selectedkey') ||
+    normalized.includes('requestkey') ||
+    dePrefixed.includes('requestkey') ||
+    normalized.includes('upstreamkey') ||
+    dePrefixed.includes('upstreamkey') ||
+    normalized.startsWith('owner') ||
+    dePrefixed.startsWith('owner') ||
+    normalized.startsWith('useroverride') ||
+    dePrefixed.startsWith('useroverride') ||
+    normalized.startsWith('userid') ||
+    dePrefixed.startsWith('userid')
   ) {
     return true;
   }
@@ -156,20 +179,6 @@ function isSensitiveSessionBrokerRoutingHeaderName(name: string): boolean {
     normalized === 'xmodelid' ||
     normalized === 'modeloverride' ||
     normalized === 'xmodeloverride' ||
-    normalized === 'selectedkey' ||
-    normalized === 'xselectedkey' ||
-    normalized === 'notifyhook' ||
-    normalized === 'xnotifyhook' ||
-    normalized === 'notifyurl' ||
-    normalized === 'xnotifyurl' ||
-    normalized === 'callback' ||
-    normalized === 'xcallback' ||
-    normalized === 'callbackurl' ||
-    normalized === 'xcallbackurl' ||
-    normalized === 'webhook' ||
-    normalized === 'xwebhook' ||
-    normalized === 'webhookurl' ||
-    normalized === 'xwebhookurl' ||
     normalized === 'endpoint' ||
     normalized === 'xendpoint' ||
     normalized === 'url' ||
@@ -256,7 +265,27 @@ function isSensitiveSessionBrokerQueryKey(
     : normalized;
   if (
     normalized.startsWith('upstream') ||
-    dePrefixed.startsWith('upstream')
+    dePrefixed.startsWith('upstream') ||
+    normalized.startsWith('notify') ||
+    dePrefixed.startsWith('notify') ||
+    normalized.includes('notification') ||
+    dePrefixed.includes('notification') ||
+    normalized.includes('callback') ||
+    dePrefixed.includes('callback') ||
+    normalized.includes('webhook') ||
+    dePrefixed.includes('webhook') ||
+    normalized.includes('selectedkey') ||
+    dePrefixed.includes('selectedkey') ||
+    normalized.includes('requestkey') ||
+    dePrefixed.includes('requestkey') ||
+    normalized.includes('upstreamkey') ||
+    dePrefixed.includes('upstreamkey') ||
+    normalized.startsWith('owner') ||
+    dePrefixed.startsWith('owner') ||
+    normalized.startsWith('useroverride') ||
+    dePrefixed.startsWith('useroverride') ||
+    normalized.startsWith('userid') ||
+    dePrefixed.startsWith('userid')
   ) {
     return true;
   }
@@ -275,19 +304,11 @@ function isSensitiveSessionBrokerQueryKey(
     dePrefixed === 'refreshtoken' ||
     dePrefixed === 'idtoken' ||
     dePrefixed === 'internaltoken' ||
-    dePrefixed === 'upstreamkey' ||
     dePrefixed === 'authorization' ||
     dePrefixed === 'proxyauthorization' ||
     dePrefixed === 'token' ||
     dePrefixed === 'key' ||
     dePrefixed === 'provider' ||
-    dePrefixed === 'selectedkey' ||
-    dePrefixed === 'notifyhook' ||
-    dePrefixed === 'notifyurl' ||
-    dePrefixed === 'callback' ||
-    dePrefixed === 'callbackurl' ||
-    dePrefixed === 'webhook' ||
-    dePrefixed === 'webhookurl' ||
     dePrefixed === 'endpoint' ||
     dePrefixed === 'url' ||
     dePrefixed === 'proxy' ||

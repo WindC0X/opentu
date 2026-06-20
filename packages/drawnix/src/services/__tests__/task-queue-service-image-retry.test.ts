@@ -5,6 +5,7 @@ import {
   TaskType,
 } from '../../types/task.types';
 import type { Task } from '../../types/task.types';
+import type { ModelConfig } from '../../constants/model-config';
 import type { PollingOptions, PollingResult } from '../media-executor';
 
 function clone<T>(value: T): T {
@@ -17,7 +18,24 @@ async function flushAsyncWork(turns = 6): Promise<void> {
   }
 }
 
-async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
+function createCreativeRuntimeImageModel(
+  overrides: Pick<ModelConfig, 'id'> & Partial<ModelConfig>
+): ModelConfig {
+  return {
+    id: overrides.id,
+    label: overrides.id,
+    type: 'image',
+    vendor: 'GPT' as ModelConfig['vendor'],
+    sourceProfileId: 'new-api-creative',
+    creativeManaged: true,
+    ...overrides,
+  };
+}
+
+async function setupTaskQueueServiceHarness(
+  statusSequence: TaskStatus[],
+  options: { runtimeModels?: ModelConfig[] } = {}
+) {
   const storedTasks = new Map<string, any>();
 
   const mocks = {
@@ -31,7 +49,7 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
     deleteTask: vi.fn(async (taskId: string) => {
       storedTasks.delete(taskId);
     }),
-    archiveTasks: vi.fn(async () => {}),
+    archiveTasks: vi.fn(async () => undefined),
     invalidateCache: vi.fn(),
     generateImage: vi.fn(async (_params?: any, _options?: any) => undefined),
   };
@@ -42,53 +60,53 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
       taskId: string,
       options?: PollingOptions
     ): Promise<PollingResult> => {
-    const currentTask = storedTasks.get(taskId);
-    if (!currentTask) {
-      return { success: false, error: 'missing-task' };
-    }
+      const currentTask = storedTasks.get(taskId);
+      if (!currentTask) {
+        return { success: false, error: 'missing-task' };
+      }
 
-    const callIndex = waitForTaskCompletionCallCount;
-    waitForTaskCompletionCallCount += 1;
-    const nextStatus: TaskStatus =
-      statusSequence[callIndex] ??
-      statusSequence[statusSequence.length - 1] ??
-      TaskStatus.FAILED;
-    const now = Date.now();
-    const updatedTask =
-      nextStatus === TaskStatus.COMPLETED
-        ? {
-            ...clone(currentTask),
-            status: TaskStatus.COMPLETED,
-            updatedAt: now,
-            completedAt: now,
-            progress: 100,
-            result: {
-              url: 'https://example.com/out.png',
-              format: 'png',
-              size: 1,
-            },
-          }
+      const callIndex = waitForTaskCompletionCallCount;
+      waitForTaskCompletionCallCount += 1;
+      const nextStatus: TaskStatus =
+        statusSequence[callIndex] ??
+        statusSequence[statusSequence.length - 1] ??
+        TaskStatus.FAILED;
+      const now = Date.now();
+      const updatedTask =
+        nextStatus === TaskStatus.COMPLETED
+          ? {
+              ...clone(currentTask),
+              status: TaskStatus.COMPLETED,
+              updatedAt: now,
+              completedAt: now,
+              progress: 100,
+              result: {
+                url: 'https://example.com/out.png',
+                format: 'png',
+                size: 1,
+              },
+            }
+          : {
+              ...clone(currentTask),
+              status: TaskStatus.FAILED,
+              updatedAt: now,
+              completedAt: now,
+              error: {
+                code: 'EXECUTION_ERROR',
+                message: 'Image generation failed',
+              },
+            };
+
+      storedTasks.set(taskId, clone(updatedTask));
+      options?.onProgress?.(clone(updatedTask));
+
+      return nextStatus === TaskStatus.COMPLETED
+        ? { success: true, task: clone(updatedTask) }
         : {
-            ...clone(currentTask),
-            status: TaskStatus.FAILED,
-            updatedAt: now,
-            completedAt: now,
-            error: {
-              code: 'EXECUTION_ERROR',
-              message: 'Image generation failed',
-            },
+            success: false,
+            task: clone(updatedTask),
+            error: updatedTask.error?.message || 'failed',
           };
-
-    storedTasks.set(taskId, clone(updatedTask));
-    options?.onProgress?.(clone(updatedTask));
-
-    return nextStatus === TaskStatus.COMPLETED
-      ? { success: true, task: clone(updatedTask) }
-      : {
-          success: false,
-          task: clone(updatedTask),
-          error: updatedTask.error?.message || 'failed',
-        };
     }
   );
 
@@ -237,7 +255,7 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
     unifiedCacheService: {
       getImageForAI: vi.fn(),
       isCached: vi.fn(async () => false),
-      cacheMediaFromBlob: vi.fn(async () => {}),
+      cacheMediaFromBlob: vi.fn(async () => undefined),
     },
   }));
 
@@ -285,13 +303,18 @@ async function setupTaskQueueServiceHarness(statusSequence: TaskStatus[]) {
   }));
 
   vi.doMock('../../utils/task-utils', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../utils/task-utils')>();
+    const actual = await importOriginal<
+      typeof import('../../utils/task-utils')
+    >();
 
     return {
       ...actual,
       generateTaskId: () => 'task-image-edit-1',
     };
   });
+
+  const modelConfigModule = await import('../../constants/model-config');
+  modelConfigModule.setRuntimeModelConfigs(options.runtimeModels ?? []);
 
   const { taskQueueService } = await import('../task-queue-service');
 
@@ -404,6 +427,122 @@ describe('task-queue-service image edit retry persistence', () => {
       count: undefined,
       params: undefined,
     });
+  });
+
+  it('preserves legacy image params for managed no-schema bindings with providerModelId static fallback on retry', async () => {
+    const managedBinding = createCreativeRuntimeImageModel({
+      id: 'managed-gpt-image-2-binding',
+      providerModelId: 'gpt-image-2',
+      priceModelId: 'billing-gpt-image-2',
+    });
+    const { taskQueueService, mocks } = await setupTaskQueueServiceHarness(
+      [TaskStatus.FAILED, TaskStatus.COMPLETED],
+      { runtimeModels: [managedBinding] }
+    );
+
+    const task = taskQueueService.createTask(
+      {
+        prompt: 'Managed static fallback cat',
+        model: managedBinding.id,
+        modelRef: {
+          profileId: 'new-api-creative',
+          modelId: managedBinding.id,
+        },
+        size: '1x1',
+        resolution: '4k',
+        quality: 'high',
+        count: 2,
+        params: {
+          style: 'vivid',
+        },
+        creativeParameterFallbackModelId: 'gpt-image-2',
+      },
+      TaskType.IMAGE
+    );
+
+    await flushAsyncWork();
+    const modelConfigModule = await import('../../constants/model-config');
+    modelConfigModule.clearRuntimeModelConfigs();
+    taskQueueService.retryTask(task.id);
+    await flushAsyncWork();
+
+    const retryPayload = mocks.generateImage.mock.calls[1]?.[0];
+    expect(retryPayload).toMatchObject({
+      taskId: task.id,
+      prompt: 'Managed static fallback cat',
+      model: managedBinding.id,
+      modelRef: {
+        profileId: 'new-api-creative',
+        modelId: managedBinding.id,
+      },
+      size: '1x1',
+      resolution: '4k',
+      quality: 'high',
+      count: 2,
+    });
+    expect(retryPayload.params).toEqual({
+      style: 'vivid',
+      resolution: '4k',
+      quality: 'high',
+      n: 2,
+    });
+    expect(retryPayload.userParams).toBeUndefined();
+    expect(retryPayload.creativeManaged).toBeUndefined();
+    expect(retryPayload.creativeParameterFallbackModelId).toBe('gpt-image-2');
+  });
+
+  it('keeps unknown managed no-schema bindings parameterless even when priceModelId matches a static image model on retry', async () => {
+    const managedBinding = createCreativeRuntimeImageModel({
+      id: 'managed-unknown-image-binding',
+      priceModelId: 'gpt-image-2',
+    });
+    const { taskQueueService, mocks } = await setupTaskQueueServiceHarness(
+      [TaskStatus.FAILED, TaskStatus.COMPLETED],
+      { runtimeModels: [managedBinding] }
+    );
+
+    const task = taskQueueService.createTask(
+      {
+        prompt: 'Managed billing-only cat',
+        model: managedBinding.id,
+        modelRef: {
+          profileId: 'new-api-creative',
+          modelId: managedBinding.id,
+        },
+        size: '1x1',
+        resolution: '4k',
+        quality: 'high',
+        count: 2,
+        params: {
+          style: 'vivid',
+        },
+      },
+      TaskType.IMAGE
+    );
+
+    await flushAsyncWork();
+    const modelConfigModule = await import('../../constants/model-config');
+    modelConfigModule.clearRuntimeModelConfigs();
+    taskQueueService.retryTask(task.id);
+    await flushAsyncWork();
+
+    const retryPayload = mocks.generateImage.mock.calls[1]?.[0];
+    expect(retryPayload).toMatchObject({
+      taskId: task.id,
+      prompt: 'Managed billing-only cat',
+      model: managedBinding.id,
+      modelRef: {
+        profileId: 'new-api-creative',
+        modelId: managedBinding.id,
+      },
+    });
+    expect(retryPayload.size).toBeUndefined();
+    expect(retryPayload.resolution).toBeUndefined();
+    expect(retryPayload.quality).toBeUndefined();
+    expect(retryPayload.count).toBeUndefined();
+    expect(retryPayload.params).toBeUndefined();
+    expect(retryPayload.userParams).toBeUndefined();
+    expect(retryPayload.creativeManaged).toBeUndefined();
   });
 
   it('rehydrates managed image tasks with empty userParams without legacy params on retry', async () => {
@@ -585,8 +724,9 @@ describe('task-queue-service image edit retry persistence', () => {
   });
 
   it('emits storage sync updates when completed result or insertion flag changes without status progress changes', async () => {
-    const { taskQueueService } =
-      await setupTaskQueueServiceHarness([TaskStatus.COMPLETED]);
+    const { taskQueueService } = await setupTaskQueueServiceHarness([
+      TaskStatus.COMPLETED,
+    ]);
     const task: Task = {
       id: 'task-storage-sync-1',
       type: TaskType.IMAGE,
@@ -678,8 +818,9 @@ describe('task-queue-service image edit retry persistence', () => {
   });
 
   it('emits storage sync updates when invocation route changes', async () => {
-    const { taskQueueService } =
-      await setupTaskQueueServiceHarness([TaskStatus.COMPLETED]);
+    const { taskQueueService } = await setupTaskQueueServiceHarness([
+      TaskStatus.COMPLETED,
+    ]);
     const task: Task = {
       id: 'task-video-route-sync-1',
       type: TaskType.VIDEO,

@@ -16,6 +16,7 @@ import {
   getDefaultTextModel as getSystemDefaultTextModel,
   getDefaultVideoModel as getSystemDefaultVideoModel,
   buildCreativeUserParams,
+  getCompatibleParams,
   hasRuntimeParameterSchema,
   isCreativeManagedModel,
   type CreativeUserParams,
@@ -143,6 +144,8 @@ export interface ParsedGenerationParams {
   userParams?: CreativeUserParams;
   /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
   creativeManaged?: boolean;
+  /** Local-only provider model id used to preserve static fallback params for managed no-schema bindings across retry/resume. */
+  creativeParameterFallbackModelId?: string;
   /** 原始解析结果 */
   parseResult: ParseResult;
   /** 是否有额外内容（除模型/参数/数量外） */
@@ -382,10 +385,23 @@ export function parseAIInput(
   let size: string | undefined;
   let duration: string | undefined;
   const modelConfig = getModelConfig(modelId);
-  const schemaBackedModel = modelConfig
-    ? isCreativeManagedModel(modelConfig, options?.modelRef || null) ||
-      hasRuntimeParameterSchema(modelConfig)
+  const creativeManagedModel = modelConfig
+    ? isCreativeManagedModel(modelConfig, options?.modelRef || null)
     : isCreativeManagedModel(modelId, options?.modelRef || null);
+  const schemaBackedModel = modelConfig
+    ? hasRuntimeParameterSchema(modelConfig)
+    : hasRuntimeParameterSchema(modelId);
+  const staticFallbackModelId = modelConfig?.providerModelId || modelConfig?.id;
+  const supportsLegacyParams =
+    !schemaBackedModel &&
+    (!creativeManagedModel ||
+      getCompatibleParams(modelConfig || modelId).some(
+        (param) => !param.runtimeSchema
+      ));
+  const creativeParameterFallbackModelId =
+    supportsLegacyParams && creativeManagedModel && staticFallbackModelId
+      ? staticFallbackModelId
+      : undefined;
   const userParams = schemaBackedModel
     ? buildCreativeUserParams(modelConfig || modelId, options?.params) || {}
     : undefined;
@@ -393,7 +409,7 @@ export function parseAIInput(
   // 1. 优先从 options.params 中读取（新逻辑，支持多参数对象）
   // 收集额外参数（非 size/duration 的自定义参数，如 seedream_quality, aspect_ratio）
   let extraParams: Record<string, string> | undefined;
-  if (options?.params && !schemaBackedModel) {
+  if (options?.params && supportsLegacyParams) {
     if (
       generationType !== 'audio' &&
       generationType !== 'text' &&
@@ -418,12 +434,17 @@ export function parseAIInput(
   }
 
   // 2. 兼容旧逻辑：options.size（来自单独的 size 参数）
-  if (!schemaBackedModel && !size && options?.size && options.size !== 'auto') {
+  if (
+    supportsLegacyParams &&
+    !size &&
+    options?.size &&
+    options.size !== 'auto'
+  ) {
     size = normalizeSize(options.size);
   }
 
   // 3. 从提示词中解析 -size=xxx 或 -duration=xxx
-  if (!schemaBackedModel && !size && options?.size !== 'auto') {
+  if (supportsLegacyParams && !size && options?.size !== 'auto') {
     for (const param of parseResult.selectedParams) {
       if (param.id === 'size') {
         size = normalizeSize(param.value);
@@ -432,7 +453,7 @@ export function parseAIInput(
     }
   }
 
-  if (!schemaBackedModel && !duration) {
+  if (supportsLegacyParams && !duration) {
     for (const param of parseResult.selectedParams) {
       if (param.id === 'duration') {
         duration = param.value;
@@ -448,7 +469,7 @@ export function parseAIInput(
     generationType !== 'text' &&
     generationType !== 'agent' &&
     generationType !== 'audio' &&
-    !schemaBackedModel
+    supportsLegacyParams
   ) {
     if (modelConfig?.type === 'image' && modelConfig.imageDefaults) {
       // 图片模型使用默认尺寸
@@ -482,7 +503,7 @@ export function parseAIInput(
   }
 
   // 视频模型：如果没有指定时长，使用默认值
-  if (!schemaBackedModel && !duration && generationType === 'video') {
+  if (supportsLegacyParams && !duration && generationType === 'video') {
     const defaults = getEffectiveVideoDefaultParams(
       modelId,
       options?.modelRef || modelId,
@@ -511,6 +532,7 @@ export function parseAIInput(
     extraParams,
     userParams,
     creativeManaged: schemaBackedModel ? true : undefined,
+    creativeParameterFallbackModelId,
     parseResult,
     hasExtraContent,
     selection,

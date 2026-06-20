@@ -1,10 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   parseAIInput,
   generateDefaultPrompt,
   shouldUseAgentFlow,
   type SelectionInfo,
 } from '../ai-input-parser';
+import {
+  clearRuntimeModelConfigs,
+  ModelVendor,
+  normalizeCreativeParameterSchema,
+  setRuntimeModelConfigs,
+} from '../../constants/model-config';
 
 // Mock settings-manager
 vi.mock('../settings-manager', () => ({
@@ -51,8 +57,8 @@ vi.mock('../settings-manager', () => ({
       requestedModel && typeof requestedModel === 'object'
         ? requestedModel.modelId || ''
         : typeof requestedModel === 'string'
-          ? requestedModel
-          : '',
+        ? requestedModel
+        : '',
     modelRef:
       requestedModel && typeof requestedModel === 'object'
         ? {
@@ -69,7 +75,10 @@ vi.mock('../settings-manager', () => ({
 }));
 
 // Helper function
-const createSelection = (texts: string[] = [], imageCount = 0): SelectionInfo => ({
+const createSelection = (
+  texts: string[] = [],
+  imageCount = 0
+): SelectionInfo => ({
   texts,
   images: Array(imageCount).fill('mock-image-url'),
   videos: [],
@@ -77,6 +86,10 @@ const createSelection = (texts: string[] = [], imageCount = 0): SelectionInfo =>
 });
 
 describe('ai-input-parser', () => {
+  beforeEach(() => {
+    clearRuntimeModelConfigs();
+  });
+
   describe('generateDefaultPrompt', () => {
     it('应该在有选中文字时返回合并的文字', () => {
       const result = generateDefaultPrompt(true, ['Hello', 'World'], 0);
@@ -124,11 +137,15 @@ describe('ai-input-parser', () => {
     });
 
     it('应该在组合历史标记文本时返回 true', () => {
-      expect(shouldUseAgentFlow('#gemini-3-pro-image-preview -size=1024x768 +2')).toBe(true);
+      expect(
+        shouldUseAgentFlow('#gemini-3-pro-image-preview -size=1024x768 +2')
+      ).toBe(true);
     });
 
     it('应该在组合标记且有额外内容时返回 true', () => {
-      expect(shouldUseAgentFlow('#gemini-3-pro-image-preview 一只可爱的猫')).toBe(true);
+      expect(
+        shouldUseAgentFlow('#gemini-3-pro-image-preview 一只可爱的猫')
+      ).toBe(true);
     });
 
     it('应该在空输入时返回 false', () => {
@@ -164,13 +181,19 @@ describe('ai-input-parser', () => {
       });
 
       it('场景4: 输入内容包含其他内容 -> agent_flow', () => {
-        const result = parseAIInput('请生成一张可爱的猫的图片', createSelection([], 0));
+        const result = parseAIInput(
+          '请生成一张可爱的猫的图片',
+          createSelection([], 0)
+        );
         expect(result.scenario).toBe('agent_flow');
         expect(result.hasExtraContent).toBe(true);
       });
 
       it('混合场景: 有模型标记和额外内容 -> agent_flow', () => {
-        const result = parseAIInput('#gemini-3-pro-image-preview 一只可爱的猫', createSelection([], 1));
+        const result = parseAIInput(
+          '#gemini-3-pro-image-preview 一只可爱的猫',
+          createSelection([], 1)
+        );
         expect(result.scenario).toBe('agent_flow');
         expect(result.hasExtraContent).toBe(true);
       });
@@ -183,7 +206,10 @@ describe('ai-input-parser', () => {
       });
 
       it('选择图片模型时应该是图片生成', () => {
-        const result = parseAIInput('#gemini-3-pro-image-preview', createSelection([], 1));
+        const result = parseAIInput(
+          '#gemini-3-pro-image-preview',
+          createSelection([], 1)
+        );
         expect(result.generationType).toBe('image');
         expect(result.modelId).toBe('gemini-3-pro-image-preview');
       });
@@ -269,8 +295,260 @@ describe('ai-input-parser', () => {
       });
 
       it('没有指定尺寸时应该使用模型默认值', () => {
-        const result = parseAIInput('#gemini-3-pro-image-preview', createSelection([], 1));
+        const result = parseAIInput(
+          '#gemini-3-pro-image-preview',
+          createSelection([], 1)
+        );
         expect(result.size).toBe('1x1');
+      });
+
+      it('Creative managed 无 runtime schema 但有 providerModelId 静态 fallback 时保留 legacy 参数', () => {
+        setRuntimeModelConfigs([
+          {
+            id: 'grsai-image-binding',
+            providerModelId: 'gpt-image-2',
+            priceModelId: 'unrelated-price-model',
+            label: 'GrsAI GPT Image 2',
+            type: 'image',
+            vendor: ModelVendor.OTHER,
+            sourceProfileId: 'new-api-creative',
+            creativeManaged: true,
+          },
+        ]);
+
+        const result = parseAIInput('', createSelection([], 1), {
+          generationType: 'image',
+          modelId: 'grsai-image-binding',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'grsai-image-binding',
+          },
+          params: {
+            size: '16:9',
+            resolution: '2k',
+            quality: 'high',
+          },
+        });
+
+        expect(result.size).toBe('16x9');
+        expect(result.extraParams).toEqual({
+          resolution: '2k',
+          quality: 'high',
+        });
+        expect(result.userParams).toBeUndefined();
+        expect(result.creativeManaged).toBeUndefined();
+        expect(result.creativeParameterFallbackModelId).toBe('gpt-image-2');
+      });
+
+      it('Creative managed runtime schema 仍生成 typed userParams 并跳过 legacy 参数', () => {
+        setRuntimeModelConfigs([
+          {
+            id: 'mock:gpt-image-2:preview',
+            providerModelId: 'gpt-image-2',
+            label: 'Mock GPT Image 2',
+            type: 'image',
+            vendor: ModelVendor.OTHER,
+            sourceProfileId: 'new-api-creative',
+            creativeManaged: true,
+            parameterSchema: normalizeCreativeParameterSchema(
+              [
+                {
+                  id: 'size',
+                  label: '尺寸',
+                  type: 'enum',
+                  options: [{ value: '1024x1024', label: '1024×1024' }],
+                },
+                { id: 'seed', label: 'Seed', type: 'integer' },
+              ],
+              'image',
+              'mock:gpt-image-2:preview'
+            ),
+          },
+        ]);
+
+        const result = parseAIInput('', createSelection([], 1), {
+          generationType: 'image',
+          modelId: 'mock:gpt-image-2:preview',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'mock:gpt-image-2:preview',
+          },
+          params: {
+            size: '1024x1024',
+            seed: '42.9',
+            quality: 'high',
+          },
+        });
+
+        expect(result.userParams).toEqual({
+          size: '1024x1024',
+          seed: 42,
+        });
+        expect(result.creativeManaged).toBe(true);
+        expect(result.creativeParameterFallbackModelId).toBeUndefined();
+        expect(result.size).toBeUndefined();
+        expect(result.extraParams).toBeUndefined();
+      });
+
+      it('Creative managed 显式空 schema 阻止 providerModelId 静态 fallback 参数', () => {
+        setRuntimeModelConfigs([
+          {
+            id: 'mock:gpt-image-2:empty-schema',
+            providerModelId: 'gpt-image-2',
+            label: 'Mock GPT Image 2 Empty Schema',
+            type: 'image',
+            vendor: ModelVendor.OTHER,
+            sourceProfileId: 'new-api-creative',
+            creativeManaged: true,
+            parameterSchema: normalizeCreativeParameterSchema(
+              [],
+              'image',
+              'mock:gpt-image-2:empty-schema'
+            ),
+          },
+        ]);
+
+        const result = parseAIInput('', createSelection([], 1), {
+          generationType: 'image',
+          modelId: 'mock:gpt-image-2:empty-schema',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'mock:gpt-image-2:empty-schema',
+          },
+          params: {
+            size: '16:9',
+            resolution: '2k',
+            quality: 'high',
+          },
+        });
+
+        expect(result.userParams).toEqual({});
+        expect(result.creativeManaged).toBe(true);
+        expect(result.size).toBeUndefined();
+        expect(result.extraParams).toBeUndefined();
+        expect(result.creativeParameterFallbackModelId).toBeUndefined();
+      });
+
+      it('Creative managed 全隐藏/危险/无效 schema 也不保留 legacy 参数', () => {
+        setRuntimeModelConfigs([
+          {
+            id: 'mock:gpt-image-2:hidden-schema',
+            providerModelId: 'gpt-image-2',
+            label: 'Mock GPT Image 2 Hidden Schema',
+            type: 'image',
+            vendor: ModelVendor.OTHER,
+            sourceProfileId: 'new-api-creative',
+            creativeManaged: true,
+            parameterSchema: normalizeCreativeParameterSchema(
+              [
+                {
+                  id: 'server_only',
+                  label: 'Server Only',
+                  type: 'string',
+                  hidden: true,
+                },
+                {
+                  id: 'callback',
+                  label: 'Callback',
+                  type: 'string',
+                },
+                {
+                  id: 'invalid_enum',
+                  label: 'Invalid enum',
+                  type: 'enum',
+                },
+              ],
+              'image',
+              'mock:gpt-image-2:hidden-schema'
+            ),
+          },
+        ]);
+
+        const result = parseAIInput('', createSelection([], 1), {
+          generationType: 'image',
+          modelId: 'mock:gpt-image-2:hidden-schema',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'mock:gpt-image-2:hidden-schema',
+          },
+          params: {
+            size: '16:9',
+            quality: 'high',
+          },
+        });
+
+        expect(result.userParams).toEqual({});
+        expect(result.creativeManaged).toBe(true);
+        expect(result.size).toBeUndefined();
+        expect(result.extraParams).toBeUndefined();
+        expect(result.creativeParameterFallbackModelId).toBeUndefined();
+      });
+
+      it('Creative managed 仅 priceModelId 命中静态模型时不解锁参数', () => {
+        setRuntimeModelConfigs([
+          {
+            id: 'billing-only-binding',
+            providerModelId: 'unknown-provider-model',
+            priceModelId: 'gpt-image-2',
+            label: 'Billing Only Binding',
+            type: 'image',
+            vendor: ModelVendor.OTHER,
+            sourceProfileId: 'new-api-creative',
+            creativeManaged: true,
+          },
+        ]);
+
+        const result = parseAIInput('', createSelection([], 1), {
+          generationType: 'image',
+          modelId: 'billing-only-binding',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'billing-only-binding',
+          },
+          params: {
+            size: '16:9',
+            resolution: '2k',
+            quality: 'high',
+          },
+        });
+
+        expect(result.size).toBeUndefined();
+        expect(result.extraParams).toBeUndefined();
+        expect(result.userParams).toBeUndefined();
+        expect(result.creativeManaged).toBeUndefined();
+        expect(result.creativeParameterFallbackModelId).toBeUndefined();
+      });
+
+      it('未知 Creative managed 无 schema 模型保持 parameterless', () => {
+        setRuntimeModelConfigs([
+          {
+            id: 'unknown-image-binding',
+            label: 'Unknown Image Binding',
+            type: 'image',
+            vendor: ModelVendor.OTHER,
+            sourceProfileId: 'new-api-creative',
+            creativeManaged: true,
+          },
+        ]);
+
+        const result = parseAIInput('', createSelection([], 1), {
+          generationType: 'image',
+          modelId: 'unknown-image-binding',
+          modelRef: {
+            profileId: 'new-api-creative',
+            modelId: 'unknown-image-binding',
+          },
+          params: {
+            size: '16:9',
+            quality: 'high',
+          },
+        });
+
+        expect(result.size).toBeUndefined();
+        expect(result.extraParams).toBeUndefined();
+        expect(result.userParams).toBeUndefined();
+        expect(result.creativeManaged).toBeUndefined();
+        expect(result.creativeParameterFallbackModelId).toBeUndefined();
       });
     });
 
@@ -294,25 +572,26 @@ describe('ai-input-parser', () => {
 
     describe('parseResult 保留', () => {
       it('应该保留原始解析结果', () => {
-        const result = parseAIInput('#gemini-3-pro-image-preview +2 一只猫', createSelection([], 1));
+        const result = parseAIInput(
+          '#gemini-3-pro-image-preview +2 一只猫',
+          createSelection([], 1)
+        );
         expect(result.parseResult).toBeDefined();
         expect(result.parseResult.selectedImageModel).toBeNull();
         expect(result.parseResult.selectedCount).toBeNull();
-        expect(result.parseResult.cleanText).toBe('#gemini-3-pro-image-preview +2 一只猫');
+        expect(result.parseResult.cleanText).toBe(
+          '#gemini-3-pro-image-preview +2 一只猫'
+        );
       });
     });
 
     describe('复杂组合场景', () => {
       it('应该正确处理只有标记没有额外内容的情况', () => {
-        const result = parseAIInput(
-          '',
-          createSelection(['猫咪图片'], 1),
-          {
-            modelId: 'gemini-3-pro-image-preview',
-            params: { size: '16:9' },
-            count: 3,
-          }
-        );
+        const result = parseAIInput('', createSelection(['猫咪图片'], 1), {
+          modelId: 'gemini-3-pro-image-preview',
+          params: { size: '16:9' },
+          count: 3,
+        });
 
         expect(result.scenario).toBe('direct_generation');
         expect(result.hasExtraContent).toBe(false);
@@ -355,27 +634,29 @@ describe('ai-input-parser', () => {
 
     describe('模型大小写不敏感', () => {
       it('应该支持大写模型名', () => {
-        const result = parseAIInput('#GEMINI-3-PRO-IMAGE-PREVIEW', createSelection([], 1));
+        const result = parseAIInput(
+          '#GEMINI-3-PRO-IMAGE-PREVIEW',
+          createSelection([], 1)
+        );
         expect(result.modelId).toBe('gemini-3-pro-image-preview');
       });
 
       it('应该支持混合大小写模型名', () => {
-        const result = parseAIInput('#Gemini-3-Pro-Image-Preview', createSelection([], 1));
+        const result = parseAIInput(
+          '#Gemini-3-Pro-Image-Preview',
+          createSelection([], 1)
+        );
         expect(result.modelId).toBe('gemini-3-pro-image-preview');
       });
     });
 
     describe('完整返回对象快照', () => {
       it('图片生成场景 - 完整参数', () => {
-        const result = parseAIInput(
-          '一只可爱的橘猫',
-          createSelection([], 1),
-          {
-            modelId: 'gemini-3-pro-image-preview',
-            params: { size: '1:1' },
-            count: 2,
-          }
-        );
+        const result = parseAIInput('一只可爱的橘猫', createSelection([], 1), {
+          modelId: 'gemini-3-pro-image-preview',
+          params: { size: '1:1' },
+          count: 2,
+        });
 
         expect(result).toMatchObject({
           scenario: 'agent_flow',
@@ -399,14 +680,10 @@ describe('ai-input-parser', () => {
       });
 
       it('视频生成场景 - 完整参数', () => {
-        const result = parseAIInput(
-          '一只猫在跳舞',
-          createSelection([], 1),
-          {
-            modelId: 'veo3',
-            params: { duration: '8', size: '16:9' },
-          }
-        );
+        const result = parseAIInput('一只猫在跳舞', createSelection([], 1), {
+          modelId: 'veo3',
+          params: { duration: '8', size: '16:9' },
+        });
 
         expect(result).toMatchObject({
           scenario: 'agent_flow',
@@ -429,15 +706,11 @@ describe('ai-input-parser', () => {
       });
 
       it('直接生成场景 - 无额外内容', () => {
-        const result = parseAIInput(
-          '',
-          createSelection(['猫咪', '狗狗'], 2),
-          {
-            modelId: 'gemini-3-pro-image-preview',
-            params: { size: '16:9' },
-            count: 3,
-          }
-        );
+        const result = parseAIInput('', createSelection(['猫咪', '狗狗'], 2), {
+          modelId: 'gemini-3-pro-image-preview',
+          params: { size: '16:9' },
+          count: 3,
+        });
 
         expect(result).toMatchObject({
           scenario: 'direct_generation',

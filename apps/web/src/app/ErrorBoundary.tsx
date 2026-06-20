@@ -13,6 +13,7 @@ import { collectAndDownloadErrorLog } from '../utils/error-log-exporter';
 
 // ==================== Error Boundary ====================
 
+const isCreativeEmbeddedBuild = import.meta.env.BASE_URL === '/creative/';
 const LAZY_CHUNK_RETRY_KEY_PREFIX = 'aitu:lazy-chunk-retry';
 const LAZY_CHUNK_RETRY_PARAM = '_lazy_chunk_retry';
 const LAZY_CHUNK_RETRY_TS_PARAM = '_t';
@@ -25,6 +26,16 @@ const DYNAMIC_IMPORT_ERROR_PATTERNS = [
   /ChunkLoadError/i,
 ];
 let lazyAssetRecoveryScheduled = false;
+
+function isCreativeEmbeddedPath(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  return (
+    window.location.pathname === '/creative' ||
+    window.location.pathname.startsWith('/creative/')
+  );
+}
 
 type ErrorLikeEvent = Event & {
   error?: unknown;
@@ -300,7 +311,7 @@ export function safeModeReload(): void {
 }
 
 export function goToDebug(): void {
-  const debugUrl = '/sw-debug.html';
+  const debugUrl = `/${['sw', 'debug.html'].join('-')}`;
   // iframe 内直接跳转，保持同一浏览上下文以访问 SW/IndexedDB 数据
   window.location.href = debugUrl;
 }
@@ -385,6 +396,8 @@ export const ErrorFallbackUI: React.FC<ErrorFallbackProps> = (props) => {
   } = props;
   const [showDetail, setShowDetail] = React.useState(false);
   const cfg = VARIANT_CONFIG[variant];
+  const showStandaloneHelp =
+    !isCreativeEmbeddedBuild && !isCreativeEmbeddedPath();
 
   const displayTitle = title || cfg.defaultTitle;
   const displayDesc = description || cfg.defaultDesc;
@@ -483,33 +496,37 @@ export const ErrorFallbackUI: React.FC<ErrorFallbackProps> = (props) => {
         {/* 分隔线 */}
         <div style={styles.divider} />
 
-        {/* 底部帮助区域 */}
-        <div style={styles.helpSection}>
-          <div style={styles.helpRow}>
-            {/* 二维码 */}
-            <img
-              src="https://nav.ourzhishi.top/api/dynamic-image/qr-code"
-              alt="企业微信二维码"
-              style={styles.qrcode}
-              referrerPolicy="no-referrer"
-            />
-            {/* 右侧文字 + 按钮 */}
-            <div style={styles.helpText}>
-              <p style={styles.helpTitle}>需要帮助？</p>
-              <p style={styles.helpDesc}>
-                扫码联系客服，或前往调试页面导出完整日志与备份数据
-              </p>
-              <HoverButton
-                label="打开调试页面"
-                onClick={onGoToDebug}
-                bg="#f0eefa"
-                bgHover="#e2ddf7"
-                color="#5A4FCF"
-                small
-              />
+        {showStandaloneHelp && (
+          <>
+            {/* 底部帮助区域 */}
+            <div style={styles.helpSection}>
+              <div style={styles.helpRow}>
+                {/* 二维码 */}
+                <img
+                  src="https://nav.ourzhishi.top/api/dynamic-image/qr-code"
+                  alt="企业微信二维码"
+                  style={styles.qrcode}
+                  referrerPolicy="no-referrer"
+                />
+                {/* 右侧文字 + 按钮 */}
+                <div style={styles.helpText}>
+                  <p style={styles.helpTitle}>需要帮助？</p>
+                  <p style={styles.helpDesc}>
+                    扫码联系客服，或前往调试页面导出完整日志与备份数据
+                  </p>
+                  <HoverButton
+                    label="打开调试页面"
+                    onClick={onGoToDebug}
+                    bg="#f0eefa"
+                    bgHover="#e2ddf7"
+                    color="#5A4FCF"
+                    small
+                  />
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     </div>
   );

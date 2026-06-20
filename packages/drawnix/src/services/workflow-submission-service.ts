@@ -77,6 +77,7 @@ export interface WorkflowDefinition {
       duration?: string;
       userParams?: CreativeUserParams;
       creativeManaged?: boolean;
+      creativeParameterFallbackModelId?: string;
     };
     referenceImages?: string[];
   };
@@ -448,6 +449,10 @@ class WorkflowSubmissionService {
     };
 
     if (parsedInput.size) args.size = parsedInput.size;
+    if (parsedInput.creativeParameterFallbackModelId) {
+      args.creativeParameterFallbackModelId =
+        parsedInput.creativeParameterFallbackModelId;
+    }
     if (parsedInput.count && parsedInput.count > 1)
       args.count = parsedInput.count;
     if (parsedInput.duration) args.seconds = parsedInput.duration;
@@ -508,6 +513,8 @@ class WorkflowSubmissionService {
               ? parsedInput.userParams || {}
               : undefined,
           creativeManaged: parsedInput.creativeManaged ? true : undefined,
+          creativeParameterFallbackModelId:
+            parsedInput.creativeParameterFallbackModelId,
         },
         referenceImages,
       },
@@ -640,7 +647,7 @@ class WorkflowSubmissionService {
           status: event.status,
         });
         break;
-      case 'step':
+      case 'step': {
         this.events$.next({
           type: 'step',
           workflowId: event.workflowId,
@@ -663,6 +670,7 @@ class WorkflowSubmissionService {
           workflow.updatedAt = Date.now();
         }
         break;
+      }
       case 'completed':
         this.events$.next({
           type: 'completed',
@@ -675,7 +683,7 @@ class WorkflowSubmissionService {
           event.workflow as unknown as WorkflowDefinition
         );
         break;
-      case 'failed':
+      case 'failed': {
         this.events$.next({
           type: 'failed',
           workflowId: event.workflowId,
@@ -689,6 +697,7 @@ class WorkflowSubmissionService {
           failedWorkflow.updatedAt = Date.now();
         }
         break;
+      }
       case 'steps_added':
         this.events$.next({
           type: 'steps_added',

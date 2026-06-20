@@ -108,6 +108,12 @@ describe('ProviderTransport session-broker auth', () => {
       webhook: 'leak-webhook',
       callbackUrl: 'leak-callbackUrl',
       webhook_url: 'leak-webhook_url',
+      notifyEndpoint: 'leak-notifyEndpoint',
+      notificationUrl: 'leak-notificationUrl',
+      ownerOverride: 'leak-ownerOverride',
+      selectedKeyOverride: 'leak-selectedKeyOverride',
+      requestKeyOverride: 'leak-requestKeyOverride',
+      upstreamKeyOverride: 'leak-upstreamKeyOverride',
     };
 
     const prepared = transport.prepareRequest(context, {
@@ -204,14 +210,19 @@ describe('ProviderTransport session-broker auth', () => {
         'X-Model': 'extra-model-leak',
         'X-Model-Override': 'extra-model-override-leak',
         'X-Upstream-Key': 'extra-upstream-key-leak',
+        'X-Upstream-Key-Override': 'extra-upstream-key-override-leak',
         'X-Callback': 'extra-callback-leak',
         'X-Webhook': 'extra-webhook-leak',
+        'X-Notify-Endpoint': 'extra-notify-endpoint-leak',
+        'X-Notification-Url': 'extra-notification-url-leak',
+        'X-Owner-Override': 'extra-owner-override-leak',
+        'X-Selected-Key-Override': 'extra-selected-key-override-leak',
         'X-Safe-Trace': 'trace-ok',
       },
     };
 
     const prepared = transport.prepareRequest(context, {
-      path: '/videos/task-1?provider=path-provider-leak&providerId=path-provider-id-leak&channel=path-channel-leak&group=path-group-leak&groupId=path-group-id-leak&baseUrl=path-base-leak&modelId=path-model-id-leak&x_upstream_base_url=path-upstream-base-leak&callback=path-callback-leak&webhook=path-webhook-leak&safe=1',
+      path: '/videos/task-1?provider=path-provider-leak&providerId=path-provider-id-leak&channel=path-channel-leak&group=path-group-leak&groupId=path-group-id-leak&baseUrl=path-base-leak&modelId=path-model-id-leak&x_upstream_base_url=path-upstream-base-leak&callback=path-callback-leak&webhook=path-webhook-leak&notificationUrl=path-notification-url-leak&ownerOverride=path-owner-override-leak&selectedKeyOverride=path-selected-key-override-leak&safe=1',
       headers: {
         Provider: 'request-provider-leak',
         ProviderId: 'request-provider-id-leak',
@@ -224,6 +235,10 @@ describe('ProviderTransport session-broker auth', () => {
         UpstreamKey: 'request-upstream-key-leak',
         Callback: 'request-callback-leak',
         Webhook: 'request-webhook-leak',
+        NotifyEndpoint: 'request-notify-endpoint-leak',
+        NotificationUrl: 'request-notification-url-leak',
+        OwnerOverride: 'request-owner-override-leak',
+        SelectedKeyOverride: 'request-selected-key-override-leak',
         'X-Request-Id': 'request-ok',
       },
     });
@@ -234,7 +249,7 @@ describe('ProviderTransport session-broker auth', () => {
       'X-Request-Id': 'request-ok',
     });
     expect(JSON.stringify(prepared)).not.toMatch(
-      /provider-leak|provider-id-leak|channel-leak|group-leak|group-id-leak|base-url-leak|base-leak|model-leak|model-id-leak|model-override-leak|upstream-key-leak|upstream-base-leak|callback-leak|webhook-leak/i
+      /provider-leak|provider-id-leak|channel-leak|group-leak|group-id-leak|base-url-leak|base-leak|model-leak|model-id-leak|model-override-leak|upstream-key-leak|upstream-base-leak|callback-leak|webhook-leak|notify-endpoint-leak|notification-url-leak|owner-override-leak|selected-key-override-leak/i
     );
   });
 
@@ -293,22 +308,28 @@ describe('ProviderTransport session-broker auth', () => {
         'X-Model': 'extra-model-leak',
         'X-Selected-Key': 'extra-selected-key-leak',
         'X-Notify-Hook': 'extra-notify-hook-leak',
+        'X-Notify-Endpoint': 'extra-notify-endpoint-leak',
+        'X-Selected-Key-Override': 'extra-selected-key-override-leak',
         'X-Safe-Trace': 'trace-ok',
       },
     };
 
     const prepared = transport.prepareRequest(context, {
-      path: '/mj/task/task-1/fetch?model=path-model-leak&selectedKey=path-selected-key-leak&notifyHook=path-notify-hook-leak&provider=path-provider-leak&safe=1',
+      path: '/mj/task/task-1/fetch?model=path-model-leak&selectedKey=path-selected-key-leak&selectedKeyOverride=path-selected-key-override-leak&notifyHook=path-notify-hook-leak&notificationUrl=path-notification-url-leak&provider=path-provider-leak&safe=1',
       query: {
         modelOverride: 'query-model-override-leak',
         selected_key: 'query-selected-key-leak',
+        selectedKeyOverride: 'query-selected-key-override-leak',
         notify_hook: 'query-notify-hook-leak',
+        notifyEndpoint: 'query-notify-endpoint-leak',
         safe2: '2',
       },
       headers: {
         Model: 'request-model-leak',
         SelectedKey: 'request-selected-key-leak',
+        SelectedKeyOverride: 'request-selected-key-override-leak',
         NotifyHook: 'request-notify-hook-leak',
+        NotifyEndpoint: 'request-notify-endpoint-leak',
         'Idempotency-Key': 'opentu-image-local-task',
       },
     });
@@ -321,7 +342,7 @@ describe('ProviderTransport session-broker auth', () => {
       'Idempotency-Key': 'opentu-image-local-task',
     });
     expect(JSON.stringify(prepared)).not.toMatch(
-      /model-leak|model-override-leak|selected-key-leak|notify-hook-leak|provider-leak/i
+      /model-leak|model-override-leak|selected-key-leak|selected-key-override-leak|notify-hook-leak|notify-endpoint-leak|notification-url-leak|provider-leak/i
     );
   });
 

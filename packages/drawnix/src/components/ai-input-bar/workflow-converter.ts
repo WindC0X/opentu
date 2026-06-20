@@ -171,6 +171,7 @@ function applyMediaDefaultsToWorkflowSteps(
     | 'generationType'
     | 'userParams'
     | 'creativeManaged'
+    | 'creativeParameterFallbackModelId'
   >,
   overrideSpecifiedModel = false
 ): WorkflowStep[] {
@@ -193,6 +194,8 @@ function applyMediaDefaultsToWorkflowSteps(
         overrideSpecifiedModel,
         creativeUserParams: params.userParams,
         creativeManaged: params.creativeManaged,
+        creativeParameterFallbackModelId:
+          params.creativeParameterFallbackModelId,
       }
     ),
   }));
@@ -254,6 +257,7 @@ export function convertDirectGenerationToWorkflow(
     extraParams,
     userParams,
     creativeManaged,
+    creativeParameterFallbackModelId,
     selection,
     defaultModels,
     defaultModelRefs,
@@ -322,8 +326,13 @@ export function convertDirectGenerationToWorkflow(
         delete imageArgs.params;
         imageArgs.userParams = userParams || {};
         imageArgs.creativeManaged = true;
-      } else if (extraParams) {
-        imageArgs.params = extraParams;
+      } else {
+        if (creativeParameterFallbackModelId) {
+          imageArgs.creativeParameterFallbackModelId = creativeParameterFallbackModelId;
+        }
+        if (extraParams) {
+          imageArgs.params = extraParams;
+        }
       }
 
       steps.push({
@@ -535,6 +544,7 @@ export function convertDirectGenerationToWorkflow(
       selection,
       userParams: creativeManaged || userParams ? userParams || {} : undefined,
       creativeManaged: creativeManaged || userParams ? true : undefined,
+      creativeParameterFallbackModelId,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs
@@ -569,6 +579,7 @@ export function convertAgentFlowToWorkflow(
     extraParams,
     userParams,
     creativeManaged,
+    creativeParameterFallbackModelId,
     selection,
     defaultModels,
     defaultModelRefs,
@@ -600,6 +611,7 @@ export function convertAgentFlowToWorkflow(
             creativeManaged: true,
           }
         : {
+            creativeParameterFallbackModelId,
             size,
             duration,
             ...extraParams,
@@ -692,6 +704,7 @@ export function convertAgentFlowToWorkflow(
       selection,
       userParams: creativeManaged || userParams ? userParams || {} : undefined,
       creativeManaged: creativeManaged || userParams ? true : undefined,
+      creativeParameterFallbackModelId,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs
@@ -800,6 +813,7 @@ export async function convertSkillFlowToWorkflow(
     duration,
     userParams,
     creativeManaged,
+    creativeParameterFallbackModelId,
     selection,
     defaultModels,
     defaultModelRefs,
@@ -877,6 +891,7 @@ export async function convertSkillFlowToWorkflow(
         selection,
         userParams: creativeManaged || userParams ? userParams || {} : undefined,
         creativeManaged: creativeManaged || userParams ? true : undefined,
+        creativeParameterFallbackModelId,
         knowledgeContextRefs:
           normalizedKnowledgeContextRefs.length > 0
             ? normalizedKnowledgeContextRefs
@@ -914,6 +929,7 @@ export async function convertSkillFlowToWorkflow(
         : {
             size,
             duration,
+            creativeParameterFallbackModelId,
           }),
     },
     defaultModels,
@@ -1044,6 +1060,7 @@ export async function convertSkillFlowToWorkflow(
         selection,
         userParams: creativeManaged || userParams ? userParams || {} : undefined,
         creativeManaged: creativeManaged || userParams ? true : undefined,
+        creativeParameterFallbackModelId,
         knowledgeContextRefs:
           normalizedKnowledgeContextRefs.length > 0
             ? normalizedKnowledgeContextRefs
@@ -1124,6 +1141,7 @@ export async function convertSkillFlowToWorkflow(
       selection,
       userParams: creativeManaged || userParams ? userParams || {} : undefined,
       creativeManaged: creativeManaged || userParams ? true : undefined,
+      creativeParameterFallbackModelId,
       knowledgeContextRefs:
         normalizedKnowledgeContextRefs.length > 0
           ? normalizedKnowledgeContextRefs

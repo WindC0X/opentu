@@ -60,6 +60,8 @@ export interface ImageGenerationParams {
   userParams?: CreativeUserParams;
   /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
   creativeManaged?: boolean;
+  /** Local-only provider model id used to preserve static fallback params for managed no-schema bindings across retry/resume. */
+  creativeParameterFallbackModelId?: string;
   /** 素材库轻量元数据 */
   assetMetadata?: TaskGenerationParams['assetMetadata'];
 }

@@ -15,6 +15,7 @@ import type {
 import { BaseStorageReader } from './base-storage-reader';
 
 import { APP_DB_NAME, APP_DB_STORES, getAppDB } from './app-database';
+import type { ModelRef } from '../utils/settings-manager';
 
 // 使用主线程专用数据库
 const DB_NAME = APP_DB_NAME;
@@ -49,10 +50,24 @@ interface SWWorkflow {
   context?: {
     userInput?: string;
     model?: string;
+    modelRef?: ModelRef | null;
+    defaultModels?: {
+      image?: string;
+      video?: string;
+      audio?: string;
+    };
+    defaultModelRefs?: {
+      image?: ModelRef | null;
+      video?: ModelRef | null;
+      audio?: ModelRef | null;
+    };
     params?: {
       count?: number;
       size?: string;
       duration?: string;
+      userParams?: import('../constants/model-config').CreativeUserParams;
+      creativeManaged?: boolean;
+      creativeParameterFallbackModelId?: string;
     };
     selection?: {
       texts?: string[];
@@ -90,6 +105,9 @@ function convertSWWorkflowToDefinition(swWorkflow: SWWorkflow): WorkflowDefiniti
     context: swWorkflow.context ? {
       userInput: swWorkflow.context.userInput,
       model: swWorkflow.context.model,
+      modelRef: swWorkflow.context.modelRef,
+      defaultModels: swWorkflow.context.defaultModels,
+      defaultModelRefs: swWorkflow.context.defaultModelRefs,
       params: swWorkflow.context.params,
       referenceImages: swWorkflow.context.referenceImages,
     } : undefined,

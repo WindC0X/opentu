@@ -1,10 +1,55 @@
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
+
+const repoRoot = path.join(__dirname, '..');
+
+function normalizeGitCommit(value) {
+  const commit = String(value || '').trim();
+  return /^[0-9a-f]{7,64}$/i.test(commit) ? commit : '';
+}
 
 // 获取当前版本号
 function getCurrentVersion() {
   const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
   return packageJson.version;
+}
+
+function readGitCommitFromEnv() {
+  const candidates = [
+    ['GITHUB_SHA', process.env.GITHUB_SHA],
+    ['OPENTU_GIT_COMMIT', process.env.OPENTU_GIT_COMMIT],
+    ['CREATIVE_GIT_COMMIT', process.env.CREATIVE_GIT_COMMIT]
+  ];
+
+  for (const [name, value] of candidates) {
+    if (!value) {
+      continue;
+    }
+    const commit = normalizeGitCommit(value);
+    if (commit) {
+      return commit;
+    }
+    console.log(`⚠️  ${name} is set but is not a valid git commit id; ignoring`);
+  }
+
+  return '';
+}
+
+function readGitCommitFromGit() {
+  try {
+    return normalizeGitCommit(execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }));
+  } catch (e) {
+    return '';
+  }
+}
+
+function getGitCommit() {
+  return readGitCommitFromEnv() || readGitCommitFromGit() || 'unknown';
 }
 
 // 更新 Service Worker 中的版本号（已废弃，sw.js 现在是构建产物）
@@ -35,7 +80,7 @@ function createVersionFile(version) {
   const versionInfo = {
     version: version,
     buildTime: new Date().toISOString(),
-    gitCommit: process.env.GITHUB_SHA || 'unknown',
+    gitCommit: getGitCommit(),
     changelog: existingChangelog
   };
   

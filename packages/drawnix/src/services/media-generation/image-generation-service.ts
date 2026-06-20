@@ -33,7 +33,38 @@ import {
   hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
   isCreativeManagedModel,
+  getCompatibleParams,
+  getModelConfig,
+  getRuntimeModelConfigs,
 } from '../../constants/model-config';
+
+function supportsLegacyCreativeImageParams(
+  model?: string | null,
+  modelRef?: ImageGenerationOptions['modelRef'],
+  fallbackModelId?: string | null
+): boolean {
+  if (!model || !isCreativeManagedModel(model, modelRef || null)) {
+    return true;
+  }
+  const fallbackParams = fallbackModelId
+    ? getCompatibleParams(fallbackModelId)
+    : [];
+  if (fallbackParams.some((param) => !param.runtimeSchema)) {
+    return true;
+  }
+
+  const lookupId = modelRef?.modelId || model;
+  const normalizedLookupId = lookupId.trim().toLowerCase();
+  const modelConfig =
+    getModelConfig(lookupId) ||
+    getRuntimeModelConfigs().find(
+      (candidate) => candidate.id.trim().toLowerCase() === normalizedLookupId
+    );
+  const params = modelConfig
+    ? getCompatibleParams(modelConfig)
+    : getCompatibleParams(model);
+  return params.some((param) => !param.runtimeSchema);
+}
 
 function buildStoredImageAdapterParams(
   options: ImageGenerationOptions
@@ -67,36 +98,42 @@ function buildStoredImageAdapterParams(
 function buildStoredImageTaskParams(
   prompt: string,
   options: ImageGenerationOptions,
-  schemaBacked = hasCreativeUserParams(options.userParams)
+  schemaBacked = hasCreativeUserParams(options.userParams),
+  legacyParamsAllowed = !schemaBacked
 ) {
   const userParams = options.userParams ?? (schemaBacked ? {} : undefined);
   return {
     prompt,
     model: options.model,
     modelRef: options.modelRef || null,
-    size: schemaBacked ? undefined : options.size,
-    resolution: schemaBacked ? undefined : options.resolution,
-    quality: schemaBacked ? undefined : options.quality,
+    size: legacyParamsAllowed ? options.size : undefined,
+    resolution: legacyParamsAllowed ? options.resolution : undefined,
+    quality: legacyParamsAllowed ? options.quality : undefined,
     generationMode: options.generationMode,
     referenceImages:
       options.referenceImages && options.referenceImages.length > 0
         ? options.referenceImages
         : undefined,
     maskImage: options.maskImage,
-    inputFidelity: schemaBacked ? undefined : options.inputFidelity,
-    background: schemaBacked ? undefined : options.background,
-    outputFormat: schemaBacked ? undefined : options.outputFormat,
-    outputCompression: schemaBacked ? undefined : options.outputCompression,
+    inputFidelity: legacyParamsAllowed ? options.inputFidelity : undefined,
+    background: legacyParamsAllowed ? options.background : undefined,
+    outputFormat: legacyParamsAllowed ? options.outputFormat : undefined,
+    outputCompression: legacyParamsAllowed
+      ? options.outputCompression
+      : undefined,
     uploadedImages:
       options.uploadedImages && options.uploadedImages.length > 0
         ? options.uploadedImages
         : undefined,
-    count: schemaBacked ? undefined : options.count,
+    count: legacyParamsAllowed ? options.count : undefined,
     assetMetadata: options.assetMetadata,
     promptMeta: options.promptMeta,
-    params: schemaBacked ? undefined : buildStoredImageAdapterParams(options),
+    params: legacyParamsAllowed
+      ? buildStoredImageAdapterParams(options)
+      : undefined,
     userParams,
     creativeManaged: schemaBacked ? true : undefined,
+    creativeParameterFallbackModelId: options.creativeParameterFallbackModelId,
   };
 }
 
@@ -147,18 +184,23 @@ export async function generateImage(
   const now = Date.now();
   const schemaBacked =
     isCreativeManagedImageTask(effectiveOptions) ||
-    isCreativeManagedModel(
-      effectiveOptions.model || null,
-      effectiveOptions.modelRef || null
-    ) ||
     hasCreativeUserParams(effectiveOptions.userParams) ||
-    (!!effectiveOptions.model && hasRuntimeParameterSchema(effectiveOptions.model));
+    (!!effectiveOptions.model &&
+      hasRuntimeParameterSchema(effectiveOptions.model));
+  const legacyParamsAllowed =
+    !schemaBacked &&
+    supportsLegacyCreativeImageParams(
+      effectiveOptions.model,
+      effectiveOptions.modelRef || null,
+      effectiveOptions.creativeParameterFallbackModelId
+    );
   const userParams =
     effectiveOptions.userParams ?? (schemaBacked ? {} : undefined);
   const persistedTaskParams = buildStoredImageTaskParams(
     sanitizedParams.prompt,
     effectiveOptions,
-    schemaBacked
+    schemaBacked,
+    legacyParamsAllowed
   );
   const invocationRoute = createTaskInvocationRouteSnapshot(
     'image',
@@ -193,22 +235,30 @@ export async function generateImage(
     prompt: sanitizedParams.prompt,
     model: effectiveOptions.model,
     modelRef: effectiveOptions.modelRef || null,
-    size: schemaBacked ? undefined : effectiveOptions.size,
-    resolution: schemaBacked ? undefined : effectiveOptions.resolution,
+    size: legacyParamsAllowed ? effectiveOptions.size : undefined,
+    resolution: legacyParamsAllowed ? effectiveOptions.resolution : undefined,
     generationMode: effectiveOptions.generationMode,
-    quality: schemaBacked ? undefined : effectiveOptions.quality,
+    quality: legacyParamsAllowed ? effectiveOptions.quality : undefined,
     referenceImages: effectiveOptions.referenceImages,
     maskImage: effectiveOptions.maskImage,
-    inputFidelity: schemaBacked ? undefined : effectiveOptions.inputFidelity,
-    background: schemaBacked ? undefined : effectiveOptions.background,
-    outputFormat: schemaBacked ? undefined : effectiveOptions.outputFormat,
-    outputCompression: schemaBacked ? undefined : effectiveOptions.outputCompression,
+    inputFidelity: legacyParamsAllowed
+      ? effectiveOptions.inputFidelity
+      : undefined,
+    background: legacyParamsAllowed ? effectiveOptions.background : undefined,
+    outputFormat: legacyParamsAllowed
+      ? effectiveOptions.outputFormat
+      : undefined,
+    outputCompression: legacyParamsAllowed
+      ? effectiveOptions.outputCompression
+      : undefined,
     uploadedImages: effectiveOptions.uploadedImages,
-    count: schemaBacked ? undefined : effectiveOptions.count,
+    count: legacyParamsAllowed ? effectiveOptions.count : undefined,
     assetMetadata: effectiveOptions.assetMetadata,
-    params: schemaBacked ? undefined : effectiveOptions.params,
+    params: legacyParamsAllowed ? effectiveOptions.params : undefined,
     userParams,
     creativeManaged: schemaBacked ? true : undefined,
+    creativeParameterFallbackModelId:
+      effectiveOptions.creativeParameterFallbackModelId,
   };
 
   // 调用 executor 执行

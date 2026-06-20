@@ -53,6 +53,9 @@ export function getCreativeDocumentCloudSyncStatusLabel(
       ? `同步冲突 · 已冻结 ${status.frozenBoardCount}`
       : '同步冲突';
   }
+  if (!status.assetSyncEnabled && status.saveState !== 'cloud-saved') {
+    return '云同步不可用 · 已保存到此浏览器';
+  }
   if (status.syncing || status.syncState === 'syncing') {
     return '正在同步到云端…';
   }

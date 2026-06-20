@@ -101,6 +101,7 @@ export interface WorkflowDefinition {
     userParams?: CreativeUserParams;
     /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
     creativeManaged?: boolean;
+    creativeParameterFallbackModelId?: string;
     /** 本次生成使用的知识库笔记轻量引用 */
     knowledgeContextRefs?: KnowledgeContextRef[];
     /** 解析方式标记（用于调试和数据分析） */

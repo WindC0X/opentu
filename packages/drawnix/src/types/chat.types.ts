@@ -281,6 +281,8 @@ export interface AIInputContext {
     userParams?: CreativeUserParams;
     /** Local-only marker preserving managed Creative image tasks with empty userParams across retry/resume. */
     creativeManaged?: boolean;
+    /** Local-only provider model id used to preserve static fallback params for managed no-schema bindings across retry/resume. */
+    creativeParameterFallbackModelId?: string;
   };
 
   /** 选中的画布元素 */

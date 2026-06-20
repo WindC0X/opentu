@@ -37,6 +37,9 @@ import {
 } from './model-adapters';
 import { resolveCreativeEmbeddedModelForGeneration } from './creative-embedded-model-guard';
 import {
+  getCompatibleParams,
+  getModelConfig,
+  getRuntimeModelConfigs,
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
@@ -146,6 +149,45 @@ function areStorageSyncValuesEqual(left: unknown, right: unknown): boolean {
   }
 
   return false;
+}
+
+function hasExplicitCreativeUserParamsCarrier(
+  params?: GenerationParams | null
+): boolean {
+  return (
+    !!params &&
+    Object.prototype.hasOwnProperty.call(params, 'userParams') &&
+    (params as { userParams?: unknown }).userParams !== undefined
+  );
+}
+
+function supportsLegacyCreativeImageParams(
+  model?: string | null,
+  modelRef?: GenerationParams['modelRef'],
+  fallbackModelId?: string | null
+): boolean {
+  if (!model || !isCreativeManagedModel(model, modelRef || null)) {
+    return true;
+  }
+
+  const fallbackParams = fallbackModelId
+    ? getCompatibleParams(fallbackModelId)
+    : [];
+  if (fallbackParams.some((param) => !param.runtimeSchema)) {
+    return true;
+  }
+
+  const lookupId = modelRef?.modelId || model;
+  const normalizedLookupId = lookupId.trim().toLowerCase();
+  const modelConfig =
+    getModelConfig(lookupId) ||
+    getRuntimeModelConfigs().find(
+      (candidate) => candidate.id.trim().toLowerCase() === normalizedLookupId
+    );
+  const params = modelConfig
+    ? getCompatibleParams(modelConfig)
+    : getCompatibleParams(model);
+  return params.some((param) => !param.runtimeSchema);
 }
 
 function hasStorageTaskChanges(
@@ -927,33 +969,40 @@ class TaskQueueService {
             | undefined;
           const schemaBacked =
             isCreativeManagedImageTask(task.params) ||
-            isCreativeManagedModel(effectiveModel || null, effectiveModelRef) ||
             hasCreativeUserParams(rawUserParams) ||
+            hasExplicitCreativeUserParamsCarrier(task.params) ||
             hasRuntimeParameterSchema(effectiveModel || '');
+          const legacyParamsAllowed =
+            !schemaBacked &&
+            supportsLegacyCreativeImageParams(
+              effectiveModel,
+              effectiveModelRef,
+              task.params.creativeParameterFallbackModelId
+            );
           const userParams = rawUserParams ?? (schemaBacked ? {} : undefined);
           // 从 params.params 中提取额外参数，并补齐新图像契约字段。
           // Schema-backed Creative bindings must keep userParams separate and
           // must not rehydrate legacy adapter params during retries/resume.
-          const extraParams = schemaBacked
-            ? undefined
-            : {
+          const extraParams = legacyParamsAllowed
+            ? {
                 ...(((task.params as any).params || {}) as Record<
                   string,
                   unknown
                 >),
-              };
-          if (!schemaBacked && task.params.resolution !== undefined) {
+              }
+            : undefined;
+          if (legacyParamsAllowed && task.params.resolution !== undefined) {
             extraParams!.resolution = task.params.resolution;
           }
           if (
-            !schemaBacked &&
+            legacyParamsAllowed &&
             task.params.quality !== undefined &&
             extraParams!.quality === undefined
           ) {
             extraParams!.quality = task.params.quality;
           }
           if (
-            !schemaBacked &&
+            legacyParamsAllowed &&
             typeof task.params.count === 'number' &&
             Number.isFinite(task.params.count) &&
             extraParams!.n === undefined
@@ -966,10 +1015,10 @@ class TaskQueueService {
               prompt: task.params.prompt,
               model: effectiveModel,
               modelRef: effectiveModelRef,
-              size: schemaBacked ? undefined : task.params.size,
-              resolution: schemaBacked
-                ? undefined
-                : (task.params.resolution as '1k' | '2k' | '4k' | undefined),
+              size: legacyParamsAllowed ? task.params.size : undefined,
+              resolution: legacyParamsAllowed
+                ? (task.params.resolution as '1k' | '2k' | '4k' | undefined)
+                : undefined,
               generationMode: task.params.generationMode as
                 | 'text_to_image'
                 | 'image_to_image'
@@ -979,29 +1028,34 @@ class TaskQueueService {
                 | string[]
                 | undefined,
               maskImage: task.params.maskImage as string | undefined,
-              inputFidelity: schemaBacked
-                ? undefined
-                : (task.params.inputFidelity as 'high' | 'low' | undefined),
-              background: schemaBacked
-                ? undefined
-                : (task.params.background as
+              inputFidelity: legacyParamsAllowed
+                ? (task.params.inputFidelity as 'high' | 'low' | undefined)
+                : undefined,
+              background: legacyParamsAllowed
+                ? (task.params.background as
                     | 'transparent'
                     | 'opaque'
                     | 'auto'
-                    | undefined),
-              outputFormat: schemaBacked
-                ? undefined
-                : (task.params.outputFormat as 'png' | 'jpeg' | 'webp' | undefined),
-              outputCompression: schemaBacked
-                ? undefined
-                : (task.params.outputCompression as number | undefined),
-              count: schemaBacked ? undefined : (task.params.count as number | undefined),
+                    | undefined)
+                : undefined,
+              outputFormat: legacyParamsAllowed
+                ? (task.params.outputFormat as
+                    | 'png'
+                    | 'jpeg'
+                    | 'webp'
+                    | undefined)
+                : undefined,
+              outputCompression: legacyParamsAllowed
+                ? (task.params.outputCompression as number | undefined)
+                : undefined,
+              count: legacyParamsAllowed
+                ? (task.params.count as number | undefined)
+                : undefined,
               uploadedImages: task.params.uploadedImages as
                 | Array<{ url?: string }>
                 | undefined,
-              quality: schemaBacked
-                ? undefined
-                : ((task.params.quality ?? extraParams?.quality) as
+              quality: legacyParamsAllowed
+                ? ((task.params.quality ?? extraParams?.quality) as
                     | 'auto'
                     | 'low'
                     | 'medium'
@@ -1009,10 +1063,13 @@ class TaskQueueService {
                     | '1k'
                     | '2k'
                     | '4k'
-                    | undefined),
+                    | undefined)
+                : undefined,
               params: extraParams,
               userParams,
               creativeManaged: schemaBacked ? true : undefined,
+              creativeParameterFallbackModelId:
+                task.params.creativeParameterFallbackModelId,
               assetMetadata: task.params.assetMetadata,
             },
             executionOptions

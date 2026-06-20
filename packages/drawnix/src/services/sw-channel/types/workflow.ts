@@ -65,10 +65,24 @@ export interface WorkflowDefinition {
   context?: {
     userInput?: string;
     model?: string;
+    modelRef?: import('../../../utils/settings-manager').ModelRef | null;
+    defaultModels?: {
+      image?: string;
+      video?: string;
+      audio?: string;
+    };
+    defaultModelRefs?: {
+      image?: import('../../../utils/settings-manager').ModelRef | null;
+      video?: import('../../../utils/settings-manager').ModelRef | null;
+      audio?: import('../../../utils/settings-manager').ModelRef | null;
+    };
     params?: {
       count?: number;
       size?: string;
       duration?: string;
+      userParams?: import('../../../constants/model-config').CreativeUserParams;
+      creativeManaged?: boolean;
+      creativeParameterFallbackModelId?: string;
     };
     referenceImages?: string[];
   };

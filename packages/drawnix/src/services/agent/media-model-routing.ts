@@ -28,6 +28,7 @@ export interface MediaModelRoutingOptions {
   overrideSpecifiedModel?: boolean;
   creativeUserParams?: CreativeUserParams;
   creativeManaged?: boolean;
+  creativeParameterFallbackModelId?: string;
 }
 
 export function getMediaTypeForTool(
@@ -102,6 +103,10 @@ function applyCreativeManagedImageParams(
     (options.creativeManaged !== true &&
       options.creativeUserParams === undefined)
   ) {
+    if (mediaType === 'image' && options.creativeParameterFallbackModelId) {
+      args.creativeParameterFallbackModelId =
+        options.creativeParameterFallbackModelId;
+    }
     return args;
   }
 
@@ -112,6 +117,7 @@ function applyCreativeManagedImageParams(
   delete args.size;
   args.userParams = options.creativeUserParams ?? {};
   args.creativeManaged = true;
+  delete args.creativeParameterFallbackModelId;
   return args;
 }
 

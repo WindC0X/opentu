@@ -70,6 +70,9 @@ import {
 import { resolveCreativeEmbeddedModelForGeneration } from '../creative-embedded-model-guard';
 import { IMAGE_GENERATION_TIMEOUT_MS } from '../../constants/TASK_CONSTANTS';
 import {
+  getCompatibleParams,
+  getModelConfig,
+  getRuntimeModelConfigs,
   hasCreativeUserParams,
   hasRuntimeParameterSchema,
   isCreativeManagedImageTask,
@@ -159,6 +162,34 @@ function isImageEditRequest(
   );
 }
 
+function supportsLegacyCreativeImageParams(
+  model: string,
+  modelRef?: ImageGenerationParams['modelRef'],
+  fallbackModelId?: string | null
+): boolean {
+  if (!isCreativeManagedModel(model, modelRef || null)) {
+    return true;
+  }
+  const fallbackParams = fallbackModelId
+    ? getCompatibleParams(fallbackModelId)
+    : [];
+  if (fallbackParams.some((param) => !param.runtimeSchema)) {
+    return true;
+  }
+
+  const lookupId = modelRef?.modelId || model;
+  const normalizedLookupId = lookupId.trim().toLowerCase();
+  const modelConfig =
+    getModelConfig(lookupId) ||
+    getRuntimeModelConfigs().find(
+      (candidate) => candidate.id.trim().toLowerCase() === normalizedLookupId
+    );
+  const params = modelConfig
+    ? getCompatibleParams(modelConfig)
+    : getCompatibleParams(model);
+  return params.some((param) => !param.runtimeSchema);
+}
+
 /**
  * 主线程媒体执行器
  *
@@ -229,9 +260,15 @@ export class FallbackMediaExecutor implements IMediaExecutor {
 
     const schemaBacked =
       isCreativeManagedImageTask(params) ||
-      isCreativeManagedModel(modelName, effectiveModelRef) ||
       hasCreativeUserParams(params.userParams) ||
       hasRuntimeParameterSchema(modelName);
+    const legacyParamsAllowed =
+      !schemaBacked &&
+      supportsLegacyCreativeImageParams(
+        modelName,
+        effectiveModelRef,
+        params.creativeParameterFallbackModelId
+      );
     if (schemaBacked) {
       return executeCreativeManagedImageTask(
         taskId,
@@ -263,24 +300,22 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           prompt,
           model: modelName,
           modelRef: effectiveModelRef,
-          size,
-          resolution: params.resolution,
-          quality,
-          count,
+          size: legacyParamsAllowed ? size : undefined,
+          resolution: legacyParamsAllowed ? params.resolution : undefined,
+          quality: legacyParamsAllowed ? quality : undefined,
+          count: legacyParamsAllowed ? count : undefined,
           referenceImages,
           generationMode:
             params.generationMode ||
             (shouldUseEditSchema ? 'image_to_image' : 'text_to_image'),
           maskImage: params.maskImage,
-          inputFidelity: params.inputFidelity,
-          background: params.background,
-          outputFormat: params.outputFormat,
-          outputCompression: params.outputCompression,
-          params:
-            isCreativeManagedImageTask(params) ||
-            hasCreativeUserParams(params.userParams)
-              ? undefined
-              : params.params,
+          inputFidelity: legacyParamsAllowed ? params.inputFidelity : undefined,
+          background: legacyParamsAllowed ? params.background : undefined,
+          outputFormat: legacyParamsAllowed ? params.outputFormat : undefined,
+          outputCompression: legacyParamsAllowed
+            ? params.outputCompression
+            : undefined,
+          params: legacyParamsAllowed ? params.params : undefined,
           userParams: params.userParams,
           creativeManaged: params.creativeManaged,
           assetMetadata: params.assetMetadata,
@@ -307,7 +342,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           prompt,
           model: modelName,
           modelRef: effectiveModelRef,
-          size,
+          size: legacyParamsAllowed ? size : undefined,
           referenceImages,
           maskImage: params.maskImage,
           assetMetadata: params.assetMetadata,
@@ -357,10 +392,10 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       const requestBody = buildImageRequestBody({
         prompt,
         model: modelName,
-        size,
+        size: legacyParamsAllowed ? size : undefined,
         referenceImages: processedImages,
-        quality,
-        n: Math.min(Math.max(1, count), 10),
+        quality: legacyParamsAllowed ? quality : undefined,
+        n: legacyParamsAllowed ? Math.min(Math.max(1, count), 10) : undefined,
       });
 
       options?.onProgress?.({ progress: 10, phase: 'submitting' });

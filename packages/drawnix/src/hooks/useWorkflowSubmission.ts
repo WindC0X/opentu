@@ -41,6 +41,35 @@ export const workflowRecoveryPromise = new Promise<void>((resolve) => {
   workflowRecoveryResolve = resolve;
 });
 
+type RecoveredWorkflowParams = Partial<
+  WorkflowRetryContext['aiContext']['params']
+> & {
+  custom?: Record<string, string>;
+  extraParams?: Record<string, string>;
+};
+
+type RecoveredWorkflowContext = NonNullable<
+  LegacyWorkflowDefinition['context']
+> & {
+  params?: RecoveredWorkflowParams;
+  defaultModels?: WorkflowRetryContext['aiContext']['defaultModels'];
+  defaultModelRefs?: WorkflowRetryContext['aiContext']['defaultModelRefs'];
+  selection?: WorkflowRetryContext['aiContext']['selection'];
+  textModel?: string;
+};
+
+type RecoveredWorkflowMetadata = Partial<LegacyWorkflowDefinition['metadata']> & {
+  custom?: Record<string, string>;
+  extraParams?: Record<string, string>;
+};
+
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, string>;
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -212,45 +241,95 @@ export function useWorkflowSubmission(
 
           const globalSettings = geminiSettings.get();
           const creativeEmbeddedMode = isCreativeEmbeddedMode();
+          const workflowContext =
+            recoveredWorkflow.context as RecoveredWorkflowContext | undefined;
+          const workflowMetadata =
+            (recoveredWorkflow.metadata || {}) as RecoveredWorkflowMetadata;
+          const workflowParams = workflowContext?.params || {};
+          const recoveredStepArgs =
+            recoveredWorkflow.steps?.find((step) => step.args)?.args || {};
+          const recoveredStepParams = asStringRecord(recoveredStepArgs.params);
+          const recoveredModelRef =
+            workflowContext?.modelRef ||
+            workflowMetadata.modelRef ||
+            null;
+          const recoveredDefaultModels =
+            workflowMetadata.defaultModels || workflowContext?.defaultModels;
+          const recoveredDefaultModelRefs =
+            workflowMetadata.defaultModelRefs ||
+            workflowContext?.defaultModelRefs ||
+            undefined;
+          const recoveredCustomParams =
+            workflowMetadata.extraParams ||
+            workflowMetadata.custom ||
+            workflowParams.extraParams ||
+            workflowParams.custom ||
+            recoveredStepParams;
+          const recoveredCreativeParameterFallbackModelId =
+            workflowMetadata.creativeParameterFallbackModelId ||
+            workflowParams.creativeParameterFallbackModelId ||
+            (typeof recoveredStepArgs.creativeParameterFallbackModelId === 'string'
+              ? recoveredStepArgs.creativeParameterFallbackModelId
+              : undefined);
           const retryContext: WorkflowRetryContext = {
             aiContext: {
-              rawInput: recoveredWorkflow.context?.userInput || '',
-              userInstruction: recoveredWorkflow.context?.userInput || '',
+              rawInput: workflowMetadata.rawInput || workflowContext?.userInput || '',
+              userInstruction:
+                workflowMetadata.userInstruction || workflowContext?.userInput || '',
               model: {
-                id: recoveredWorkflow.context?.model || '',
+                id: workflowContext?.model || workflowMetadata.modelId || '',
                 type:
                   recoveredWorkflow.generationType === 'video'
                     ? 'video'
                     : recoveredWorkflow.generationType === 'audio'
                     ? 'audio'
                     : 'image',
-                isExplicit: true,
+                isExplicit: workflowMetadata.isModelExplicit ?? true,
               },
+              modelRef: recoveredModelRef,
               defaultModels: {
-                image: creativeEmbeddedMode
+                image: recoveredDefaultModels?.image || (creativeEmbeddedMode
                   ? ''
                   : globalSettings.imageModelName ||
-                    'gemini-3-pro-image-preview-vip',
-                video: creativeEmbeddedMode
+                    'gemini-3-pro-image-preview-vip'),
+                video: recoveredDefaultModels?.video || (creativeEmbeddedMode
                   ? ''
-                  : globalSettings.videoModelName || 'veo3.1',
-                audio: creativeEmbeddedMode
+                  : globalSettings.videoModelName || 'veo3.1'),
+                audio: recoveredDefaultModels?.audio || (creativeEmbeddedMode
                   ? ''
-                  : globalSettings.audioModelName || 'suno_music',
+                  : globalSettings.audioModelName || 'suno_music'),
               } as any,
-              defaultModelRefs: undefined,
+              defaultModelRefs: recoveredDefaultModelRefs,
               params: {
-                count: recoveredWorkflow.metadata?.count,
-                size: recoveredWorkflow.metadata?.size,
-                duration: recoveredWorkflow.metadata?.duration,
-                userParams: recoveredWorkflow.metadata?.userParams,
-                creativeManaged: recoveredWorkflow.metadata?.creativeManaged,
+                count: workflowMetadata.count ?? workflowParams.count,
+                size: workflowMetadata.size ?? workflowParams.size,
+                duration: workflowMetadata.duration ?? workflowParams.duration,
+                custom: recoveredCustomParams,
+                userParams: workflowMetadata.userParams ?? workflowParams.userParams,
+                creativeManaged:
+                  workflowMetadata.creativeManaged ?? workflowParams.creativeManaged,
+                creativeParameterFallbackModelId:
+                  recoveredCreativeParameterFallbackModelId,
               },
-              selection: { texts: [], images: [], videos: [], graphics: [] },
-              finalPrompt: recoveredWorkflow.metadata?.prompt || '',
+              selection:
+                workflowMetadata.selection ||
+                workflowContext?.selection || {
+                  texts: [],
+                  images: [],
+                  videos: [],
+                  graphics: [],
+                },
+              finalPrompt:
+                workflowMetadata.prompt || workflowContext?.userInput || '',
+              knowledgeContextRefs: workflowMetadata.knowledgeContextRefs,
             } as any,
-            referenceImages: recoveredWorkflow.context?.referenceImages || [],
-            textModel: creativeEmbeddedMode ? '' : globalSettings.textModelName,
+            referenceImages:
+              workflowContext?.referenceImages ||
+              workflowMetadata.referenceImages ||
+              [],
+            textModel:
+              workflowContext?.textModel ||
+              (creativeEmbeddedMode ? '' : globalSettings.textModelName),
           };
 
           const workflowData = toWorkflowMessageData(recoveredWorkflow, retryContext);
@@ -516,6 +595,8 @@ export function useWorkflowSubmission(
               ? parsedInput.userParams || {}
               : undefined,
           creativeManaged: parsedInput.creativeManaged ? true : undefined,
+          creativeParameterFallbackModelId:
+            parsedInput.creativeParameterFallbackModelId,
         },
         selection: parsedInput.selection || { texts: [], images: [], videos: [], graphics: [] },
         finalPrompt: parsedInput.prompt,
@@ -584,6 +665,8 @@ export function useWorkflowSubmission(
       extraParams: retryContext.aiContext.params.custom,
       userParams: retryContext.aiContext.params.userParams,
       creativeManaged: retryContext.aiContext.params.creativeManaged,
+      creativeParameterFallbackModelId:
+        retryContext.aiContext.params.creativeParameterFallbackModelId,
       scenario:
         retryContext.aiContext.model.type === 'agent'
           ? 'agent_flow'

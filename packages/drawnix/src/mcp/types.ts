@@ -5,15 +5,16 @@
  */
 
 // 从公共配置导入模型相关定义
-export type {
+import type {
   CreativeUserParams,
   ModelConfig,
   ModelType,
 } from '../constants/model-config';
-import type { CreativeUserParams } from '../constants/model-config';
 import type { ModelRef } from '../utils/settings-manager';
 import type { GeminiMessagePart } from '../utils/gemini-api/types';
 import type { KnowledgeContextRef } from '../types/task.types';
+
+export type { CreativeUserParams, ModelConfig, ModelType };
 
 /**
  * JSON Schema 类型定义
@@ -265,6 +266,8 @@ export interface AgentExecutionContext {
     userParams?: CreativeUserParams;
     /** 保留 schema-backed 托管图片请求，即使 userParams 为空 */
     creativeManaged?: boolean;
+    /** Local-only provider model id used to preserve static fallback params for managed no-schema bindings across retry/resume. */
+    creativeParameterFallbackModelId?: string;
   };
 
   /** 选中的画布元素 */

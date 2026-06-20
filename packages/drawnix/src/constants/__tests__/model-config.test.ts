@@ -153,7 +153,41 @@ describe('model-config image size options', () => {
     ).toThrow(/Invalid Creative userParams value/);
   });
 
-  it('忽略未知 runtime schema type，且托管标记不依赖非空 schema', () => {
+  it('显式空 runtime schema 仍保持 schema-backed，禁止 providerModelId 静态 fallback', () => {
+    const parameterSchema = normalizeCreativeParameterSchema(
+      [],
+      'image',
+      'mock:gpt-image-2:empty-schema'
+    );
+    const runtimeModel: ModelConfig = {
+      id: 'mock:gpt-image-2:empty-schema',
+      label: 'Mock GPT Image 2 Empty Schema',
+      type: 'image',
+      vendor: ModelVendor.OTHER,
+      providerModelId: 'gpt-image-2',
+      sourceProfileId: 'new-api-creative',
+      creativeManaged: true,
+      parameterSchema,
+    };
+
+    expect(parameterSchema).toEqual([]);
+    expect(hasRuntimeParameterSchema(runtimeModel)).toBe(true);
+    expect(getCompatibleParams(runtimeModel)).toEqual([]);
+    expect(
+      buildCreativeUserParams(runtimeModel, {
+        size: '1024x1024',
+        quality: 'high',
+      })
+    ).toBeUndefined();
+    expect(sanitizeCreativeUserParamsForModel(runtimeModel, {})).toEqual({});
+    expect(() =>
+      sanitizeCreativeUserParamsForModel(runtimeModel, {
+        size: '1024x1024',
+      })
+    ).toThrow(/Disallowed Creative userParams field: size/);
+  });
+
+  it('全隐藏/危险/无效 runtime schema 仍保持 schema-backed，禁止静态 fallback', () => {
     const malformedSchema = [
       {
         id: 'style',
@@ -166,6 +200,16 @@ describe('model-config image size options', () => {
         type: 'string',
         hidden: true,
       },
+      {
+        id: 'callback',
+        label: 'Callback',
+        type: 'string',
+      },
+      {
+        id: 'invalid_enum',
+        label: 'Invalid enum',
+        type: 'enum',
+      },
     ] as unknown as CreativeParameterSchemaItem[];
     const parameterSchema = normalizeCreativeParameterSchema(
       malformedSchema,
@@ -177,14 +221,14 @@ describe('model-config image size options', () => {
       label: 'Mock GPT Image 2 Empty Schema',
       type: 'image',
       vendor: ModelVendor.OTHER,
-      providerModelId: 'unknown-provider-model',
+      providerModelId: 'gpt-image-2',
       sourceProfileId: 'new-api-creative',
       creativeManaged: true,
       parameterSchema,
     };
 
-    expect(parameterSchema).toBeUndefined();
-    expect(hasRuntimeParameterSchema(runtimeModel)).toBe(false);
+    expect(parameterSchema).toEqual([]);
+    expect(hasRuntimeParameterSchema(runtimeModel)).toBe(true);
     expect(isCreativeManagedModel(runtimeModel)).toBe(true);
     expect(sanitizeCreativeUserParamsForModel(runtimeModel, {})).toEqual({});
     expect(() =>

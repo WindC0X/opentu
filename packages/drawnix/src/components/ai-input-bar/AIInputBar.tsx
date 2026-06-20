@@ -1509,6 +1509,8 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
       visibleTextModels,
       visibleVideoModels,
     ]);
+    const hasAvailableCurrentModel =
+      !creativeEmbeddedMode || currentModels.length > 0;
 
     useEffect(() => {
       let cancelled = false;
@@ -2928,6 +2930,9 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
         if (!trimmedPrompt && allContent.length === 0) {
           return;
         }
+        if (!hasAvailableCurrentModel) {
+          return;
+        }
         if (submitLockRef.current || isSubmitting) {
           return; // 仅防止快速重复点击
         }
@@ -3486,6 +3491,8 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                   ? parsedParams.userParams || {}
                   : undefined,
               creativeManaged: parsedParams.creativeManaged ? true : undefined,
+              creativeParameterFallbackModelId:
+                parsedParams.creativeParameterFallbackModelId,
             },
             selection,
             finalPrompt: parsedParams.prompt,
@@ -4019,6 +4026,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
         applyCurrentImageAnchorPresentationState,
         removeCurrentImageAnchor,
         onEnableRuntime,
+        hasAvailableCurrentModel,
       ]
     );
 
@@ -4558,7 +4566,9 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
         selectedModelRef?.profileId,
       ]
     );
-    const canGenerate = prompt.trim().length > 0 || allContent.length > 0;
+    const canGenerate =
+      hasAvailableCurrentModel &&
+      (prompt.trim().length > 0 || allContent.length > 0);
     const shouldHighlightInspirationSend =
       isInspirationSendGuideActive && canGenerate && !isSubmitting;
     const showInspirationBoard = isCanvasEmpty === true;

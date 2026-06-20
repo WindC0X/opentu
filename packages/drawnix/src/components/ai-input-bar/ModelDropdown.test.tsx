@@ -409,7 +409,8 @@ describe('ModelDropdown', () => {
       '.model-dropdown__trigger--minimal'
     );
 
-    expect(trigger?.textContent).toContain('#img');
+    expect(trigger?.textContent).toContain('模型不可用');
+    expect(trigger?.textContent).not.toContain('#img');
     expect(trigger?.textContent).not.toContain('#gpt2');
     expect((trigger as HTMLButtonElement).disabled).toBe(true);
   });

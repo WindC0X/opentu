@@ -410,6 +410,10 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
   );
   const shouldUseVendorIconInTrigger =
     currentModel?.vendor === ModelVendor.HAPPYHORSE;
+  const emptyEmbeddedModelLabel =
+    language === 'zh' ? '模型不可用' : 'Model unavailable';
+  const shouldShowEmptyEmbeddedModel =
+    creativeEmbeddedMode && models.length === 0 && !currentModel;
   // 使用 shortCode 或默认简写
   const shortCode = currentModel?.shortCode || 'img';
   const isSearching = Boolean(searchQuery.trim());
@@ -907,7 +911,11 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
           aria-haspopup="listbox"
           aria-expanded={isOpen}
           aria-label={`${
-            currentModel?.shortLabel || currentModel?.label || selectedModel
+            currentModel?.shortLabel ||
+            currentModel?.label ||
+            (shouldShowEmptyEmbeddedModel
+              ? emptyEmbeddedModelLabel
+              : selectedModel)
           } (↑↓ Tab)`}
           disabled={isEffectivelyDisabled}
         >
@@ -928,8 +936,16 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
               className="model-dropdown__trigger-source-icon"
             />
           ) : null}
-          <span className="model-dropdown__at">#</span>
-          <span className="model-dropdown__code">{shortCode}</span>
+          {shouldShowEmptyEmbeddedModel ? (
+            <span className="model-dropdown__code">
+              {emptyEmbeddedModelLabel}
+            </span>
+          ) : (
+            <>
+              <span className="model-dropdown__at">#</span>
+              <span className="model-dropdown__code">{shortCode}</span>
+            </>
+          )}
           {unavailableMarkerAriaLabel ? (
             <span
               className="model-dropdown__unavailable-marker"
@@ -1006,6 +1022,9 @@ export const ModelDropdown: React.FC<ModelDropdownProps> = ({
             }}
             placeholder={
               placeholder ||
+              (shouldShowEmptyEmbeddedModel
+                ? emptyEmbeddedModelLabel
+                : undefined) ||
               (language === 'zh' ? '选择或输入模型' : 'Select or enter model')
             }
             disabled={isEffectivelyDisabled}

@@ -11,6 +11,9 @@ import { visualizer } from 'rollup-plugin-visualizer';
 
 const require = createRequire(import.meta.url);
 const workspaceRoot = path.resolve(__dirname, '../..');
+const bundleAnalyzeEnabled =
+  process.env.BUNDLE_ANALYZE === 'true' ||
+  process.env.VITE_BUNDLE_ANALYZE === 'true';
 
 // Read version from public/version.json
 const versionPath = path.resolve(__dirname, 'public/version.json');
@@ -1223,14 +1226,14 @@ const EMBEDDED_CREATIVE_STATIC_HTML_FILES = [
   'en/home.html',
   'versions.html',
   'iframe-test.html',
-  'sw-debug.html',
-  'cdn-debug.html',
 ];
 
 const EMBEDDED_CREATIVE_STANDALONE_ARTIFACT_PATHS = [
   'product_showcase',
   'user-manual',
   'sw-debug',
+  'sw-debug.html',
+  'cdn-debug.html',
   'logo-tuzi.png',
   'logo/group-qr.png',
   'logo/cardid.jpg',
@@ -1544,12 +1547,13 @@ export default defineConfig({
   plugins: [
     react(),
     nxViteTsPaths(),
-    visualizer({
-      open: false,
-      filename: path.resolve(__dirname, '../../dist/apps/web/stats.html'),
-      gzipSize: true,
-      brotliSize: true,
-    }),
+    bundleAnalyzeEnabled &&
+      visualizer({
+        open: false,
+        filename: path.resolve(__dirname, '../../dist/apps/web/stats.html'),
+        gzipSize: true,
+        brotliSize: true,
+      }),
     deferEntryAssetsPlugin(),
     rewriteEntryAssetsToCDNPlugin(),
     rewriteManifestAssetsToCDNPlugin(),

@@ -2769,7 +2769,7 @@ export function normalizeCreativeParameterSchema(
   modelType: ModelType,
   compatibleModelId: string
 ): ParamConfig[] | undefined {
-  if (!Array.isArray(schema) || schema.length === 0) {
+  if (!Array.isArray(schema)) {
     return undefined;
   }
 
@@ -2844,7 +2844,7 @@ export function normalizeCreativeParameterSchema(
     })
     .filter((param): param is ParamConfig => !!param);
 
-  return params.length > 0 ? params : undefined;
+  return params;
 }
 
 export function hasRuntimeParameterSchema(
@@ -2854,7 +2854,7 @@ export function hasRuntimeParameterSchema(
     typeof modelIdOrConfig === 'string'
       ? getModelConfig(modelIdOrConfig)
       : modelIdOrConfig;
-  return !!modelConfig?.parameterSchema?.some((param) => param.runtimeSchema);
+  return Array.isArray(modelConfig?.parameterSchema);
 }
 
 function castCreativeRuntimeParamInput(

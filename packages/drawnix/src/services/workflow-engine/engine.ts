@@ -40,7 +40,7 @@ export class WorkflowEngine {
     this.options = {
       stepTimeout: options.stepTimeout ?? 10 * 60 * 1000, // 10 分钟
       continueOnError: options.continueOnError ?? false,
-      onEvent: options.onEvent ?? (() => {}),
+      onEvent: options.onEvent ?? (() => undefined),
       executeMainThreadTool: options.executeMainThreadTool,
       forceFallbackExecutor: options.forceFallbackExecutor ?? false,
     };
@@ -252,7 +252,7 @@ export class WorkflowEngine {
   ): Promise<void> {
     // 循环执行，直到没有可执行的步骤
     let iteration = 0;
-    while (true) {
+    for (;;) {
       iteration++;
       if (signal?.aborted) {
         throw new Error('Workflow cancelled');
@@ -379,6 +379,8 @@ export class WorkflowEngine {
             | import('../../constants/model-config').CreativeUserParams
             | undefined,
           creativeManaged: step.args.creativeManaged as boolean | undefined,
+          creativeParameterFallbackModelId: step.args
+            .creativeParameterFallbackModelId as string | undefined,
           forceMainThread: this.options.forceFallbackExecutor,
           signal,
           onTaskCreated: (taskId) => {

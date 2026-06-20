@@ -239,4 +239,15 @@ describe('CreativeDocumentCloudSyncBadge', () => {
       '云同步不可用 · 已保存到此浏览器'
     );
   });
+
+  it('does not describe disabled idle cloud sync as ready', () => {
+    const status: CreativeDocumentCloudSyncStatus = {
+      ...getCreativeDocumentCloudSyncStatusSnapshot(null),
+      assetSyncEnabled: false,
+    };
+
+    expect(getCreativeDocumentCloudSyncStatusLabel(status)).toBe(
+      '云同步不可用 · 已保存到此浏览器'
+    );
+  });
 });

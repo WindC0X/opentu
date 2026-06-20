@@ -398,7 +398,9 @@ describe('Media Executor Module', () => {
         };
       });
       vi.doMock('../model-adapters', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('../model-adapters')>();
+        const actual = await importOriginal<
+          typeof import('../model-adapters')
+        >();
         return {
           ...actual,
           resolveAdapterForInvocation,
@@ -534,46 +536,57 @@ describe('Media Executor Module', () => {
       const updateStatus = vi.fn(async () => undefined);
       const cacheMediaFromBlob = vi.fn(async () => undefined);
       const resolveAdapterForInvocation = vi.fn();
-      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url.endsWith('/creative/relay/v1/images/tasks')) {
-          expect(init?.method).toBe('POST');
-          expect(init?.credentials).toBe('same-origin');
-          const headers = new Headers(init?.headers as HeadersInit);
-          expect(headers.get('Idempotency-Key')).toBe('opentu-image-task-schema');
-          expect(headers.get('X-Creative-CSRF')).toBe('csrf-token');
-          expect(headers.get('X-Creative-Nonce')).toBe('nonce-token');
-          const body = JSON.parse(String(init?.body));
-          expect(body).toEqual({
-            model: 'mock:gpt-image-2:preview',
-            prompt: 'A cat',
-            userParams: { size: '1024x1024', seed: 42 },
-          });
-          expect(body.params).toBeUndefined();
-          expect(body.idempotencyKey).toBeUndefined();
-          expect(body.onProgress).toBeUndefined();
-          expect(body.onSubmitted).toBeUndefined();
-          expect(body.images).toBeUndefined();
-          return new Response(
-            JSON.stringify({
-              task_id: 'creative-task-1',
-              status: 'succeeded',
-              result: {
-                url: '/creative/relay/v1/images/tasks/creative-task-1/content',
-                mimeType: 'image/png',
-              },
-            }),
-            { status: 202, headers: { 'Content-Type': 'application/json' } }
-          );
+      const fetchMock = vi.fn(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.endsWith('/creative/relay/v1/images/tasks')) {
+            expect(init?.method).toBe('POST');
+            expect(init?.credentials).toBe('same-origin');
+            const headers = new Headers(init?.headers as HeadersInit);
+            expect(headers.get('Idempotency-Key')).toBe(
+              'opentu-image-task-schema'
+            );
+            expect(headers.get('X-Creative-CSRF')).toBe('csrf-token');
+            expect(headers.get('X-Creative-Nonce')).toBe('nonce-token');
+            const body = JSON.parse(String(init?.body));
+            expect(body).toEqual({
+              model: 'mock:gpt-image-2:preview',
+              prompt: 'A cat',
+              userParams: { size: '1024x1024', seed: 42 },
+            });
+            expect(body.params).toBeUndefined();
+            expect(body.idempotencyKey).toBeUndefined();
+            expect(body.onProgress).toBeUndefined();
+            expect(body.onSubmitted).toBeUndefined();
+            expect(body.images).toBeUndefined();
+            return new Response(
+              JSON.stringify({
+                task_id: 'creative-task-1',
+                status: 'succeeded',
+                result: {
+                  url: '/creative/relay/v1/images/tasks/creative-task-1/content',
+                  mimeType: 'image/png',
+                },
+              }),
+              { status: 202, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          if (
+            url.endsWith(
+              '/creative/relay/v1/images/tasks/creative-task-1/content'
+            )
+          ) {
+            return new Response(
+              new Blob(['png-bytes'], { type: 'image/png' }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'image/png' },
+              }
+            );
+          }
+          throw new Error(`unexpected fetch ${url}`);
         }
-        if (url.endsWith('/creative/relay/v1/images/tasks/creative-task-1/content')) {
-          return new Response(new Blob(['png-bytes'], { type: 'image/png' }), {
-            status: 200,
-            headers: { 'Content-Type': 'image/png' },
-          });
-        }
-        throw new Error(`unexpected fetch ${url}`);
-      });
+      );
       vi.stubGlobal('fetch', fetchMock);
 
       vi.doMock('../creative-mode', () => ({
@@ -617,7 +630,9 @@ describe('Media Executor Module', () => {
         };
       });
       vi.doMock('../model-adapters', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('../model-adapters')>();
+        const actual = await importOriginal<
+          typeof import('../model-adapters')
+        >();
         return {
           ...actual,
           resolveAdapterForInvocation,
@@ -680,7 +695,7 @@ describe('Media Executor Module', () => {
       });
     }, 15000);
 
-    it('routes Creative managed image models with empty schema through the managed task endpoint', async () => {
+    it('keeps unknown Creative managed image models without schema on the parameterless legacy path', async () => {
       const completeTask = vi.fn(async () => undefined);
       const updateStatus = vi.fn(async () => undefined);
       const cacheMediaFromBlob = vi.fn(async () => undefined);
@@ -689,34 +704,24 @@ describe('Media Executor Module', () => {
         async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
           if (url.endsWith('/creative/relay/v1/images/tasks')) {
+            throw new Error(
+              'unexpected schema-backed Creative image task submit'
+            );
+          }
+          if (url.endsWith('/v1/images/generations')) {
             expect(init?.method).toBe('POST');
             const body = JSON.parse(String(init?.body));
             expect(body).toEqual({
               model: 'mock:gpt-image-2:empty-schema',
               prompt: 'A cat',
-              userParams: {},
+              response_format: 'url',
             });
             return new Response(
               JSON.stringify({
-                task_id: 'creative-task-empty-schema',
-                status: 'succeeded',
-                result: {
-                  url: '/creative/relay/v1/images/tasks/creative-task-empty-schema/content',
-                  mimeType: 'image/png',
-                },
+                data: [{ url: 'https://cdn.example.com/creative-image.png' }],
               }),
-              { status: 202, headers: { 'Content-Type': 'application/json' } }
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
             );
-          }
-          if (
-            url.endsWith(
-              '/creative/relay/v1/images/tasks/creative-task-empty-schema/content'
-            )
-          ) {
-            return new Response(new Blob(['png-bytes'], { type: 'image/png' }), {
-              status: 200,
-              headers: { 'Content-Type': 'image/png' },
-            });
           }
           throw new Error(`unexpected fetch ${url}`);
         }
@@ -764,7 +769,9 @@ describe('Media Executor Module', () => {
         };
       });
       vi.doMock('../model-adapters', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('../model-adapters')>();
+        const actual = await importOriginal<
+          typeof import('../model-adapters')
+        >();
         return {
           ...actual,
           resolveAdapterForInvocation,
@@ -797,17 +804,13 @@ describe('Media Executor Module', () => {
         params: { webhook: 'https://evil.example/hook' },
       });
 
-      expect(resolveAdapterForInvocation).not.toHaveBeenCalled();
-      expect(cacheMediaFromBlob).toHaveBeenCalledWith(
-        '/__aitu_cache__/image/creative-task-empty-schema.png',
-        expect.any(Object),
-        'image',
-        expect.objectContaining({ taskId: 'creative-task-empty-schema' })
-      );
+      expect(resolveAdapterForInvocation).toHaveBeenCalled();
+      expect(cacheMediaFromBlob).not.toHaveBeenCalled();
       expect(completeTask).toHaveBeenCalledWith('task-empty-schema', {
-        url: '/__aitu_cache__/image/creative-task-empty-schema.png',
+        url: 'https://cdn.example.com/creative-image.png',
+        urls: undefined,
         format: 'png',
-        size: expect.any(Number),
+        size: 0,
       });
     }, 15000);
 
@@ -965,7 +968,9 @@ describe('Media Executor Module', () => {
         };
       });
       vi.doMock('../model-adapters', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('../model-adapters')>();
+        const actual = await importOriginal<
+          typeof import('../model-adapters')
+        >();
         return {
           ...actual,
           resolveAdapterForInvocation: vi.fn(),

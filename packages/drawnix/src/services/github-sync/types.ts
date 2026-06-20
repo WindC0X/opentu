@@ -179,9 +179,7 @@ export interface WorkspaceData {
 }
 
 /** 画板数据 - board_{id}.json */
-export interface BoardData extends Board {
-  // 继承 Board 的所有字段
-}
+export type BoardData = Board;
 
 /** 提示词数据 - prompts.json */
 export interface PromptsData {
@@ -536,6 +534,9 @@ export interface CompactWorkflowContext {
     count?: number;
     size?: string;
     duration?: string;
+    userParams?: import('../../constants/model-config').CreativeUserParams;
+    creativeManaged?: boolean;
+    creativeParameterFallbackModelId?: string;
   };
   /** 文本模型 */
   textModel?: string;
