@@ -142,6 +142,7 @@ import { BoardTransforms } from '@plait/core';
 import { ImageGenerationAnchorTransforms } from '../../plugins/with-image-generation-anchor';
 import { buildImageGenerationAnchorCreateOptions } from '../../utils/image-generation-anchor-submission';
 import { resolveImageGenerationBatchAnchorPositions } from '../../utils/image-generation-anchor-placement';
+import { resolveCreativeImageDisplaySize } from '../../utils/creative-image-display-size';
 import {
   buildImageGenerationAnchorPresentationPatch,
   type ImageGenerationAnchorPresentationState,
@@ -3308,6 +3309,12 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             }
 
             const isImageGeneration = parsedParams.generationType === 'image';
+            const requestedImageDisplaySize = isImageGeneration
+              ? resolveCreativeImageDisplaySize({
+                  size: parsedParams.size,
+                  userParams: parsedParams.userParams,
+                })
+              : undefined;
 
             if (isImageGeneration) {
               const requestedCount = Math.max(parsedParams.count ?? 1, 1);
@@ -3333,7 +3340,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                         expectedInsertLeftX,
                         expectedInsertY,
                       ],
-                      requestedSize: parsedParams.size,
+                      requestedSize: requestedImageDisplaySize,
                       requestedCount: 1,
                       zoom,
                       title: workflowMessageData.name || '图片生成',
@@ -3369,7 +3376,7 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
                     frameAffinityDimensions: shouldCreateIndependentBatchAnchors
                       ? targetFrameDimensions
                       : undefined,
-                    requestedSize: parsedParams.size,
+                    requestedSize: requestedImageDisplaySize,
                     requestedCount: shouldCreateIndependentBatchAnchors
                       ? 1
                       : requestedCount,

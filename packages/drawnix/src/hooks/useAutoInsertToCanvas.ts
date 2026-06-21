@@ -57,6 +57,7 @@ import {
   isSamePoint,
   resolveImageAnchorInsertionPoint,
 } from '../utils/image-generation-anchor-insertion';
+import { resolveCreativeImageDisplaySize } from '../utils/creative-image-display-size';
 import {
   formatLyricsForCanvas,
   getLyricsTitle,
@@ -261,6 +262,38 @@ function getTaskImageDimensions(
       width: result.width,
       height: result.height,
     };
+  }
+
+  return parseSizeToPixels(
+    resolveCreativeImageDisplaySize({
+      size: task.params.size,
+      userParams: task.params.userParams,
+    })
+  );
+}
+
+function getTaskMediaDimensions(
+  task: Task,
+  type: ContentType
+): { width: number; height: number } | undefined {
+  if (type === 'audio') {
+    return {
+      width: AUDIO_CARD_DEFAULT_WIDTH,
+      height: AUDIO_CARD_DEFAULT_HEIGHT,
+    };
+  }
+
+  if (type === 'text') {
+    return undefined;
+  }
+
+  if (type === 'image') {
+    return parseSizeToPixels(
+      resolveCreativeImageDisplaySize({
+        size: task.params.size,
+        userParams: task.params.userParams,
+      })
+    );
   }
 
   return parseSizeToPixels(task.params.size);
@@ -616,15 +649,7 @@ export function useAutoInsertToCanvas(
               : task.type === TaskType.AUDIO
               ? 'audio'
               : 'image';
-            const dimensions =
-              type === 'audio'
-                ? {
-                    width: AUDIO_CARD_DEFAULT_WIDTH,
-                    height: AUDIO_CARD_DEFAULT_HEIGHT,
-                  }
-                : type === 'text'
-                ? undefined
-                : parseSizeToPixels(task.params.size);
+            const dimensions = getTaskMediaDimensions(task, type);
             const audioMetadata =
               type === 'audio'
                 ? {
@@ -1050,15 +1075,7 @@ export function useAutoInsertToCanvas(
               : firstInsertTask.type === TaskType.AUDIO
               ? 'audio'
               : 'image';
-            const dimensions =
-              type === 'audio'
-                ? {
-                    width: AUDIO_CARD_DEFAULT_WIDTH,
-                    height: AUDIO_CARD_DEFAULT_HEIGHT,
-                  }
-                : type === 'text'
-                ? undefined
-                : parseSizeToPixels(firstInsertTask.params.size);
+            const dimensions = getTaskMediaDimensions(firstInsertTask, type);
             const groupImageAnchor =
               type === 'image'
                 ? scopedImageAnchor ??
@@ -1471,11 +1488,13 @@ export function useAutoInsertToCanvas(
     };
 
     const recoverCompletedAutoInsertTasks = () => {
-      getTaskQueueService().getAllTasks().forEach((task) => {
-        if (task.status === TaskStatus.COMPLETED) {
-          handleTaskCompleted(task);
-        }
-      });
+      getTaskQueueService()
+        .getAllTasks()
+        .forEach((task) => {
+          if (task.status === TaskStatus.COMPLETED) {
+            handleTaskCompleted(task);
+          }
+        });
     };
 
     /**
@@ -1585,8 +1604,12 @@ export function useAutoInsertToCanvas(
       const taskId = event.detail?.taskId;
       const anchorId = event.detail?.anchorId;
       const updateRetryAnchor = (
-        state: Parameters<typeof buildImageGenerationAnchorPresentationPatch>[0],
-        options?: Parameters<typeof buildImageGenerationAnchorPresentationPatch>[1]
+        state: Parameters<
+          typeof buildImageGenerationAnchorPresentationPatch
+        >[0],
+        options?: Parameters<
+          typeof buildImageGenerationAnchorPresentationPatch
+        >[1]
       ) => {
         if (!anchorId) {
           return;

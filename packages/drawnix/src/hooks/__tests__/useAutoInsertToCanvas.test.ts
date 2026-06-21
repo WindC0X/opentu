@@ -1,8 +1,12 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useAutoInsertToCanvas, clearInsertedTaskIds } from '../useAutoInsertToCanvas';
+import {
+  useAutoInsertToCanvas,
+  clearInsertedTaskIds,
+} from '../useAutoInsertToCanvas';
 import { TaskStatus, TaskType, type Task } from '../../types/task.types';
 import { IMAGE_GENERATION_ANCHOR_RETRY_EVENT } from '../../types/image-generation-anchor.types';
+import { parseSizeToPixels } from '../../services/canvas-operations';
 
 const mocks = vi.hoisted(() => {
   const taskListeners: Array<(event: any) => void> = [];
@@ -151,7 +155,10 @@ function createCompletedImageTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function emitTaskEvent(task: Task, type: 'taskUpdated' | 'taskCreated' = 'taskUpdated') {
+function emitTaskEvent(
+  task: Task,
+  type: 'taskUpdated' | 'taskCreated' = 'taskUpdated'
+) {
   mocks.taskListeners.forEach((listener) => {
     listener({
       type,
@@ -170,6 +177,8 @@ describe('useAutoInsertToCanvas', () => {
     mocks.completionListeners.length = 0;
     mocks.taskState.tasks = [];
     mocks.quickInsert.mockReset();
+    vi.mocked(parseSizeToPixels).mockClear();
+    vi.mocked(parseSizeToPixels).mockReturnValue({ width: 512, height: 512 });
     mocks.quickInsert.mockResolvedValue({
       success: true,
       data: {
@@ -237,6 +246,54 @@ describe('useAutoInsertToCanvas', () => {
       [100, 100],
       'image-1',
       { width: 512, height: 512 }
+    );
+  });
+
+  it('uses schema-backed Creative aspect ratio userParams for canvas insertion dimensions', async () => {
+    const task = createCompletedImageTask({
+      id: 'task-schema-backed',
+      params: {
+        prompt: '生成 21:9 图',
+        userParams: {
+          aspectRatio: '21:9',
+          imageSize: '1K',
+          quality: 'high',
+        },
+        creativeManaged: true,
+        autoInsertToCanvas: true,
+      },
+      result: {
+        url: '/__aitu_cache__/image/task-schema-backed.png',
+        format: 'png',
+        size: 123,
+      },
+    });
+    mocks.board = { children: [] };
+    mocks.taskState.tasks = [task];
+
+    renderHook(() =>
+      useAutoInsertToCanvas({
+        enabled: true,
+        groupSimilarTasks: true,
+        groupTimeWindow: 10,
+      })
+    );
+
+    act(() => {
+      emitTaskEvent(task);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+
+    expect(parseSizeToPixels).toHaveBeenCalledWith('21x9');
+    expect(mocks.quickInsert).toHaveBeenCalledWith(
+      'image',
+      '/__aitu_cache__/image/task-schema-backed.png',
+      [100, 100],
+      { width: 512, height: 512 },
+      undefined
     );
   });
 
@@ -395,7 +452,10 @@ describe('useAutoInsertToCanvas', () => {
     act(() => {
       window.dispatchEvent(
         new CustomEvent(IMAGE_GENERATION_ANCHOR_RETRY_EVENT, {
-          detail: { taskId: task.id, anchorId: 'anchor-post-processing-failed' },
+          detail: {
+            taskId: task.id,
+            anchorId: 'anchor-post-processing-failed',
+          },
         })
       );
     });

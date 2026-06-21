@@ -1,5 +1,5 @@
 /**
- * 从 size 参数（如 '16x9', '1x1'）解析为像素尺寸。
+ * 从 size 参数（如 '16x9', '16:9', '1x1'）解析为像素尺寸。
  * 基于默认宽度 400px 计算，并保持纵横比一致。
  */
 export function parseSizeToPixels(
@@ -10,7 +10,7 @@ export function parseSizeToPixels(
     return { width: defaultWidth, height: defaultWidth };
   }
 
-  const match = size.match(/^(\d+)x(\d+)$/);
+  const match = size.match(/^(\d+)\s*[:x]\s*(\d+)$/i);
   if (!match) {
     return { width: defaultWidth, height: defaultWidth };
   }

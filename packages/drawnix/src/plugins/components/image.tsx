@@ -4,6 +4,7 @@ import { Loading, MessagePlugin } from 'tdesign-react';
 import classNames from 'classnames';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Video } from './video';
+import { RetryImage } from '../../components/retry-image';
 import { generateImage } from '../../mcp/tools/image-generation';
 import { getImageRegion } from '../../services/ppt';
 import {
@@ -418,7 +419,6 @@ export const Image: React.FC<ImageProps> = (props: ImageProps) => {
     } else {
       overlayGroup.image.removeAttribute('transform');
     }
-
   }, [
     elementData?.id,
     image3DRectangle?.height,
@@ -566,11 +566,13 @@ export const Image: React.FC<ImageProps> = (props: ImageProps) => {
           : undefined
       }
     >
-      <img
+      <RetryImage
         {...imgProps}
+        alt=""
         className={classNames('image-origin', {
           'image-origin--focus': props.isFocus,
         })}
+        showSkeleton={false}
         style={imgProps.style}
         onError={handleImageError}
         onLoad={handleImageLoad}
