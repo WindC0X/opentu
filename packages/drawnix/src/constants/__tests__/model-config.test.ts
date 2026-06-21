@@ -362,8 +362,28 @@ describe('model-config image size options', () => {
     ).toEqual(expected);
   });
 
-  it('为 gpt-image-2 暴露分辨率和官方质量参数', () => {
+  it('为普通 gpt-image-2 只暴露 1K 分辨率和官方质量参数', () => {
     const params = getCompatibleParams('gpt-image-2');
+    const qualityParams = params.filter((param) => param.id === 'quality');
+
+    expect(
+      params
+        .find((param) => param.id === 'resolution')
+        ?.options?.map((option) => option.value)
+    ).toEqual(['1k']);
+    expect(qualityParams).toHaveLength(1);
+    expect(qualityParams[0]?.label).toBe('质量');
+    expect(qualityParams[0]?.shortLabel).toBe('质量');
+    expect(qualityParams[0]?.options?.map((option) => option.value)).toEqual([
+      'auto',
+      'low',
+      'medium',
+      'high',
+    ]);
+  });
+
+  it('为 gpt-image-2-vip 暴露 1K/2K/4K 分辨率和官方质量参数', () => {
+    const params = getCompatibleParams('gpt-image-2-vip');
     const qualityParams = params.filter((param) => param.id === 'quality');
 
     expect(
@@ -405,6 +425,11 @@ describe('model-config image size options', () => {
     expect(params.map((param) => param.id)).toEqual(
       expect.arrayContaining(['size', 'resolution', 'quality'])
     );
+    expect(
+      params
+        .find((param) => param.id === 'resolution')
+        ?.options?.map((option) => option.value)
+    ).toEqual(['1k']);
   });
 
   it('不再内置已下架的 GPT Image 旧模型', () => {
