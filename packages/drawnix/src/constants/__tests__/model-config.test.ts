@@ -362,7 +362,7 @@ describe('model-config image size options', () => {
     ).toEqual(expected);
   });
 
-  it('为 gpt-image-2 暴露分辨率和官方画质参数', () => {
+  it('为 gpt-image-2 暴露分辨率和官方质量参数', () => {
     const params = getCompatibleParams('gpt-image-2');
     const qualityParams = params.filter((param) => param.id === 'quality');
 
@@ -372,6 +372,8 @@ describe('model-config image size options', () => {
         ?.options?.map((option) => option.value)
     ).toEqual(['1k', '2k', '4k']);
     expect(qualityParams).toHaveLength(1);
+    expect(qualityParams[0]?.label).toBe('质量');
+    expect(qualityParams[0]?.shortLabel).toBe('质量');
     expect(qualityParams[0]?.options?.map((option) => option.value)).toEqual([
       'auto',
       'low',

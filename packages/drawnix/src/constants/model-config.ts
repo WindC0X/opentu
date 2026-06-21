@@ -2386,9 +2386,9 @@ export const IMAGE_PARAMS: ParamConfig[] = [
   // GPT Image 官方画质参数
   {
     id: 'quality',
-    label: '画质',
-    shortLabel: '画质',
-    description: '选择 GPT Image 官方画质',
+    label: '质量',
+    shortLabel: '质量',
+    description: '选择 GPT Image 官方质量参数',
     valueType: 'enum',
     options: [
       { value: 'auto', label: '自动' },
