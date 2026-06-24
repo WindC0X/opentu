@@ -1,5 +1,5 @@
 const CREATIVE_SENSITIVE_ERROR_PATTERN =
-  /(authorization|bearer|api[_-]?key|apikey|upstream|credential|secret|token|x-amz-|signature|provider|channel|baseurl|base-url|callback|webhook|notify[_-]?hook|notifyhook|https?:\/\/|s3:\/\/)/i;
+  /(authorization|bearer|api[_-]?key|apikey|credential|secret|token|x-amz-|signature|base[_-]?url|object[_-]?key|bucket|callback|webhook|notify[_-]?hook|notifyhook|https?:\/\/|s3:\/\/)/i;
 
 export function sanitizeCreativeFailureMessage(
   value: unknown,
@@ -33,4 +33,11 @@ export function sanitizeCreativeFailureObjectMessage(
     return sanitizeCreativeFailureMessage(JSON.stringify(value), fallback);
   }
   return fallback;
+}
+
+export function sanitizeTaskErrorDisplayMessage(
+  value: unknown,
+  fallback = '任务失败'
+): string {
+  return sanitizeCreativeFailureMessage(value, fallback);
 }

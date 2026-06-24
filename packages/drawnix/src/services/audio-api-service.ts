@@ -47,6 +47,7 @@ export interface AudioGenerationParams {
   params?: Record<string, unknown>;
   taskId?: string;
   idempotencyKey?: string;
+  signal?: AbortSignal;
 }
 
 export type SunoAction = 'music' | 'lyrics';
@@ -97,13 +98,44 @@ interface AudioPollingOptions {
   interval?: number;
   maxAttempts?: number;
   onProgress?: (progress: number, status?: string) => void;
-  onSubmitted?: (taskId: string) => void;
+  onSubmitted?: (taskId: string) => void | Promise<void>;
   routeModel?: string | ModelRef | null;
+  signal?: AbortSignal;
+}
+
+function createAbortError(): Error {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException('Aborted', 'AbortError');
+  }
+
+  const error = new Error('Aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error as { name?: unknown } | undefined)?.name === 'AbortError' ||
+    (error as { code?: unknown } | undefined)?.code === 'ABORT_ERR'
+  );
 }
 
 function createAudioTaskFailureError(message: string): Error {
   const error = new Error(message);
   (error as any).creativeTaskFailure = true;
+  return error;
+}
+
+function createAudioTaskTimeoutError(message = 'Suno 生成超时，请稍后重试'): Error {
+  const error = new Error(message);
+  error.name = 'TIMEOUT';
+  (error as any).code = 'TIMEOUT';
   return error;
 }
 
@@ -1060,6 +1092,7 @@ class AudioAPIService {
         method: 'POST',
         headers,
         body,
+        signal: params.signal,
       });
     } catch (error: any) {
       failLLMApiLog(logId, {
@@ -1130,8 +1163,10 @@ class AudioAPIService {
 
   async queryAudioTask(
     taskId: string,
-    routeModel?: string | ModelRef | null
+    routeModel?: string | ModelRef | null,
+    signal?: AbortSignal
   ): Promise<AudioTaskResponse> {
+    throwIfAborted(signal);
     if (!taskId.trim()) {
       throw new Error('Suno 任务 ID 为空，无法查询任务状态');
     }
@@ -1147,6 +1182,7 @@ class AudioAPIService {
       path,
       baseUrlStrategy,
       method: 'GET',
+      signal,
     });
 
     if (!response.ok) {
@@ -1185,9 +1221,17 @@ class AudioAPIService {
       maxAttempts = 720,
       onProgress,
       onSubmitted,
+      signal,
     } = options;
 
-    const submitResponse = await this.submitAudioGeneration(params);
+    throwIfAborted(signal || params.signal);
+
+    const submitResponse = await this.submitAudioGeneration({
+      ...params,
+      signal: signal || params.signal,
+    });
+
+    throwIfAborted(signal || params.signal);
 
     if (!submitResponse.taskId.trim()) {
       throw new Error(
@@ -1196,8 +1240,10 @@ class AudioAPIService {
     }
 
     if (onSubmitted) {
-      onSubmitted(submitResponse.taskId);
+      await onSubmitted(submitResponse.taskId);
     }
+
+    throwIfAborted(signal || params.signal);
 
     if (onProgress) {
       onProgress(0, submitResponse.status);
@@ -1222,23 +1268,40 @@ class AudioAPIService {
       maxAttempts,
       onProgress,
       routeModel: params.modelRef || params.model,
+      signal: signal || params.signal,
     });
   }
 
-  async resumePolling(
+  resumePolling(
     taskId: string,
     options: AudioPollingOptions = {}
   ): Promise<AudioTaskResponse> {
+    return this.withAbortSignal(
+      this.resumePollingInternal(taskId, options),
+      options.signal
+    );
+  }
+
+  private async resumePollingInternal(
+    taskId: string,
+    options: AudioPollingOptions = {}
+  ): Promise<AudioTaskResponse> {
+    throwIfAborted(options.signal);
     const clipMemory = createClipIdentifierMemory();
     const immediate = normalizeAudioTaskResponse(
-      (await this.queryAudioTask(taskId, options.routeModel)).raw,
+      (await this.queryAudioTask(taskId, options.routeModel, options.signal))
+        .raw,
       taskId,
       clipMemory
     );
 
+    throwIfAborted(options.signal);
+
     if (options.onProgress) {
       options.onProgress(immediate.progress || 0, immediate.status);
     }
+
+    throwIfAborted(options.signal);
 
     if (isTerminalSuccess(immediate.status)) {
       if (hasResolvedTaskResult(immediate)) {
@@ -1252,7 +1315,39 @@ class AudioAPIService {
       );
     }
 
+    throwIfAborted(options.signal);
+
     return this.pollUntilComplete(taskId, options, clipMemory);
+  }
+
+  private withAbortSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) {
+      return promise;
+    }
+
+    if (signal.aborted) {
+      const rejected = Promise.reject<T>(createAbortError());
+      rejected.catch(() => undefined);
+      return rejected;
+    }
+
+    let abortHandler: (() => void) | undefined;
+    const wrapped = new Promise<T>((resolve, reject) => {
+      abortHandler = () => {
+        reject(createAbortError());
+      };
+      signal.addEventListener('abort', abortHandler, { once: true });
+      promise.then(resolve, reject);
+    });
+    wrapped
+      .finally(() => {
+        if (abortHandler) {
+          signal.removeEventListener('abort', abortHandler);
+        }
+      })
+      .catch(() => undefined);
+    wrapped.catch(() => undefined);
+    return wrapped;
   }
 
   private async pollUntilComplete(
@@ -1260,18 +1355,23 @@ class AudioAPIService {
     options: AudioPollingOptions = {},
     clipMemory: ClipIdentifierMemory = createClipIdentifierMemory()
   ): Promise<AudioTaskResponse> {
-    const { interval = 5000, maxAttempts = 720, onProgress } = options;
+    const { interval = 5000, maxAttempts = 720, onProgress, signal } = options;
 
     let attempts = 0;
     let consecutiveErrors = 0;
     const maxConsecutiveErrors = 10;
 
     while (attempts < maxAttempts) {
-      await this.sleep(interval);
+      await this.sleep(interval, signal);
       attempts += 1;
 
       try {
-        const payload = await this.queryAudioTask(taskId, options.routeModel);
+        const payload = await this.queryAudioTask(
+          taskId,
+          options.routeModel,
+          signal
+        );
+        throwIfAborted(signal);
         const result = normalizeAudioTaskResponse(payload.raw, taskId, clipMemory);
         consecutiveErrors = 0;
 
@@ -1291,7 +1391,11 @@ class AudioAPIService {
           );
         }
       } catch (error) {
-        if (isCreativeSunoUnsupportedError(error) || isAudioTaskFailureError(error)) {
+        if (
+          isAbortError(error) ||
+          isCreativeSunoUnsupportedError(error) ||
+          isAudioTaskFailureError(error)
+        ) {
           throw error;
         }
 
@@ -1304,15 +1408,40 @@ class AudioAPIService {
           interval * Math.pow(1.5, consecutiveErrors),
           60000
         );
-        await this.sleep(backoffInterval - interval);
+        await this.sleep(backoffInterval - interval, signal);
       }
     }
 
-    throw new Error('Suno 生成超时，请稍后重试');
+    throw createAudioTaskTimeoutError();
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0) {
+      throwIfAborted(signal);
+      return Promise.resolve();
+    }
+
+    throwIfAborted(signal);
+
+    return new Promise((resolve, reject) => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = () => {
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(createAbortError());
+      };
+
+      timeoutId = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, ms);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }
 

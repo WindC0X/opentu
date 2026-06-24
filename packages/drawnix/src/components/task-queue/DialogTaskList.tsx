@@ -11,8 +11,6 @@ import { VirtualTaskList } from './VirtualTaskList';
 import { useFilteredTaskQueue } from '../../hooks/useFilteredTaskQueue';
 import { Task, TaskType, TaskStatus } from '../../types/task.types';
 import { useDrawnix, DialogType } from '../../hooks/use-drawnix';
-import { insertImageFromUrl } from '../../data/image';
-import { insertVideoFromUrl } from '../../data/video';
 import { MessagePlugin, Input, Button } from 'tdesign-react';
 import { SearchIcon, DeleteIcon } from 'tdesign-icons-react';
 import { normalizeImageDataUrl } from '@aitu/utils';
@@ -32,6 +30,7 @@ import {
 } from '../shared/media-preview';
 import './dialog-task-list.scss';
 import { HoverTip } from '../shared';
+import { insertDialogTaskResultToBoard } from './dialog-task-insert';
 
 export interface DialogTaskListProps {
   /** Task IDs to display. If not provided, shows all tasks (subject to taskType filter) */
@@ -221,18 +220,12 @@ export const DialogTaskList: React.FC<DialogTaskListProps> = ({
     }
 
     try {
-      if (task.type === TaskType.IMAGE) {
-        const urls = task.result.urls?.length
-          ? task.result.urls
-          : [task.result.url];
-        for (const url of urls) {
-          await insertImageFromUrl(board, url);
-        }
+      const result = await insertDialogTaskResultToBoard(task, board);
+      if (result.type === 'image') {
         MessagePlugin.success(
-          urls.length > 1 ? '多图已插入到白板' : '图片已插入到白板'
+          result.insertedCount > 1 ? '多图已插入到白板' : '图片已插入到白板'
         );
-      } else if (task.type === TaskType.VIDEO) {
-        await insertVideoFromUrl(board, task.result.url);
+      } else if (result.type === 'video') {
         MessagePlugin.success('视频已插入到白板');
       }
     } catch (error) {
@@ -250,7 +243,8 @@ export const DialogTaskList: React.FC<DialogTaskListProps> = ({
 
     return confirm({
       title: '覆盖当前输入？',
-      description: '当前 AI 图片生成窗口已有提示词或参考图，继续会覆盖当前输入。',
+      description:
+        '当前 AI 图片生成窗口已有提示词或参考图，继续会覆盖当前输入。',
       confirmText: '覆盖当前输入',
       cancelText: '取消',
       confirmTheme: 'warning',
@@ -437,13 +431,47 @@ export const DialogTaskList: React.FC<DialogTaskListProps> = ({
             : ('image' as const);
 
         for (let i = 0; i < urls.length; i++) {
+          const normalizedUrl =
+            mediaType === 'image' ? normalizeImageDataUrl(urls[i]) : urls[i];
           items.push({
             id: urls.length > 1 ? `${task.id}-${i}` : task.id,
-            url:
-              mediaType === 'image' ? normalizeImageDataUrl(urls[i]) : urls[i],
+            url: normalizedUrl,
             type: mediaType,
             title:
               urls.length > 1 ? `${title} (${i + 1}/${urls.length})` : title,
+            ...(mediaType === 'image'
+              ? {
+                  rehydrateCacheUrl: normalizedUrl,
+                  rehydrateSourceUrl: task.result?.contentUrl,
+                  rehydrateMetadata: {
+                    taskId: task.id,
+                    remoteTaskId: task.result?.remoteTaskId || task.remoteId,
+                    providerTaskId:
+                      task.result?.providerTaskId ||
+                      task.result?.remoteTaskId ||
+                      task.remoteId,
+                    contentUrl: task.result?.contentUrl,
+                    mimeType: task.result?.mimeType,
+                    prompt: task.params.prompt,
+                    model: task.params.model,
+                  },
+                }
+              : {
+                  rehydrateCacheUrl: normalizedUrl,
+                  rehydrateSourceUrl: task.result?.contentUrl,
+                  rehydrateMetadata: {
+                    taskId: task.id,
+                    remoteTaskId: task.result?.remoteTaskId || task.remoteId,
+                    providerTaskId:
+                      task.result?.providerTaskId ||
+                      task.result?.remoteTaskId ||
+                      task.remoteId,
+                    contentUrl: task.result?.contentUrl,
+                    mimeType: task.result?.mimeType,
+                    prompt: task.params.prompt,
+                    model: task.params.model,
+                  },
+                }),
           });
         }
       }

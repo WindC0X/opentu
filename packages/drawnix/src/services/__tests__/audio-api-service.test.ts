@@ -361,6 +361,339 @@ describe('audio-api-service', () => {
     expect(extracted.clips).toHaveLength(2);
   });
 
+  it('aborts audio resume polling before the next status request is sent', async () => {
+    vi.useFakeTimers();
+    const taskId = 'audio-abort-resume-1';
+    const sendMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          task_id: taskId,
+          action: 'MUSIC',
+          status: 'PENDING',
+          data: [],
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () => null,
+        providerTransport: {
+          ...(actual as { providerTransport: object }).providerTransport,
+          send: sendMock,
+        },
+      };
+    });
+
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+    const controller = new AbortController();
+
+    try {
+      const polling = audioAPIService.resumePolling(taskId, {
+        interval: 1000,
+        maxAttempts: 2,
+        signal: controller.signal,
+      } as any);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+
+      const outcomePromise = Promise.race([
+        polling.then(
+          () => ({ status: 'resolved' as const }),
+          (error: any) => ({
+            status: 'rejected' as const,
+            name: error?.name,
+          })
+        ),
+        new Promise<{ status: 'pending' }>((resolve) => {
+          setTimeout(() => resolve({ status: 'pending' }), 1);
+        }),
+      ]);
+
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(1);
+      const outcome = await outcomePromise;
+
+      expect(outcome).toEqual({
+        status: 'rejected',
+        name: 'AbortError',
+      });
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not emit audio resume progress when the first status response resolves after abort', async () => {
+    vi.useFakeTimers();
+    const taskId = 'audio-abort-before-first-response';
+    let resolveStatus:
+      | ((response: Response) => void)
+      | undefined;
+    const sendMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveStatus = resolve;
+        })
+    );
+    const onProgress = vi.fn();
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () => null,
+        providerTransport: {
+          ...(actual as { providerTransport: object }).providerTransport,
+          send: sendMock,
+        },
+      };
+    });
+
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+    const controller = new AbortController();
+
+    try {
+      const polling = audioAPIService.resumePolling(taskId, {
+        interval: 1000,
+        maxAttempts: 1,
+        signal: controller.signal,
+        onProgress,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+
+      const outcomePromise = Promise.race([
+        polling.then(
+          () => ({ status: 'resolved' as const }),
+          (error: any) => ({
+            status: 'rejected' as const,
+            name: error?.name,
+          })
+        ),
+        new Promise<{ status: 'pending' }>((resolve) => {
+          setTimeout(() => resolve({ status: 'pending' }), 1);
+        }),
+      ]);
+
+      controller.abort();
+      resolveStatus?.(
+        new Response(
+          JSON.stringify({
+            task_id: taskId,
+            action: 'MUSIC',
+            status: 'PENDING',
+            data: [],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      const outcome = await outcomePromise;
+
+      expect(outcome).toEqual({
+        status: 'rejected',
+        name: 'AbortError',
+      });
+      expect(onProgress).not.toHaveBeenCalled();
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not emit audio resume progress when a later poll response resolves after abort', async () => {
+    vi.useFakeTimers();
+    const taskId = 'audio-abort-during-later-poll';
+    let secondStatusResolve:
+      | ((response: Response) => void)
+      | undefined;
+    const sendMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            task_id: taskId,
+            action: 'MUSIC',
+            status: 'PENDING',
+            progress: 10,
+            data: [],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            secondStatusResolve = resolve;
+          })
+      );
+    const onProgress = vi.fn();
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () => null,
+        providerTransport: {
+          ...(actual as { providerTransport: object }).providerTransport,
+          send: sendMock,
+        },
+      };
+    });
+
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+    const controller = new AbortController();
+
+    try {
+      const polling = audioAPIService.resumePolling(taskId, {
+        interval: 1000,
+        maxAttempts: 2,
+        signal: controller.signal,
+        onProgress,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(onProgress).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sendMock).toHaveBeenCalledTimes(2);
+
+      const outcomePromise = Promise.race([
+        polling.then(
+          () => ({ status: 'resolved' as const }),
+          (error: any) => ({
+            status: 'rejected' as const,
+            name: error?.name,
+          })
+        ),
+        new Promise<{ status: 'pending' }>((resolve) => {
+          setTimeout(() => resolve({ status: 'pending' }), 1);
+        }),
+      ]);
+
+      controller.abort();
+      secondStatusResolve?.(
+        new Response(
+          JSON.stringify({
+            task_id: taskId,
+            action: 'MUSIC',
+            status: 'PENDING',
+            progress: 55,
+            data: [],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      const outcome = await outcomePromise;
+
+      expect(outcome).toEqual({
+        status: 'rejected',
+        name: 'AbortError',
+      });
+      expect(onProgress).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks audio polling exhaustion as a TIMEOUT error for retry classification', async () => {
+    const taskId = 'audio-poll-timeout-code';
+    const sendMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          task_id: taskId,
+          action: 'MUSIC',
+          status: 'PENDING',
+          data: [],
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    );
+
+    vi.doMock('../provider-routing', async () => {
+      const actual = await vi.importActual<object>('../provider-routing');
+      return {
+        ...actual,
+        resolveInvocationPlanFromRoute: () => null,
+        providerTransport: {
+          ...(actual as { providerTransport: object }).providerTransport,
+          send: sendMock,
+        },
+      };
+    });
+
+    mockResolveInvocationRoute({
+      profileId: 'runtime',
+      profileName: 'Runtime',
+      providerType: 'custom',
+      baseUrl: 'https://api.tu-zi.com/v1',
+      apiKey: 'test-key',
+      authType: 'bearer',
+    });
+
+    const { audioAPIService } = await import('../audio-api-service');
+
+    await expect(
+      audioAPIService.resumePolling(taskId, {
+        interval: 0,
+        maxAttempts: 0,
+      })
+    ).rejects.toMatchObject({
+      code: 'TIMEOUT',
+      name: 'TIMEOUT',
+    });
+  });
+
   it('sends continue and infill parameters in Suno music submit body', async () => {
     const taskId = 'b16bca7d-17ee-41fd-a218-31ca5fda0ac9';
     const sendMock = vi

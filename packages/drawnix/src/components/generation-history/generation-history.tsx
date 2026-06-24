@@ -19,12 +19,14 @@ export interface ImageHistoryItem extends BaseHistoryItem {
   width: number;
   height: number;
   uploadedImages?: Array<{ url: string; name: string }>; // 参考图片
+  rehydrateSourceUrl?: string;
+  rehydrateMetadata?: Record<string, unknown>;
 }
 
 // 视频历史记录项接口（适配图片格式）
 export interface VideoHistoryItem extends BaseHistoryItem {
   type: 'video';
-  imageUrl: string; // 视频缩略图URL，适配图片格式
+  imageUrl?: string; // 视频缩略图URL，适配图片格式；缺失时显示占位符
   width: number;    // 视频宽度，适配图片格式
   height: number;   // 视频高度，适配图片格式
   duration?: number; // 视频时长（秒）
@@ -79,6 +81,9 @@ export const GenerationHistory: React.FC<GenerationHistoryProps> = ({
               alt="History item"
               className="history-item-image"
               showSkeleton={false}
+              rehydrateCacheUrl={item.imageUrl}
+              rehydrateSourceUrl={item.rehydrateSourceUrl}
+              rehydrateMetadata={item.rehydrateMetadata}
             />
           ) : (
             // 视频类型，使用统一的 imageUrl 字段

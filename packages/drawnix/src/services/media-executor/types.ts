@@ -1,6 +1,9 @@
 import type { ModelRef } from '../../utils/settings-manager';
 import type { GeminiMessagePart } from '../../utils/gemini-api/types';
-import type { GenerationParams as TaskGenerationParams } from '../../types/shared/core.types';
+import type {
+  GenerationParams as TaskGenerationParams,
+  TaskInvocationRouteSnapshot,
+} from '../../types/shared/core.types';
 import type { CreativeUserParams } from '../../constants/model-config';
 import type {
   ProviderAuthStrategy,
@@ -54,6 +57,10 @@ export interface ImageGenerationParams {
   count?: number;
   /** Stable request id for backend idempotency, scoped to one local image task. */
   idempotencyKey?: string;
+  /** Local retry attempt for stale-write and idempotency scoping. */
+  retryAttempt?: number;
+  /** Local execution startedAt for stale-write scoping. */
+  startedAt?: number;
   /** 额外参数（如 seedream_quality），透传给 adapter */
   params?: Record<string, unknown>;
   /** new-api runtime parameterSchema 对应的类型化用户参数 */
@@ -94,6 +101,10 @@ export interface VideoGenerationParams {
   referenceImages?: string[];
   /** 额外参数（如 aspect_ratio），透传给 adapter */
   params?: Record<string, unknown>;
+  /** Local retry attempt for stale-write scoping. */
+  retryAttempt?: number;
+  /** Local execution startedAt for stale-write scoping. */
+  startedAt?: number;
 }
 
 // ============================================================================
@@ -132,6 +143,8 @@ export interface TextGenerationParams {
   referenceImages?: string[];
   inlineDataParts?: GeminiMessagePart[];
   params?: Record<string, unknown>;
+  retryAttempt?: number;
+  startedAt?: number;
 }
 
 // ============================================================================
@@ -163,7 +176,7 @@ export interface ExecutionProgress {
   /** 进度百分比 (0-100) */
   progress: number;
   /** 当前阶段 */
-  phase?: 'submitting' | 'polling' | 'downloading';
+  phase?: 'submitting' | 'polling' | 'materializing' | 'downloading';
   /** 阶段描述 */
   message?: string;
 }
@@ -177,6 +190,11 @@ export type ProgressCallback = (progress: ExecutionProgress) => void;
 export interface ExecutionOptions {
   /** 进度回调 */
   onProgress?: ProgressCallback;
+  /** Remote task accepted callback; keeps in-memory and durable task state aligned. */
+  onSubmitted?: (
+    remoteId: string,
+    invocationRoute?: TaskInvocationRouteSnapshot
+  ) => void | Promise<void>;
   /** 取消信号 */
   signal?: AbortSignal;
 }

@@ -77,6 +77,11 @@ import {
 import { analytics } from '../../../utils/posthog-analytics';
 import { markAssetAsCharacter } from '../../../services/character-asset-metadata-service';
 import { isCreativeEmbeddedMode } from '../../../services/creative-mode';
+import {
+  extractGeneratedVideoTaskId,
+  isGeneratedVideoCacheUrl,
+  resolveGeneratedVideoContentUrl,
+} from '../../../utils/generated-media-cache';
 
 const STORAGE_KEY_IMAGE_MODEL = 'video-analyzer:image-model';
 const STORAGE_KEY_VIDEO_MODEL = 'video-analyzer:video-model';
@@ -112,6 +117,37 @@ function normalizeParamsForConfigs(
     }
     return acc;
   }, {});
+}
+
+function getGeneratedShotVideoRehydrateProps(videoUrl: string | undefined): {
+  rehydrateCacheUrl?: string;
+  rehydrateSourceUrl?: string;
+  rehydrateMetadata?: Record<string, unknown>;
+} {
+  if (!videoUrl || !isGeneratedVideoCacheUrl(videoUrl)) {
+    return {};
+  }
+
+  const taskId = extractGeneratedVideoTaskId(videoUrl);
+  const sourceUrl = resolveGeneratedVideoContentUrl({
+    remoteTaskId: taskId,
+    providerTaskId: taskId,
+  });
+  if (!sourceUrl) {
+    return {};
+  }
+
+  return {
+    rehydrateCacheUrl: videoUrl,
+    rehydrateSourceUrl: sourceUrl,
+    rehydrateMetadata: {
+      taskId,
+      remoteTaskId: taskId,
+      providerTaskId: taskId,
+      contentUrl: sourceUrl,
+      mimeType: 'video/mp4',
+    },
+  };
 }
 
 function mergeVideoWorkflowParams(
@@ -2121,6 +2157,9 @@ export const GeneratePage: React.FC<GeneratePageProps> = ({
                       className="va-shot-frame-media"
                       thumbnailSize="small"
                       onClick={() => handleShotGenerateVideo(shot, i)}
+                      {...getGeneratedShotVideoRehydrateProps(
+                        shot.generated_video_url
+                      )}
                       videoProps={{
                         muted: true,
                         preload: 'metadata',

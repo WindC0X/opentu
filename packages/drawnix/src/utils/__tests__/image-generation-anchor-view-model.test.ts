@@ -179,6 +179,36 @@ describe('image-generation-anchor-view-model', () => {
     expect(viewModel.isTerminal).toBe(true);
   });
 
+  it('exposes generated preview rehydrate metadata for completed anchor preview', () => {
+    const viewModel = buildImageGenerationAnchorViewModel({
+      anchor: createAnchor({
+        phase: 'completed',
+        previewImageUrl: '/__aitu_cache__/image/task-1.png',
+      }),
+      task: createTask({
+        status: TaskStatus.COMPLETED,
+        remoteId: 'remote-task-1',
+        result: {
+          url: '/__aitu_cache__/image/task-1.png',
+          format: 'png',
+          size: 12,
+          contentUrl: '/creative/relay/v1/images/tasks/remote-task-1/content',
+          remoteTaskId: 'remote-task-1',
+          providerTaskId: 'provider-task-1',
+          mimeType: 'image/png',
+        },
+      }),
+    });
+
+    expect(viewModel.previewImageUrl).toBe('/__aitu_cache__/image/task-1.png');
+    expect(viewModel.previewContentUrl).toBe(
+      '/creative/relay/v1/images/tasks/remote-task-1/content'
+    );
+    expect(viewModel.previewRemoteTaskId).toBe('remote-task-1');
+    expect(viewModel.previewProviderTaskId).toBe('provider-task-1');
+    expect(viewModel.previewMimeType).toBe('image/png');
+  });
+
   it('marks failed post-processing as failed and surfaces workflow error', () => {
     const viewModel = buildImageGenerationAnchorViewModel({
       anchor: createAnchor({ phase: 'developing' }),
@@ -269,6 +299,10 @@ describe('image-generation-anchor-view-model', () => {
           status: TaskStatus.COMPLETED,
           result: {
             url: 'https://example.com/1.png',
+            contentUrl: '/creative/relay/v1/images/tasks/task-1/content',
+            remoteTaskId: 'remote-task-1',
+            providerTaskId: 'provider-task-1',
+            mimeType: 'image/png',
           } as Task['result'],
         }),
         createTask({
@@ -300,6 +334,10 @@ describe('image-generation-anchor-view-model', () => {
           taskId: 'task-1',
           status: 'ready',
           previewImageUrl: 'https://example.com/1.png',
+          previewContentUrl: '/creative/relay/v1/images/tasks/task-1/content',
+          previewRemoteTaskId: 'remote-task-1',
+          previewProviderTaskId: 'provider-task-1',
+          previewMimeType: 'image/png',
           error: undefined,
         },
         {

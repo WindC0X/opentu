@@ -22,6 +22,7 @@ import {
   getTasksForImageGenerationAnchor,
   selectPrimaryImageGenerationAnchorTask,
 } from '../../utils/image-generation-anchor-task';
+import { resolveGeneratedImageContentUrl } from '../../utils/generated-media-cache';
 import './image-generation-anchor.scss';
 
 interface ImageGenerationAnchorContentProps {
@@ -46,6 +47,40 @@ const STACK_SLOT_STATUS_LABELS = {
   ready: '已完成',
   failed: '失败',
 } as const;
+
+interface AnchorPreviewRehydrateOptions {
+  cacheUrl?: string;
+  contentUrl?: string;
+  remoteTaskId?: string;
+  providerTaskId?: string;
+  mimeType?: string;
+}
+
+function buildAnchorPreviewRehydrateProps(
+  options: AnchorPreviewRehydrateOptions
+) {
+  if (!options.cacheUrl) {
+    return {};
+  }
+  const sourceUrl = resolveGeneratedImageContentUrl({
+    contentUrl: options.contentUrl,
+    remoteTaskId: options.remoteTaskId,
+    providerTaskId: options.providerTaskId,
+  });
+  if (!sourceUrl) {
+    return {};
+  }
+  return {
+    rehydrateCacheUrl: options.cacheUrl,
+    rehydrateSourceUrl: sourceUrl,
+    rehydrateMetadata: {
+      contentUrl: sourceUrl,
+      remoteTaskId: options.remoteTaskId,
+      providerTaskId: options.providerTaskId || options.remoteTaskId,
+      mimeType: options.mimeType,
+    },
+  };
+}
 
 export const ImageGenerationAnchorContent: React.FC<
   ImageGenerationAnchorContentProps
@@ -258,6 +293,13 @@ export const ImageGenerationAnchorContent: React.FC<
                 alt={`生成预览 ${index + 1}`}
                 showSkeleton={false}
                 eager
+                {...buildAnchorPreviewRehydrateProps({
+                  cacheUrl: slot.previewImageUrl,
+                  contentUrl: slot.previewContentUrl,
+                  remoteTaskId: slot.previewRemoteTaskId,
+                  providerTaskId: slot.previewProviderTaskId,
+                  mimeType: slot.previewMimeType,
+                })}
               />
             ) : null}
             <span className="image-generation-anchor__stack-slot-meta">
@@ -314,6 +356,13 @@ export const ImageGenerationAnchorContent: React.FC<
               alt="图片生成预览"
               showSkeleton={false}
               eager
+              {...buildAnchorPreviewRehydrateProps({
+                cacheUrl: viewModel.previewImageUrl,
+                contentUrl: viewModel.previewContentUrl,
+                remoteTaskId: viewModel.previewRemoteTaskId,
+                providerTaskId: viewModel.previewProviderTaskId,
+                mimeType: viewModel.previewMimeType,
+              })}
             />
           ) : null}
           <span className="image-generation-anchor__surface-image-sheen" />

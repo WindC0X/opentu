@@ -15,19 +15,26 @@ import { generationAPIService } from '../services/generation-api-service';
 import { characterAPIService } from '../services/character-api-service';
 import { characterStorageService } from '../services/character-storage-service';
 import { unifiedCacheService } from '../services/unified-cache-service';
-import { Task, TaskStatus, TaskType } from '../types/task.types';
-import { CharacterStatus } from '../types/character.types';
 import {
-  isResumableAsyncImageTask,
-  isTaskTimeout,
-} from '../utils/task-utils';
+  Task,
+  TaskExecutionPhase,
+  TaskStatus,
+  TaskType,
+} from '../types/task.types';
+import { CharacterStatus } from '../types/character.types';
+import { isResumableAsyncImageTask, isTaskTimeout } from '../utils/task-utils';
 import { AI_GENERATION_CONCURRENCY_LIMIT } from '../constants/TASK_CONSTANTS';
 import { classifyApiCredentialError } from '../utils/api-auth-error-event';
+import {
+  isCreativeImageTaskTimeoutError,
+  resumeCreativeManagedImageTask,
+} from '../services/media-executor/fallback-adapter-routes';
 import {
   assertTaskInvocationRouteAvailable,
   resolveTaskInvocationRouteModel,
   shouldUseStrictTaskInvocationRoute,
 } from '../services/task-invocation-route';
+import { sanitizeTaskErrorDisplayMessage } from '../services/creative-error-sanitizer';
 
 /**
  * 从 API 错误体中提取原始错误消息
@@ -173,6 +180,36 @@ function getFriendlyErrorMessage(error: any): string {
   return message;
 }
 
+function getSafeTaskErrorMessage(error: any): string {
+  return sanitizeTaskErrorDisplayMessage(
+    getFriendlyErrorMessage(error),
+    '任务执行失败，请稍后重试'
+  );
+}
+
+function getSafeOriginalErrorInfo(error: any, fallback: string): string {
+  return sanitizeTaskErrorDisplayMessage(
+    error?.fullResponse ||
+      error?.apiErrorBody ||
+      error?.message ||
+      String(error),
+    fallback
+  );
+}
+
+function isCreativeManagedImageResumeTask(task: Task): boolean {
+  const binding = task.invocationRoute?.binding;
+  return (
+    task.params.creativeManaged === true ||
+    task.params.modelRef?.profileId === 'new-api-creative' ||
+    task.invocationRoute?.providerProfileId === 'new-api-creative' ||
+    binding?.protocol === 'session-broker' ||
+    binding?.requestSchema === 'new-api.creative.image.task' ||
+    binding?.submitPath === '/images/tasks' ||
+    binding?.pollPathTemplate === '/images/tasks/{taskId}'
+  );
+}
+
 /**
  * Hook for automatic task execution
  *
@@ -194,11 +231,18 @@ function getFriendlyErrorMessage(error: any): string {
 const MAX_CONCURRENT_TASKS = AI_GENERATION_CONCURRENCY_LIMIT;
 // 页面加载后延迟执行积压任务，避免与页面初始化竞争资源
 const STARTUP_DELAY_MS = 2000;
+const CREATIVE_MANAGED_IMAGE_RESUME_RETRY_DELAY_MS = 30_000;
 
 export function useTaskExecutor(): void {
-  const executingTasksRef = useRef<Set<string>>(new Set());
+  const executingTasksRef = useRef<Map<string, symbol>>(new Map());
   const pendingQueueRef = useRef<Task[]>([]);
   const timeoutCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const managedResumeAbortControllersRef = useRef<Map<string, AbortController>>(
+    new Map()
+  );
+  const managedResumeRetryTimersRef = useRef<Map<string, NodeJS.Timeout>>(
+    new Map()
+  );
 
   useEffect(() => {
     let isActive = true;
@@ -221,21 +265,136 @@ export function useTaskExecutor(): void {
       }
     };
 
-    // 任务完成后释放并发槽位，触发队列中下一个任务
-    const onTaskFinished = (taskId: string) => {
-      executingTasksRef.current.delete(taskId);
+    const beginTaskExecution = (taskId: string): symbol | null => {
+      if (executingTasksRef.current.has(taskId)) {
+        return null;
+      }
+      const token = Symbol(taskId);
+      executingTasksRef.current.set(taskId, token);
+      return token;
+    };
+
+    // 任务完成后释放并发槽位，触发队列中下一个任务。
+    // Token guard prevents a stale attempt's finally from deleting a newer retry slot.
+    const onTaskFinished = (taskId: string, token?: symbol) => {
+      if (!token || executingTasksRef.current.get(taskId) === token) {
+        executingTasksRef.current.delete(taskId);
+      }
       tryExecuteNext();
+    };
+
+    const abortManagedResumeTask = (taskId: string) => {
+      const controller = managedResumeAbortControllersRef.current.get(taskId);
+      if (!controller) {
+        return;
+      }
+      controller.abort();
+    };
+
+    const clearManagedResumeRetryTimer = (taskId: string) => {
+      const timer = managedResumeRetryTimersRef.current.get(taskId);
+      if (!timer) {
+        return;
+      }
+      clearTimeout(timer);
+      managedResumeRetryTimersRef.current.delete(taskId);
+    };
+
+    const scheduleManagedResumeRetry = (taskId: string, remoteId: string) => {
+      clearManagedResumeRetryTimer(taskId);
+      const timer = setTimeout(() => {
+        managedResumeRetryTimersRef.current.delete(taskId);
+        if (!isActive) {
+          return;
+        }
+        const latest = legacyTaskQueueService.getTask(taskId);
+        if (
+          latest?.status === TaskStatus.PROCESSING &&
+          latest.remoteId === remoteId &&
+          isResumableAsyncImageTask(latest) &&
+          !executingTasksRef.current.has(taskId)
+        ) {
+          enqueueTask(latest);
+        }
+      }, CREATIVE_MANAGED_IMAGE_RESUME_RETRY_DELAY_MS);
+      managedResumeRetryTimersRef.current.set(taskId, timer);
+    };
+
+    const markTaskTimedOut = (task: Task) => {
+      const current = legacyTaskQueueService.getTask(task.id) || task;
+      if (current.status !== TaskStatus.PROCESSING) {
+        return;
+      }
+
+      console.warn(`[TaskExecutor] Task ${task.id} timed out`);
+      generationAPIService.cancelRequest(task.id);
+      legacyTaskQueueService.abortTaskExecution(task.id);
+      abortManagedResumeTask(task.id);
+      executingTasksRef.current.delete(task.id);
+
+      legacyTaskQueueService.updateTaskStatus(task.id, TaskStatus.FAILED, {
+        error: {
+          code: 'TIMEOUT',
+          message: '任务执行超时',
+          details: {
+            originalError: `Task ${task.id} timed out after processing`,
+            timestamp: Date.now(),
+          },
+        },
+      });
+    };
+
+    const isTaskStillProcessingRemote = (
+      taskId: string,
+      remoteId: string
+    ): boolean => {
+      const current = legacyTaskQueueService.getTask(taskId);
+      return (
+        current?.status === TaskStatus.PROCESSING &&
+        current.remoteId === remoteId
+      );
+    };
+
+    const normalizeRetryAttempt = (value: unknown): number =>
+      typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.floor(value))
+        : 0;
+
+    const isTaskStillProcessingAttempt = (
+      snapshot: Task,
+      options: { remoteId?: string } = {}
+    ): boolean => {
+      const current = legacyTaskQueueService.getTask(snapshot.id);
+      if (!current || current.status !== TaskStatus.PROCESSING) {
+        return false;
+      }
+      if (
+        normalizeRetryAttempt(current.params.retryAttempt) !==
+        normalizeRetryAttempt(snapshot.params.retryAttempt)
+      ) {
+        return false;
+      }
+      if (
+        typeof snapshot.startedAt === 'number' &&
+        typeof current.startedAt === 'number' &&
+        snapshot.startedAt !== current.startedAt
+      ) {
+        return false;
+      }
+      if (options.remoteId && current.remoteId !== options.remoteId) {
+        return false;
+      }
+      return true;
     };
 
     const resumeAudioTask = async (task: Task) => {
       const taskId = task.id;
       const remoteId = task.remoteId!;
 
-      if (executingTasksRef.current.has(taskId)) {
+      const executionToken = beginTaskExecution(taskId);
+      if (!executionToken) {
         return;
       }
-
-      executingTasksRef.current.add(taskId);
 
       try {
         if (shouldUseStrictTaskInvocationRoute(task)) {
@@ -247,23 +406,32 @@ export function useTaskExecutor(): void {
           resolveTaskInvocationRouteModel(task)
         );
 
-        if (!isActive) return;
+        const currentAfterAsyncResume = legacyTaskQueueService.getTask(taskId);
+        if (
+          !isActive ||
+          !currentAfterAsyncResume ||
+          !isTaskStillProcessingAttempt(task, { remoteId })
+        )
+          return;
+        if (isTaskTimeout(currentAfterAsyncResume)) {
+          markTaskTimedOut(currentAfterAsyncResume);
+          return;
+        }
 
         legacyTaskQueueService.updateTaskStatus(taskId, TaskStatus.COMPLETED, {
           result,
         });
       } catch (error: any) {
-        if (!isActive) return;
+        if (!isActive || !isTaskStillProcessingAttempt(task, { remoteId }))
+          return;
 
-        const errorCode = error.httpStatus
+        const errorCode = error.code
+          ? String(error.code)
+          : error.httpStatus
           ? `HTTP_${error.httpStatus}`
           : error.name || 'ERROR';
-        const errorMessage = getFriendlyErrorMessage(error);
-        const originalErrorInfo =
-          error.fullResponse ||
-          error.apiErrorBody ||
-          error.message ||
-          String(error);
+        const errorMessage = getSafeTaskErrorMessage(error);
+        const originalErrorInfo = getSafeOriginalErrorInfo(error, errorMessage);
 
         legacyTaskQueueService.updateTaskStatus(taskId, TaskStatus.FAILED, {
           error: {
@@ -276,7 +444,7 @@ export function useTaskExecutor(): void {
           },
         });
       } finally {
-        onTaskFinished(taskId);
+        onTaskFinished(taskId, executionToken);
       }
     };
 
@@ -285,23 +453,99 @@ export function useTaskExecutor(): void {
       const taskId = task.id;
       const remoteId = task.remoteId!;
 
-      if (executingTasksRef.current.has(taskId)) {
+      if (isTaskTimeout(task)) {
+        markTaskTimedOut(task);
         return;
       }
 
-      executingTasksRef.current.add(taskId);
+      const executionToken = beginTaskExecution(taskId);
+      if (!executionToken) {
+        return;
+      }
 
       try {
+        const routeModel = resolveTaskInvocationRouteModel(task);
+        if (isCreativeManagedImageResumeTask(task)) {
+          const abortController = new AbortController();
+          managedResumeAbortControllersRef.current.set(taskId, abortController);
+          const result = await resumeCreativeManagedImageTask(
+            taskId,
+            remoteId,
+            {
+              model:
+                typeof routeModel === 'string'
+                  ? routeModel
+                  : routeModel?.modelId || task.params.model,
+            },
+            {
+              signal: abortController.signal,
+              onProgress: ({ progress, phase }) => {
+                if (!isTaskStillProcessingAttempt(task, { remoteId })) {
+                  return;
+                }
+                legacyTaskQueueService.updateTaskStatus(
+                  taskId,
+                  TaskStatus.PROCESSING,
+                  {
+                    progress,
+                    executionPhase: phase as Task['executionPhase'],
+                  }
+                );
+              },
+            }
+          );
+
+          const currentAfterResume = legacyTaskQueueService.getTask(taskId);
+          if (
+            !isActive ||
+            !currentAfterResume ||
+            !isTaskStillProcessingAttempt(task, { remoteId })
+          ) {
+            return;
+          }
+          if (isTaskTimeout(currentAfterResume)) {
+            markTaskTimedOut(currentAfterResume);
+            return;
+          }
+
+          legacyTaskQueueService.updateTaskStatus(
+            taskId,
+            TaskStatus.COMPLETED,
+            {
+              result,
+            }
+          );
+
+          if (result.url) {
+            try {
+              await unifiedCacheService.registerImageMetadata(result.url, {
+                taskId: task.id,
+                model: task.params.model,
+                prompt: task.params.prompt,
+                params: task.params,
+              });
+            } catch (error) {
+              console.error(
+                `[TaskExecutor] Failed to register metadata for resumed Creative image task ${taskId}:`,
+                error
+              );
+            }
+          }
+
+          return;
+        }
+
         if (shouldUseStrictTaskInvocationRoute(task)) {
           assertTaskInvocationRouteAvailable('image', task);
         }
         const result = await generationAPIService.resumeAsyncImageGeneration(
           taskId,
           remoteId,
-          resolveTaskInvocationRouteModel(task)
+          routeModel
         );
 
-        if (!isActive) return;
+        if (!isActive || !isTaskStillProcessingAttempt(task, { remoteId }))
+          return;
 
         legacyTaskQueueService.updateTaskStatus(taskId, TaskStatus.COMPLETED, {
           result,
@@ -323,17 +567,31 @@ export function useTaskExecutor(): void {
           }
         }
       } catch (error: any) {
-        if (!isActive) return;
+        if (!isActive || !isTaskStillProcessingAttempt(task, { remoteId })) {
+          return;
+        }
 
-        const errorCode = error.httpStatus
+        const errorCode = error.code
+          ? String(error.code)
+          : error.httpStatus
           ? `HTTP_${error.httpStatus}`
           : error.name || 'ERROR';
-        const errorMessage = getFriendlyErrorMessage(error);
-        const originalErrorInfo =
-          error.fullResponse ||
-          error.apiErrorBody ||
-          error.message ||
-          String(error);
+        const errorMessage = getSafeTaskErrorMessage(error);
+        const originalErrorInfo = getSafeOriginalErrorInfo(error, errorMessage);
+
+        if (isCreativeImageTaskTimeoutError(error)) {
+          legacyTaskQueueService.updateTaskStatus(
+            taskId,
+            TaskStatus.PROCESSING,
+            {
+              error: undefined,
+              executionPhase: TaskExecutionPhase.POLLING,
+              progress: 95,
+            }
+          );
+          scheduleManagedResumeRetry(taskId, remoteId);
+          return;
+        }
 
         legacyTaskQueueService.updateTaskStatus(taskId, TaskStatus.FAILED, {
           error: {
@@ -346,7 +604,8 @@ export function useTaskExecutor(): void {
           },
         });
       } finally {
-        onTaskFinished(taskId);
+        managedResumeAbortControllersRef.current.delete(taskId);
+        onTaskFinished(taskId, executionToken);
       }
     };
 
@@ -355,11 +614,10 @@ export function useTaskExecutor(): void {
       const taskId = task.id;
 
       // Prevent duplicate execution
-      if (executingTasksRef.current.has(taskId)) {
+      const executionToken = beginTaskExecution(taskId);
+      if (!executionToken) {
         return;
       }
-
-      executingTasksRef.current.add(taskId);
 
       try {
         // Update status to processing
@@ -386,7 +644,7 @@ export function useTaskExecutor(): void {
           }
         );
 
-        if (!isActive) return;
+        if (!isActive || !isTaskStillProcessingAttempt(task)) return;
 
         // Save character to storage
         await characterStorageService.saveCharacter({
@@ -416,22 +674,20 @@ export function useTaskExecutor(): void {
           remoteId: result.characterId,
         });
       } catch (error: any) {
-        if (!isActive) return;
+        if (!isActive || !isTaskStillProcessingAttempt(task)) return;
 
         console.error(`[TaskExecutor] Character task ${taskId} failed:`, error);
 
         const updatedTask = legacyTaskQueueService.getTask(taskId);
         if (!updatedTask) return;
 
-        const errorCode = error.httpStatus
+        const errorCode = error.code
+          ? String(error.code)
+          : error.httpStatus
           ? `HTTP_${error.httpStatus}`
           : error.name || 'ERROR';
-        const errorMessage = getFriendlyErrorMessage(error);
-        const originalErrorInfo =
-          error.fullResponse ||
-          error.apiErrorBody ||
-          error.message ||
-          String(error);
+        const errorMessage = getSafeTaskErrorMessage(error);
+        const originalErrorInfo = getSafeOriginalErrorInfo(error, errorMessage);
         const errorDetails = {
           originalError: originalErrorInfo,
           timestamp: Date.now(),
@@ -446,13 +702,18 @@ export function useTaskExecutor(): void {
           },
         });
       } finally {
-        onTaskFinished(taskId);
+        onTaskFinished(taskId, executionToken);
       }
     };
 
     // Function to execute a single task
     const executeTask = async (task: Task) => {
       const taskId = task.id;
+
+      if (task.status === TaskStatus.PROCESSING && isTaskTimeout(task)) {
+        markTaskTimedOut(task);
+        return;
+      }
 
       // Check if this is a character task
       if (task.type === TaskType.CHARACTER) {
@@ -485,11 +746,10 @@ export function useTaskExecutor(): void {
       }
 
       // Prevent duplicate execution
-      if (executingTasksRef.current.has(taskId)) {
+      const executionToken = beginTaskExecution(taskId);
+      if (!executionToken) {
         return;
       }
-
-      executingTasksRef.current.add(taskId);
 
       try {
         // Update status to processing
@@ -502,7 +762,7 @@ export function useTaskExecutor(): void {
           task.type
         );
 
-        if (!isActive) return;
+        if (!isActive || !isTaskStillProcessingAttempt(task)) return;
 
         // Mark as completed with result
         legacyTaskQueueService.updateTaskStatus(taskId, TaskStatus.COMPLETED, {
@@ -526,7 +786,7 @@ export function useTaskExecutor(): void {
           }
         }
       } catch (error: any) {
-        if (!isActive) return;
+        if (!isActive || !isTaskStillProcessingAttempt(task)) return;
 
         console.error(`[TaskExecutor] Task ${taskId} failed:`, error);
 
@@ -537,13 +797,8 @@ export function useTaskExecutor(): void {
         const errorCode = error.httpStatus
           ? `HTTP_${error.httpStatus}`
           : error.name || 'ERROR';
-        const errorMessage = getFriendlyErrorMessage(error);
-        // 如果有完整响应，使用它；否则使用 API 错误体或错误消息
-        const originalErrorInfo =
-          error.fullResponse ||
-          error.apiErrorBody ||
-          error.message ||
-          String(error);
+        const errorMessage = getSafeTaskErrorMessage(error);
+        const originalErrorInfo = getSafeOriginalErrorInfo(error, errorMessage);
         const errorDetails = {
           originalError: originalErrorInfo,
           timestamp: Date.now(),
@@ -558,12 +813,17 @@ export function useTaskExecutor(): void {
           },
         });
       } finally {
-        onTaskFinished(taskId);
+        onTaskFinished(taskId, executionToken);
       }
     };
 
     // 将任务加入执行队列（带并发控制）
     const enqueueTask = (task: Task) => {
+      if (task.status === TaskStatus.PROCESSING && isTaskTimeout(task)) {
+        markTaskTimedOut(task);
+        return;
+      }
+      clearManagedResumeRetryTimer(task.id);
       if (executingTasksRef.current.has(task.id)) return;
       // 避免重复入队
       if (pendingQueueRef.current.some((t) => t.id === task.id)) return;
@@ -625,24 +885,7 @@ export function useTaskExecutor(): void {
 
       processingTasks.forEach((task) => {
         if (isTaskTimeout(task)) {
-          console.warn(`[TaskExecutor] Task ${task.id} timed out`);
-
-          // Cancel the API request
-          generationAPIService.cancelRequest(task.id);
-
-          const timeoutDetails = {
-            originalError: `Task ${task.id} timed out after processing`,
-            timestamp: Date.now(),
-          };
-
-          // Check if we should retry - disabled, mark as failed directly
-          legacyTaskQueueService.updateTaskStatus(task.id, TaskStatus.FAILED, {
-            error: {
-              code: 'TIMEOUT',
-              message: '任务执行超时',
-              details: timeoutDetails,
-            },
-          });
+          markTaskTimedOut(task);
         }
       });
     };
@@ -655,6 +898,15 @@ export function useTaskExecutor(): void {
 
         if (event.type === 'taskCreated' || event.type === 'taskUpdated') {
           const task = event.task;
+
+          if (
+            task.status === TaskStatus.CANCELLED ||
+            task.status === TaskStatus.FAILED ||
+            task.status === TaskStatus.COMPLETED
+          ) {
+            abortManagedResumeTask(task.id);
+            clearManagedResumeRetryTimer(task.id);
+          }
 
           // Execute pending tasks
           if (task.status === TaskStatus.PENDING) {
@@ -696,11 +948,17 @@ export function useTaskExecutor(): void {
       if (timeoutCheckIntervalRef.current) {
         clearInterval(timeoutCheckIntervalRef.current);
       }
+      managedResumeRetryTimersRef.current.forEach((timer) =>
+        clearTimeout(timer)
+      );
+      managedResumeRetryTimersRef.current.clear();
 
       // Cancel all ongoing requests
-      executingTasksRef.current.forEach((taskId) => {
+      executingTasksRef.current.forEach((_token, taskId) => {
         generationAPIService.cancelRequest(taskId);
+        abortManagedResumeTask(taskId);
       });
+      managedResumeAbortControllersRef.current.clear();
       executingTasksRef.current.clear();
     };
   }, []);

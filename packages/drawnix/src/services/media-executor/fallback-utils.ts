@@ -26,6 +26,7 @@ import {
   resolveVideoPollPath,
   shouldDownloadVideoContent,
 } from '../video-binding-utils';
+import { TASK_TIMEOUT } from '../../constants/TASK_CONSTANTS';
 
 /** 参考图转 base64 时最大体积（1MB），避免请求体过大 */
 export const MAX_REFERENCE_IMAGE_BYTES = 1 * 1024 * 1024;
@@ -90,8 +91,8 @@ export async function pollVideoStatus(
   onProgress: (progress: number) => void,
   signal?: AbortSignal
 ): Promise<{ url: string }> {
-  const maxAttempts = 120; // 最多轮询 10 分钟
   const interval = 5000; // 5 秒轮询间隔
+  const maxAttempts = Math.ceil(TASK_TIMEOUT.VIDEO / interval);
   const maxConsecutiveErrors = 3; // 连续 HTTP 错误超过此数才放弃
   let consecutiveErrors = 0;
 
@@ -210,6 +211,9 @@ export async function pollVideoStatus(
     await new Promise((resolve) => setTimeout(resolve, interval));
   }
 
+  if (signal?.aborted) {
+    throw new Error('Video generation cancelled');
+  }
   throw new Error('Video generation timeout');
 }
 
@@ -221,7 +225,7 @@ import { generateImageAsync as sharedGenerateImageAsync } from '../media-api';
  */
 interface AsyncImageOptions {
   onProgress: (progress: number) => void;
-  onSubmitted?: (remoteId: string) => void;
+  onSubmitted?: (remoteId: string) => void | Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -306,8 +310,15 @@ export async function cacheRemoteUrl(
 
     try {
       const cacheSource = options?.source || 'AI_GENERATED';
-      if (await unifiedCacheService.isCached(normalizedUrl)) {
-        return normalizedUrl;
+      const suffix = index !== undefined ? `_${index}` : '';
+      const inferredFormat = getFileExtension(normalizedUrl);
+      const finalFormat = inferredFormat !== 'bin' ? inferredFormat : format;
+      const remoteCacheUrl =
+        mediaType !== 'audio' && options?.forceRemoteCache
+          ? `/__aitu_cache__/${mediaType}/${taskId}${suffix}.${finalFormat}`
+          : normalizedUrl;
+      if (await unifiedCacheService.isCached(remoteCacheUrl)) {
+        return remoteCacheUrl;
       }
 
       const response = await fetch(normalizedUrl, {
@@ -323,9 +334,16 @@ export async function cacheRemoteUrl(
       if (blob.size === 0) {
         return normalizedUrl;
       }
+      const blobFormat = getFileExtension('', blob.type);
+      const cacheUrl =
+        mediaType !== 'audio' && options?.forceRemoteCache
+          ? `/__aitu_cache__/${mediaType}/${taskId}${suffix}.${
+              blobFormat !== 'bin' ? blobFormat : finalFormat
+            }`
+          : remoteCacheUrl;
 
       await unifiedCacheService.cacheMediaFromBlob(
-        normalizedUrl,
+        cacheUrl,
         blob,
         mediaType,
         {
@@ -334,7 +352,7 @@ export async function cacheRemoteUrl(
           ...options?.extraMetadata,
         }
       );
-      return normalizedUrl;
+      return cacheUrl;
     } catch (error) {
       console.warn(
         '[cacheRemoteUrl] Remote media cache failed, using original URL:',

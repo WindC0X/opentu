@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ThemeColorMode } from '@plait/core';
 import {
   buildCreativeWorkspaceDocumentSnapshot,
   CreativeDocumentCloudAdapter,
@@ -2008,7 +2009,7 @@ describe('creative workspace document cloud sync', () => {
           { id: 'local-update-before', type: 'ellipse' },
         ] as Board['elements'],
         viewport: { x: 31, y: 32, zoom: 1 },
-        theme: { colorMode: 'light' },
+        theme: { themeColorMode: ThemeColorMode.default },
       });
       await localSaveStarted;
 
@@ -2145,7 +2146,7 @@ describe('creative workspace document cloud sync', () => {
           { id: 'local-shape', type: 'ellipse' },
         ] as Board['elements'],
         viewport: { x: 11, y: 12, zoom: 1 },
-        theme: { colorMode: 'light' },
+        theme: { themeColorMode: ThemeColorMode.default },
       });
       releaseCloudSave?.();
       await upsertPromise;
@@ -2180,11 +2181,21 @@ describe('creative workspace document cloud sync', () => {
     } as CreativeDocumentCloudAdapterLike & {
       list: ReturnType<typeof vi.fn>;
     };
-    const put = vi.fn(async () => ({
-      id: boardId,
-      snapshot: { elements: [{ id: 'local-wins', type: 'ellipse' }] },
-      revision: 3,
-    }));
+    const putMock = vi.fn();
+    const put: CreativeDocumentCloudAdapterLike['put'] = async <
+      TSnapshot = unknown,
+    >(
+      documentId: string,
+      snapshot: CreativeDocumentSnapshot<TSnapshot>,
+      baseRevision?: string | number | null
+    ): Promise<CreativeDocumentSnapshot<TSnapshot>> => {
+      putMock(documentId, snapshot, baseRevision);
+      return {
+        id: documentId,
+        snapshot: snapshot.snapshot,
+        revision: 3,
+      };
+    };
     const service = new CreativeDocumentCloudSyncService({
       adapter: {
         ...adapter,
@@ -2226,7 +2237,7 @@ describe('creative workspace document cloud sync', () => {
 
     await service.flushPending();
 
-    expect(put).toHaveBeenCalledWith(
+    expect(putMock).toHaveBeenCalledWith(
       boardId,
       expect.objectContaining({
         snapshot: expect.objectContaining({
@@ -2439,7 +2450,7 @@ describe('creative workspace document cloud sync', () => {
           { id: 'local-revision-shape', type: 'ellipse' },
         ] as Board['elements'],
         viewport: { x: 21, y: 22, zoom: 1 },
-        theme: { colorMode: 'light' },
+        theme: { themeColorMode: ThemeColorMode.default },
       });
       await localSaveStarted;
 

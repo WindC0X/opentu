@@ -85,6 +85,89 @@ import {
   shouldUseStrictTaskInvocationRoute,
 } from '../task-invocation-route';
 
+function normalizeRetryAttempt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : undefined;
+}
+
+function createTaskStorageWriteGuard(params?: {
+  retryAttempt?: unknown;
+  startedAt?: unknown;
+}): { expectedRetryAttempt?: number; expectedStartedAt?: number } | undefined {
+  const expectedRetryAttempt = normalizeRetryAttempt(params?.retryAttempt);
+  const expectedStartedAt =
+    typeof params?.startedAt === 'number' && Number.isFinite(params.startedAt)
+      ? params.startedAt
+      : undefined;
+  return typeof expectedRetryAttempt === 'number' ||
+    typeof expectedStartedAt === 'number'
+    ? { expectedRetryAttempt, expectedStartedAt }
+    : undefined;
+}
+
+async function updateStoredRemoteId(
+  taskId: string,
+  remoteId: string,
+  invocationRoute: ReturnType<typeof createTaskInvocationRouteSnapshot>,
+  guard?: { expectedRetryAttempt?: number; expectedStartedAt?: number }
+): Promise<boolean> {
+  if (guard) {
+    return taskStorageWriter.updateRemoteId(
+      taskId,
+      remoteId,
+      invocationRoute,
+      guard
+    );
+  }
+  return taskStorageWriter.updateRemoteId(taskId, remoteId, invocationRoute);
+}
+
+async function completeStoredTask(
+  taskId: string,
+  result: Parameters<typeof taskStorageWriter.completeTask>[1],
+  guard?: { expectedRetryAttempt?: number; expectedStartedAt?: number }
+): Promise<boolean> {
+  if (guard) {
+    return taskStorageWriter.completeTask(taskId, result, guard);
+  }
+  return taskStorageWriter.completeTask(taskId, result);
+}
+
+async function failStoredTask(
+  taskId: string,
+  error: Parameters<typeof taskStorageWriter.failTask>[1],
+  guard?: { expectedRetryAttempt?: number; expectedStartedAt?: number }
+): Promise<boolean> {
+  if (guard) {
+    return taskStorageWriter.failTask(taskId, error, guard);
+  }
+  return taskStorageWriter.failTask(taskId, error);
+}
+
+async function updateStoredStatus(
+  taskId: string,
+  status: Parameters<typeof taskStorageWriter.updateStatus>[1],
+  guard?: { expectedRetryAttempt?: number; expectedStartedAt?: number }
+): Promise<boolean> {
+  if (guard) {
+    return taskStorageWriter.updateStatus(taskId, status, guard);
+  }
+  return taskStorageWriter.updateStatus(taskId, status);
+}
+
+async function updateStoredProgress(
+  taskId: string,
+  progress: number,
+  phase?: string,
+  guard?: { expectedRetryAttempt?: number; expectedStartedAt?: number }
+): Promise<boolean> {
+  if (guard) {
+    return taskStorageWriter.updateProgress(taskId, progress, phase, guard);
+  }
+  return taskStorageWriter.updateProgress(taskId, progress, phase);
+}
+
 function inferAuthTypeFromRoute(
   route: ReturnType<typeof resolveInvocationRoute>
 ): ProviderAuthStrategy {
@@ -229,6 +312,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       quality,
       count = 1,
     } = params;
+    const writeGuard = createTaskStorageWriteGuard(params);
     const referenceImages =
       (params.referenceImages && params.referenceImages.length > 0
         ? params.referenceImages
@@ -252,7 +336,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     });
 
     // 更新任务状态为 processing
-    await taskStorageWriter.updateStatus(taskId, 'processing');
+    await updateStoredStatus(taskId, 'processing', writeGuard);
     options?.onProgress?.({ progress: 0, phase: 'submitting' });
 
     const startTime = Date.now();
@@ -278,7 +362,10 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           modelRef: effectiveModelRef,
           referenceImages,
           userParams: params.userParams ?? {},
+          idempotencyKey: params.idempotencyKey,
           assetMetadata: params.assetMetadata,
+          retryAttempt: params.retryAttempt,
+          startedAt: params.startedAt,
         },
         options,
         startTime
@@ -318,8 +405,11 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           params: legacyParamsAllowed ? params.params : undefined,
           userParams: params.userParams,
           creativeManaged: params.creativeManaged,
+          idempotencyKey: params.idempotencyKey,
           assetMetadata: params.assetMetadata,
           preferredRequestSchema: invocationOptions.preferredRequestSchema,
+          retryAttempt: params.retryAttempt,
+          startedAt: params.startedAt,
         },
         options,
         startTime
@@ -346,6 +436,8 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           referenceImages,
           maskImage: params.maskImage,
           assetMetadata: params.assetMetadata,
+          retryAttempt: params.retryAttempt,
+          startedAt: params.startedAt,
         },
         config,
         options,
@@ -461,12 +553,16 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       );
 
       // 完成任务
-      await taskStorageWriter.completeTask(taskId, {
-        url: cachedImgUrls[0],
-        urls: cachedImgUrls.length > 1 ? cachedImgUrls : undefined,
-        format: 'png',
-        size: 0,
-      });
+      await completeStoredTask(
+        taskId,
+        {
+          url: cachedImgUrls[0],
+          urls: cachedImgUrls.length > 1 ? cachedImgUrls : undefined,
+          format: 'png',
+          size: 0,
+        },
+        writeGuard
+      );
     } catch (error: any) {
       const duration = Date.now() - startTime;
       const errorMessage = error.message || 'Image generation failed';
@@ -495,10 +591,14 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         duration,
         errorMessage,
       });
-      await taskStorageWriter.failTask(taskId, {
-        code: 'IMAGE_GENERATION_ERROR',
-        message: errorMessage,
-      });
+      await failStoredTask(
+        taskId,
+        {
+          code: 'IMAGE_GENERATION_ERROR',
+          message: errorMessage,
+        },
+        writeGuard
+      );
       throw error;
     }
   }
@@ -517,12 +617,15 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       referenceImages?: string[];
       maskImage?: string;
       assetMetadata?: ImageGenerationParams['assetMetadata'];
+      retryAttempt?: number;
+      startedAt?: number;
     },
     config: { imageConfig: GeminiConfig; videoConfig: VideoAPIConfig },
     options?: ExecutionOptions,
     startTime?: number
   ): Promise<void> {
     const logStartTime = startTime || Date.now();
+    const writeGuard = createTaskStorageWriteGuard(params);
 
     // 开始记录 LLM API 调用
     const logId = startLLMApiLog({
@@ -578,13 +681,14 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           },
           onSubmitted: async (remoteId) => {
             // 保存 remoteId，用于页面刷新后恢复轮询
-            await taskStorageWriter.updateRemoteId(
+            await updateStoredRemoteId(
               taskId,
               remoteId,
               createTaskInvocationRouteSnapshot(
                 'image',
                 params.modelRef || params.model
-              )
+              ),
+              writeGuard
             );
           },
           signal: options?.signal,
@@ -619,11 +723,15 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       );
 
       // 完成任务
-      await taskStorageWriter.completeTask(taskId, {
-        url: cachedAsyncUrl,
-        format: result.format,
-        size: 0,
-      });
+      await completeStoredTask(
+        taskId,
+        {
+          url: cachedAsyncUrl,
+          format: result.format,
+          size: 0,
+        },
+        writeGuard
+      );
     } catch (error: any) {
       const duration = Date.now() - logStartTime;
       const errorMessage = error.message || 'Async image generation failed';
@@ -642,10 +750,14 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         duration,
         errorMessage,
       });
-      await taskStorageWriter.failTask(taskId, {
-        code: 'ASYNC_IMAGE_GENERATION_ERROR',
-        message: errorMessage,
-      });
+      await failStoredTask(
+        taskId,
+        {
+          code: 'ASYNC_IMAGE_GENERATION_ERROR',
+          message: errorMessage,
+        },
+        writeGuard
+      );
       throw error;
     }
   }
@@ -666,6 +778,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       duration,
       size = '1280x720',
     } = params;
+    const writeGuard = createTaskStorageWriteGuard(params);
     const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
       'video',
       model,
@@ -686,7 +799,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     const shouldSkipSeconds = durationEncodedInModel(effectiveModel);
     const secondsToSend = shouldSkipSeconds ? undefined : duration ?? '8';
 
-    await taskStorageWriter.updateStatus(taskId, 'processing');
+    await updateStoredStatus(taskId, 'processing', writeGuard);
     options?.onProgress?.({ progress: 0, phase: 'submitting' });
 
     // 专用 adapter 路由（kling 等非 gemini 模型）
@@ -709,6 +822,8 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           inputReference: params.inputReference,
           idempotencyKey: `opentu-video-${taskId}`,
           params: params.params,
+          retryAttempt: params.retryAttempt,
+          startedAt: params.startedAt,
         },
         options,
         startTime
@@ -793,7 +908,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       });
 
       // 保存 remoteId，用于页面刷新后恢复轮询
-      await taskStorageWriter.updateRemoteId(taskId, videoId, invocationRoute);
+      await updateStoredRemoteId(taskId, videoId, invocationRoute, writeGuard);
 
       options?.onProgress?.({ progress: 10, phase: 'polling' });
 
@@ -834,16 +949,29 @@ export class FallbackMediaExecutor implements IMediaExecutor {
             result.url,
             taskId,
             'video',
-            'mp4'
+            'mp4',
+            undefined,
+            {
+              forceRemoteCache: true,
+              extraMetadata: {
+                contentUrl: result.url,
+                remoteTaskId: videoId,
+                providerTaskId: videoId,
+              },
+            }
           );
 
           // 完成任务
-          await taskStorageWriter.completeTask(taskId, {
-            url: cachedVidUrl,
-            format: 'mp4',
-            size: 0,
-            duration: duration ? parseInt(duration, 10) : undefined,
-          });
+          await completeStoredTask(
+            taskId,
+            {
+              url: cachedVidUrl,
+              format: 'mp4',
+              size: 0,
+              duration: duration ? parseInt(duration, 10) : undefined,
+            },
+            writeGuard
+          );
         } finally {
           this.pollingTasks.delete(taskId);
         }
@@ -866,10 +994,14 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         duration: elapsedTime,
         errorMessage,
       });
-      await taskStorageWriter.failTask(taskId, {
-        code: error.code || 'VIDEO_GENERATION_ERROR',
-        message: errorMessage,
-      });
+      await failStoredTask(
+        taskId,
+        {
+          code: error.code || 'VIDEO_GENERATION_ERROR',
+          message: errorMessage,
+        },
+        writeGuard
+      );
       throw error;
     }
   }
@@ -1057,6 +1189,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       inlineDataParts,
       params: extraParams,
     } = params;
+    const writeGuard = createTaskStorageWriteGuard(params);
     const startTime = Date.now();
     const embeddedModel = resolveCreativeEmbeddedModelForGeneration(
       'text',
@@ -1110,11 +1243,11 @@ export class FallbackMediaExecutor implements IMediaExecutor {
 
     try {
       if (taskId) {
-        await taskStorageWriter.updateStatus(taskId, 'processing');
+        await updateStoredStatus(taskId, 'processing', writeGuard);
       }
       options?.onProgress?.({ progress: 30, phase: 'submitting' });
       if (taskId) {
-        await taskStorageWriter.updateProgress(taskId, 30, 'submitting');
+        await updateStoredProgress(taskId, 30, 'submitting', writeGuard);
       }
 
       const data =
@@ -1171,14 +1304,18 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       const fullResponse = data.choices?.[0]?.message?.content || '';
       options?.onProgress?.({ progress: 100 });
       if (taskId) {
-        await taskStorageWriter.completeTask(taskId, {
-          url: '',
-          format: 'md',
-          size: fullResponse.length,
-          resultKind: 'chat',
-          title: prompt.slice(0, 80),
-          chatResponse: fullResponse,
-        });
+        await completeStoredTask(
+          taskId,
+          {
+            url: '',
+            format: 'md',
+            size: fullResponse.length,
+            resultKind: 'chat',
+            title: prompt.slice(0, 80),
+            chatResponse: fullResponse,
+          },
+          writeGuard
+        );
       }
       completeLLMApiLog(logId, {
         httpStatus: 200,
@@ -1193,10 +1330,14 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       };
     } catch (error: any) {
       if (taskId) {
-        await taskStorageWriter.failTask(taskId, {
-          code: 'TEXT_GENERATION_FAILED',
-          message: error?.message || 'Text generation failed',
-        });
+        await failStoredTask(
+          taskId,
+          {
+            code: 'TEXT_GENERATION_FAILED',
+            message: error?.message || 'Text generation failed',
+          },
+          writeGuard
+        );
       }
       failLLMApiLog(logId, {
         duration: Date.now() - startTime,
@@ -1300,6 +1441,30 @@ export class FallbackMediaExecutor implements IMediaExecutor {
     const config = this.getConfig({ videoModel: routeModel });
     config.videoConfig.params = (task.params as any).params;
     const videoId = task.remoteId!;
+    const writeGuard = createTaskStorageWriteGuard({
+      ...task.params,
+      startedAt: task.startedAt,
+    });
+    const emitProgressIfCurrent = async (mappedProgress: number) => {
+      const statusWritten = await updateStoredStatus(
+        task.id,
+        TaskStatus.PROCESSING,
+        writeGuard
+      )
+        .catch(() => false);
+      const progressWritten = await updateStoredProgress(
+        task.id,
+        mappedProgress,
+        'polling',
+        writeGuard
+      )
+        .catch(() => false);
+      if (onTaskUpdate && (statusWritten || progressWritten)) {
+        onTaskUpdate(task.id, TaskStatus.PROCESSING, {
+          progress: mappedProgress,
+        });
+      }
+    };
 
     // 标记为正在轮询
     this.pollingTasks.add(task.id);
@@ -1314,19 +1479,7 @@ export class FallbackMediaExecutor implements IMediaExecutor {
           // 视频生成中，polling 阶段通常对应 10%-90%
           const mappedProgress = 10 + progress * 80;
 
-          if (onTaskUpdate) {
-            onTaskUpdate(task.id, TaskStatus.PROCESSING, {
-              progress: mappedProgress,
-            });
-          } else {
-            // taskStorageWriter.updateStatus 会写入 storage
-            taskStorageWriter
-              .updateStatus(task.id, TaskStatus.PROCESSING)
-              .catch(() => undefined);
-            taskStorageWriter
-              .updateProgress(task.id, mappedProgress)
-              .catch(() => undefined);
-          }
+          emitProgressIfCurrent(mappedProgress).catch(() => undefined);
         }
       );
 
@@ -1335,7 +1488,16 @@ export class FallbackMediaExecutor implements IMediaExecutor {
         result.url,
         task.id,
         'video',
-        'mp4'
+        'mp4',
+        undefined,
+        {
+          forceRemoteCache: true,
+          extraMetadata: {
+            contentUrl: result.url,
+            remoteTaskId: videoId,
+            providerTaskId: videoId,
+          },
+        }
       );
 
       const duration = task.params.duration as string | undefined;
@@ -1348,10 +1510,14 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       };
 
       // 始终先写入 IndexedDB，确保持久化
-      await taskStorageWriter.completeTask(task.id, completionResult);
+      const completionWritten = await completeStoredTask(
+        task.id,
+        completionResult,
+        writeGuard
+      );
 
       // 再通知内存状态同步
-      if (onTaskUpdate) {
+      if (onTaskUpdate && completionWritten) {
         onTaskUpdate(task.id, TaskStatus.COMPLETED, {
           result: completionResult,
           progress: 100,
@@ -1370,14 +1536,14 @@ export class FallbackMediaExecutor implements IMediaExecutor {
       };
 
       // 始终先写入 IndexedDB，确保持久化
-      await taskStorageWriter
-        .failTask(task.id, errorInfo)
-        .catch(() => undefined);
+      const failureWritten = await taskStorageWriter
+        .failTask(task.id, errorInfo, writeGuard)
+        .catch(() => false);
 
       // 再通知内存状态同步
-      if (onTaskUpdate) {
+      if (onTaskUpdate && failureWritten) {
         onTaskUpdate(task.id, TaskStatus.FAILED, { error: errorInfo });
-      } else {
+      } else if (!onTaskUpdate) {
         console.warn(
           `[FallbackMediaExecutor] No onTaskUpdate callback for failed task ${task.id}, UI won't update`
         );

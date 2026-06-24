@@ -167,12 +167,16 @@ export const geminiImageAdapter: ImageModelAdapter = {
         },
         {
           interval: 5000,
-          onProgress: request.params?.onProgress as
-            | ((progress: number, status?: string) => void)
-            | undefined,
-          onSubmitted: request.params?.onSubmitted as
-            | ((remoteId: string) => void)
-            | undefined,
+          onProgress:
+            request.onProgress ||
+            (request.params?.onProgress as
+              | ((progress: number, status?: string) => void)
+              | undefined),
+          onSubmitted:
+            request.onSubmitted ||
+            (request.params?.onSubmitted as
+              | ((remoteId: string) => void | Promise<void>)
+              | undefined),
         }
       );
       const { url, format } = asyncImageAPIService.extractUrlAndFormat(result);
@@ -260,16 +264,22 @@ export const geminiVideoAdapter: VideoModelAdapter = {
         size,
         inputReferences,
         idempotencyKey,
+        signal: request.signal,
         params: adapterParams,
       },
       {
         interval: 5000,
-        onProgress: request.params?.onProgress as
-          | ((progress: number, status?: string) => void)
-          | undefined,
-        onSubmitted: request.params?.onSubmitted as
-          | ((videoId: string) => void)
-          | undefined,
+        signal: request.signal,
+        onProgress:
+          request.onProgress ||
+          (request.params?.onProgress as
+            | ((progress: number, status?: string) => void)
+            | undefined),
+        onSubmitted:
+          request.onSubmitted ||
+          (request.params?.onSubmitted as
+            | ((videoId: string) => void | Promise<void>)
+            | undefined),
       }
     );
 
@@ -299,6 +309,39 @@ export const sunoAudioAdapter: AudioModelAdapter = {
   supportedModels: audioModelIds,
   defaultModel: DEFAULT_AUDIO_MODEL_ID,
   async generateAudio(_context, request: AudioGenerationRequest) {
+    const adapterParams = request.params
+      ? Object.fromEntries(
+          Object.entries(request.params).filter(
+            ([key]) =>
+              key !== 'onProgress' &&
+              key !== 'onSubmitted' &&
+              key !== 'idempotencyKey' &&
+              key !== 'signal'
+          )
+        )
+      : undefined;
+    const idempotencyKey =
+      request.idempotencyKey ||
+      (typeof request.params?.idempotencyKey === 'string'
+        ? request.params.idempotencyKey
+        : undefined);
+    const signal =
+      request.signal ||
+      (typeof AbortSignal !== 'undefined' &&
+      request.params?.signal instanceof AbortSignal
+        ? request.params.signal
+        : undefined);
+    const onProgress =
+      request.onProgress ||
+      (request.params?.onProgress as
+        | ((progress: number, status?: string) => void)
+        | undefined);
+    const onSubmitted =
+      request.onSubmitted ||
+      (request.params?.onSubmitted as
+        | ((taskId: string) => void | Promise<void>)
+        | undefined);
+
     const result = await audioAPIService.generateAudioWithPolling(
       {
         model: request.model || DEFAULT_AUDIO_MODEL_ID,
@@ -314,16 +357,15 @@ export const sunoAudioAdapter: AudioModelAdapter = {
         continueAt: request.continueAt,
         infillStartS: request.infillStartS,
         infillEndS: request.infillEndS,
-        params: request.params,
+        params: adapterParams,
+        idempotencyKey,
+        signal,
       },
       {
         interval: 5000,
-        onProgress: request.params?.onProgress as
-          | ((progress: number, status?: string) => void)
-          | undefined,
-        onSubmitted: request.params?.onSubmitted as
-          | ((taskId: string) => void)
-          | undefined,
+        signal,
+        onProgress,
+        onSubmitted,
       }
     );
 

@@ -118,6 +118,45 @@ export interface CacheMediaFromBlobOptions {
 
 type CacheMediaMetadata = NonNullable<CacheMediaFromBlobOptions['metadata']>;
 
+function normalizeCacheMediaFromBlobOptions(
+  options?: CacheMediaMetadata | CacheMediaFromBlobOptions
+): CacheMediaFromBlobOptions | undefined {
+  if (!options) {
+    return undefined;
+  }
+
+  const raw = options as CacheMediaFromBlobOptions & Record<string, unknown>;
+  const isWrapped =
+    'metadata' in raw ||
+    'cachedAt' in raw ||
+    'lastUsed' in raw ||
+    'contentHash' in raw;
+  if (!isWrapped) {
+    return { metadata: raw as CacheMediaMetadata };
+  }
+
+  const legacyMetadata: CacheMediaMetadata = {};
+  for (const key of ['taskId', 'prompt', 'model', 'params'] as const) {
+    if (raw[key] !== undefined) {
+      (legacyMetadata as Record<string, unknown>)[key] = raw[key];
+    }
+  }
+
+  const nestedMetadata =
+    raw.metadata && typeof raw.metadata === 'object'
+      ? raw.metadata
+      : undefined;
+  const metadata = {
+    ...legacyMetadata,
+    ...nestedMetadata,
+  };
+
+  return {
+    ...raw,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+  };
+}
+
 /** 缓存条目元数据 */
 export interface CachedMedia {
   /** URL（主键） */
@@ -1228,13 +1267,7 @@ class UnifiedCacheService {
   ): Promise<string> {
     try {
       const cacheUrl = this.normalizeRemoteCacheUrl(url);
-      const normalizedOptions =
-        options &&
-        !('metadata' in options) &&
-        !('cachedAt' in options) &&
-        !('lastUsed' in options)
-          ? { metadata: options }
-          : options;
+      const normalizedOptions = normalizeCacheMediaFromBlobOptions(options);
       const cachedAt =
         typeof normalizedOptions?.cachedAt === 'number' &&
         Number.isFinite(normalizedOptions.cachedAt)

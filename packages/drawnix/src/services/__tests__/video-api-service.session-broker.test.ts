@@ -399,6 +399,101 @@ describe('video-api-service session-broker routing', () => {
     );
   });
 
+  it('fails fast without querying when resume polling signal is already aborted', async () => {
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const { videoAPIService } = await import('../video-api-service');
+
+    await expect(
+      videoAPIService.resumePolling('task-aborted-before-query', {
+        routeModel: { profileId: 'new-api-creative', modelId: 'veo3' },
+        signal: abortController.signal,
+      } as any)
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+
+  it('stops polling when signal aborts after video submit enters polling', async () => {
+    vi.useFakeTimers();
+    mocks.resolveInvocationPlanFromRoute.mockReturnValue(
+      createSessionBrokerPlan(createVideoBinding())
+    );
+    mocks.fetch
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'task-abort-after-submit',
+            object: 'video',
+            model: 'veo3',
+            status: 'queued',
+            progress: 0,
+            created_at: 1,
+            seconds: '8',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'task-abort-after-submit',
+            object: 'video',
+            model: 'veo3',
+            status: 'queued',
+            progress: 0,
+            created_at: 1,
+            seconds: '8',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+
+    const abortController = new AbortController();
+    const { videoAPIService } = await import('../video-api-service');
+
+    const promise = videoAPIService.generateVideoWithPolling(
+      {
+        model: 'veo3',
+        modelRef: { profileId: 'new-api-creative', modelId: 'veo3' },
+        prompt: 'make a safe video',
+        idempotencyKey: 'opentu-video-abort-after-submit',
+      },
+      {
+        interval: 100,
+        maxAttempts: 1,
+        signal: abortController.signal,
+        onProgress: () => {
+          setTimeout(() => abortController.abort(), 0);
+        },
+      }
+    );
+
+    await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(1));
+    const rejection = expect(promise).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+
+    await rejection;
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it('downloads session-broker completed video content through canonical /videos/:taskId/content', async () => {
     mocks.resolveInvocationPlanFromRoute.mockReturnValue(
       createSessionBrokerPlan(

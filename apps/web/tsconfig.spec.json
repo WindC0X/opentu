@@ -5,6 +5,7 @@
     "module": "commonjs",
     "types": [
       "node",
+      "vitest/globals",
       "@nx/react/typings/cssmodule.d.ts",
       "@nx/react/typings/image.d.ts"
     ]

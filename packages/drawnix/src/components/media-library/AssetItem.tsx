@@ -23,6 +23,12 @@ import { useUnifiedCache } from '../../hooks/useUnifiedCache';
 import { VideoPosterPreview } from '../shared/VideoPosterPreview';
 import { HoverTip } from '../shared/hover';
 import {
+  isGeneratedImageCacheUrl,
+  isGeneratedVideoCacheUrl,
+  resolveGeneratedImageContentUrl,
+  resolveGeneratedVideoContentUrl,
+} from '../../utils/generated-media-cache';
+import {
   AssetCategory,
   type Asset,
   type ViewMode,
@@ -68,15 +74,19 @@ export const AssetItem = memo<AssetItemProps>(
       asset.type === 'IMAGE' ? 'image' : undefined,
       thumbnailSize
     );
+    const supportsCacheWarning =
+      asset.type === 'IMAGE' || asset.type === 'VIDEO' || asset.type === 'AUDIO';
     const { isCached, cacheWarning: detectedCacheWarning } = useUnifiedCache(
-      asset.type === 'IMAGE' || asset.type === 'VIDEO' ? asset.url : undefined
+      supportsCacheWarning ? asset.url : undefined
     );
     const cacheWarning =
-      (asset.type === 'IMAGE' || asset.type === 'VIDEO') && !isCached
+      supportsCacheWarning && !isCached
         ? detectedCacheWarning || asset.cacheWarning
         : undefined;
     const cacheWarningTip = cacheWarning
-      ? `${cacheWarning.message}${cacheWarning.expiresHint ? `\n${cacheWarning.expiresHint}` : ''}`
+      ? `${cacheWarning.message}${
+          cacheWarning.expiresHint ? `\n${cacheWarning.expiresHint}` : ''
+        }`
       : '';
 
     const handleClick = useCallback(
@@ -142,6 +152,52 @@ export const AssetItem = memo<AssetItemProps>(
     const isListMode = viewMode === 'list';
     const isCompactMode = viewMode === 'compact';
     const isSubjectAsset = asset.category === AssetCategory.CHARACTER;
+    const imageRehydrateSourceUrl = resolveGeneratedImageContentUrl({
+      contentUrl: asset.contentUrl,
+      remoteTaskId: asset.remoteTaskId,
+      providerTaskId: asset.providerTaskId,
+    });
+    const imageRehydrateProps =
+      asset.type === 'IMAGE' &&
+      imageRehydrateSourceUrl &&
+      isGeneratedImageCacheUrl(asset.url)
+        ? {
+            rehydrateCacheUrl: asset.url,
+            rehydrateSourceUrl: imageRehydrateSourceUrl,
+            rehydrateMetadata: {
+              taskId: asset.taskId || asset.id,
+              remoteTaskId: asset.remoteTaskId,
+              providerTaskId: asset.providerTaskId || asset.remoteTaskId,
+              contentUrl: imageRehydrateSourceUrl,
+              mimeType: asset.mimeType,
+              prompt: asset.prompt,
+              model: asset.modelName,
+            },
+        }
+        : {};
+    const videoRehydrateSourceUrl = resolveGeneratedVideoContentUrl({
+      contentUrl: asset.contentUrl,
+      remoteTaskId: asset.remoteTaskId,
+      providerTaskId: asset.providerTaskId,
+    });
+    const videoRehydrateProps =
+      asset.type === 'VIDEO' &&
+      videoRehydrateSourceUrl &&
+      isGeneratedVideoCacheUrl(asset.url)
+        ? {
+            rehydrateCacheUrl: asset.url,
+            rehydrateSourceUrl: videoRehydrateSourceUrl,
+            rehydrateMetadata: {
+              taskId: asset.taskId || asset.id,
+              remoteTaskId: asset.remoteTaskId,
+              providerTaskId: asset.providerTaskId || asset.remoteTaskId,
+              contentUrl: videoRehydrateSourceUrl,
+              mimeType: asset.mimeType,
+              prompt: asset.prompt,
+              model: asset.modelName,
+            },
+          }
+        : {};
 
     return (
       <div
@@ -188,6 +244,7 @@ export const AssetItem = memo<AssetItemProps>(
               alt={asset.name}
               className="asset-item__image"
               rootMargin="100px"
+              {...imageRehydrateProps}
             />
           ) : (
             <VideoPosterPreview
@@ -200,6 +257,7 @@ export const AssetItem = memo<AssetItemProps>(
                 muted: true,
                 preload: 'metadata',
               }}
+              {...videoRehydrateProps}
             />
           )}
 
@@ -238,9 +296,7 @@ export const AssetItem = memo<AssetItemProps>(
               )}
               {cacheWarning && (
                 <HoverTip content={cacheWarningTip} showArrow={false}>
-                  <div className="asset-item__cache-warning-badge">
-                    需下载
-                  </div>
+                  <div className="asset-item__cache-warning-badge">需下载</div>
                 </HoverTip>
               )}
             </div>
@@ -293,9 +349,7 @@ export const AssetItem = memo<AssetItemProps>(
             <>
               <div className="asset-item__overlay" />
               <HoverTip content={asset.name} showArrow={false}>
-                <div className="asset-item__name-overlay">
-                  {asset.name}
-                </div>
+                <div className="asset-item__name-overlay">{asset.name}</div>
               </HoverTip>
             </>
           )}
@@ -305,9 +359,7 @@ export const AssetItem = memo<AssetItemProps>(
         {isListMode && (
           <div className="asset-item__info">
             <HoverTip content={asset.name} showArrow={false}>
-              <div className="asset-item__name">
-                {asset.name}
-              </div>
+              <div className="asset-item__name">{asset.name}</div>
             </HoverTip>
             <div className="asset-item__meta">
               <span className="asset-item__type">

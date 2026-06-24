@@ -35,6 +35,7 @@ import {
   parseSvgDimensions,
   svgToDataUrl,
 } from '../../utils/svg-utils';
+import { getGeneratedVideoCanvasMetadata } from '../../utils/generated-video-canvas-metadata';
 
 /**
  * 内容类型
@@ -141,7 +142,10 @@ async function insertImageToCanvas(
   point: Point,
   dimensions?: { width: number; height: number }
 ): Promise<{ width: number; height: number }> {
-  const size = dimensions || { width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE, height: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE };
+  const size = dimensions || {
+    width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+    height: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+  };
   // console.log(`[CanvasInsertion] insertImageToCanvas: url=${imageUrl.substring(0, 80)}, point=`, point, 'size=', size);
   // skipScroll: true - 由 executeCanvasInsertion 统一处理滚动
   // skipImageLoad: true - 使用传入的尺寸，不等待图片加载
@@ -162,17 +166,42 @@ async function insertVideoToCanvas(
   board: PlaitBoard,
   videoUrl: string,
   point: Point,
-  dimensions?: { width: number; height: number }
+  dimensions?: { width: number; height: number },
+  metadata?: Record<string, unknown>
 ): Promise<{ width: number; height: number }> {
   // 如果提供了尺寸，直接使用，不等待视频元数据下载
+  const canvasMetadata = getGeneratedVideoCanvasMetadata(metadata);
   if (dimensions) {
-    await insertVideoFromUrl(board, videoUrl, point, false, dimensions, true, true);
+    await insertVideoFromUrl(
+      board,
+      videoUrl,
+      point,
+      false,
+      dimensions,
+      true,
+      true,
+      true,
+      { ...canvasMetadata }
+    );
     return dimensions;
   }
 
   // 否则使用默认 16:9 尺寸立即插入
-  const defaultSize = { width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE, height: Math.round(LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE * (9 / 16)) };
-  await insertVideoFromUrl(board, videoUrl, point, false, defaultSize, true, true);
+  const defaultSize = {
+    width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+    height: Math.round(LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE * (9 / 16)),
+  };
+  await insertVideoFromUrl(
+    board,
+    videoUrl,
+    point,
+    false,
+    defaultSize,
+    true,
+    true,
+    true,
+    { ...canvasMetadata }
+  );
   return defaultSize;
 }
 
@@ -217,7 +246,10 @@ async function insertSvgToCanvas(
   const dimensions = parseSvgDimensions(normalized);
 
   // 计算目标尺寸，保持宽高比
-  const targetWidth = Math.min(dimensions.width, LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE);
+  const targetWidth = Math.min(
+    dimensions.width,
+    LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE
+  );
   const aspectRatio = dimensions.height / dimensions.width;
   const targetHeight = targetWidth * aspectRatio;
 
@@ -235,7 +267,9 @@ async function insertSvgToCanvas(
 /**
  * 执行画布插入
  */
-async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MCPResult> {
+async function executeCanvasInsertion(
+  params: CanvasInsertionParams
+): Promise<MCPResult> {
   const board = boardRef;
 
   // console.log('[CanvasInsertion] executeCanvasInsertion called, board:', !!board, 'params:', {
@@ -252,7 +286,11 @@ async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MC
     };
   }
 
-  const { items, verticalGap = LAYOUT_CONSTANTS.DEFAULT_VERTICAL_GAP, horizontalGap = LAYOUT_CONSTANTS.DEFAULT_HORIZONTAL_GAP } = params;
+  const {
+    items,
+    verticalGap = LAYOUT_CONSTANTS.DEFAULT_VERTICAL_GAP,
+    horizontalGap = LAYOUT_CONSTANTS.DEFAULT_HORIZONTAL_GAP,
+  } = params;
 
   if (!items || items.length === 0) {
     return {
@@ -270,7 +308,8 @@ async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MC
           board,
           item.content,
           item.type,
-          item.dimensions
+          item.dimensions,
+          { metadata: item.metadata }
         );
         if (inserted) {
           return {
@@ -315,17 +354,26 @@ async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MC
       if (group.length === 1) {
         // 单个项，垂直插入
         const item = group[0];
-        let itemSize = { width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE, height: 225 };
+        let itemSize = {
+          width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+          height: 225,
+        };
 
         // 使用传入的尺寸或默认尺寸，不等待下载
         if (item.type === 'text') {
           itemSize = estimateCanvasTextSize(item.content);
         } else if (item.type === 'image') {
           // 优先使用传入的尺寸，避免等待图片下载
-          itemSize = item.dimensions || { width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE, height: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE };
+          itemSize = item.dimensions || {
+            width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+            height: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+          };
         } else if (item.type === 'video') {
           // 优先使用传入的尺寸，避免等待视频元数据下载
-          itemSize = item.dimensions || { width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE, height: Math.round(LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE * (9 / 16)) };
+          itemSize = item.dimensions || {
+            width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+            height: Math.round(LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE * (9 / 16)),
+          };
         } else if (item.type === 'audio') {
           itemSize = item.dimensions || {
             width: AUDIO_CARD_DEFAULT_WIDTH,
@@ -342,11 +390,22 @@ async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MC
           currentY += itemSize.height + verticalGap;
         } else if (item.type === 'image') {
           // console.log(`[CanvasInsertion] Calling insertImageToCanvas with dimensions:`, item.dimensions);
-          const imgSize = await insertImageToCanvas(board, item.content, point, item.dimensions);
+          const imgSize = await insertImageToCanvas(
+            board,
+            item.content,
+            point,
+            item.dimensions
+          );
           // console.log(`[CanvasInsertion] insertImageToCanvas returned:`, imgSize);
           currentY += imgSize.height + verticalGap;
         } else if (item.type === 'video') {
-          await insertVideoToCanvas(board, item.content, point, item.dimensions);
+          await insertVideoToCanvas(
+            board,
+            item.content,
+            point,
+            item.dimensions,
+            item.metadata
+          );
           currentY += itemSize.height + verticalGap;
         } else if (item.type === 'audio') {
           const audioSize = await insertAudioToCanvas(
@@ -372,15 +431,31 @@ async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MC
           const point: Point = [currentX, currentY];
 
           if (item.type === 'text') {
-            const size = await insertTextToCanvas(board, item.content, point, item.label);
+            const size = await insertTextToCanvas(
+              board,
+              item.content,
+              point,
+              item.label
+            );
             maxHeight = Math.max(maxHeight, size.height);
             currentX += size.width + horizontalGap;
           } else if (item.type === 'image') {
-            const imgSize = await insertImageToCanvas(board, item.content, point, item.dimensions);
+            const imgSize = await insertImageToCanvas(
+              board,
+              item.content,
+              point,
+              item.dimensions
+            );
             maxHeight = Math.max(maxHeight, imgSize.height);
             currentX += imgSize.width + horizontalGap;
           } else if (item.type === 'video') {
-            await insertVideoToCanvas(board, item.content, point);
+            await insertVideoToCanvas(
+              board,
+              item.content,
+              point,
+              item.dimensions,
+              item.metadata
+            );
             maxHeight = Math.max(maxHeight, 225);
             currentX += LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE + horizontalGap;
           } else if (item.type === 'audio') {
@@ -427,7 +502,8 @@ async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MC
         insertedCount: insertedItems.length,
         items: insertedItems,
         // 返回第一个元素的位置，供上层使用
-        firstElementPosition: insertedItems.length > 0 ? insertedItems[0].point : undefined,
+        firstElementPosition:
+          insertedItems.length > 0 ? insertedItems[0].point : undefined,
       },
       type: 'text',
     };
@@ -472,7 +548,8 @@ export const canvasInsertionTool: MCPTool = {
           properties: {
             type: {
               type: 'string',
-              description: '内容类型：text（文本）、image（图片URL）、video（视频URL）、audio（音频URL）、svg（SVG代码）',
+              description:
+                '内容类型：text（文本）、image（图片URL）、video（视频URL）、audio（音频URL）、svg（SVG代码）',
               enum: ['text', 'image', 'video', 'audio', 'svg'],
             },
             content: {
@@ -539,7 +616,7 @@ export async function insertImageGroup(
 ): Promise<MCPResult> {
   const groupId = `img-group-${Date.now()}`;
   return executeCanvasInsertion({
-    items: imageUrls.map(url => ({
+    items: imageUrls.map((url) => ({
       type: 'image' as ContentType,
       content: url,
       groupId,
@@ -575,7 +652,7 @@ export async function insertAIFlow(
   } else {
     // 多个结果，水平排列
     const groupId = `result-group-${Date.now()}`;
-    results.forEach(r => {
+    results.forEach((r) => {
       items.push({
         type: r.type,
         content: r.url,

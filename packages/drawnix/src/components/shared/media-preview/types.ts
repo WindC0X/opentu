@@ -20,6 +20,12 @@ export interface MediaItem {
   duration?: number;
   /** 生成提示词 */
   prompt?: string;
+  /** Stable local cache URL to rehydrate generated media thumbnails/previews */
+  rehydrateCacheUrl?: string;
+  /** Same-origin broker content URL used to rehydrate generated media */
+  rehydrateSourceUrl?: string;
+  /** Metadata to preserve when re-caching generated media */
+  rehydrateMetadata?: Record<string, unknown>;
   /** 音频风格标签 */
   tags?: string;
   /** 下载时显示的演唱者/作者 */

@@ -41,11 +41,16 @@ interface SWTask {
     url: string;
     urls?: string[];
     thumbnailUrls?: string[];
+    contentUrl?: string;
+    mimeType?: string;
+    remoteTaskId?: string;
     format: string;
     size: number;
     resultKind?: 'image' | 'video' | 'audio' | 'lyrics' | 'character' | 'chat';
     width?: number;
     height?: number;
+    targetWidth?: number;
+    targetHeight?: number;
     duration?: number;
     thumbnailUrl?: string;
     previewImageUrl?: string;
@@ -109,13 +114,20 @@ export interface AssetTaskRecord {
       characterPrompt?: string;
     };
   };
-  result?: {
-    url: string;
-    urls?: string[];
+	  result?: {
+	    url: string;
+	    urls?: string[];
+	    thumbnailUrls?: string[];
+	    contentUrl?: string;
+    mimeType?: string;
+    remoteTaskId?: string;
     format: string;
     size: number;
-    duration?: number;
-    previewImageUrl?: string;
+    targetWidth?: number;
+    targetHeight?: number;
+	    duration?: number;
+	    thumbnailUrl?: string;
+	    previewImageUrl?: string;
     title?: string;
     providerTaskId?: string;
     primaryClipId?: string;
@@ -160,11 +172,17 @@ export interface PromptHistoryTaskSummary {
     NonNullable<SWTask['result']>,
     | 'url'
     | 'urls'
+    | 'contentUrl'
+    | 'mimeType'
+    | 'remoteTaskId'
+    | 'providerTaskId'
     | 'thumbnailUrl'
     | 'thumbnailUrls'
     | 'previewImageUrl'
     | 'title'
     | 'resultKind'
+    | 'targetWidth'
+    | 'targetHeight'
     | 'duration'
     | 'chatResponse'
     | 'lyricsText'
@@ -305,13 +323,20 @@ function convertSWTaskToAssetTask(swTask: SWTask): AssetTaskRecord | null {
         | undefined,
     },
     result: normalizedResult
-      ? {
-          url: normalizedResult.url,
-          urls: normalizedResult.urls,
+        ? {
+	          url: normalizedResult.url,
+	          urls: normalizedResult.urls,
+	          thumbnailUrls: normalizedResult.thumbnailUrls,
+	          contentUrl: normalizedResult.contentUrl,
+          mimeType: normalizedResult.mimeType,
+          remoteTaskId: normalizedResult.remoteTaskId,
           format: normalizedResult.format,
           size: normalizedResult.size,
-          duration: normalizedResult.duration,
-          previewImageUrl: normalizedResult.previewImageUrl,
+          targetWidth: normalizedResult.targetWidth,
+	          targetHeight: normalizedResult.targetHeight,
+	          duration: normalizedResult.duration,
+	          thumbnailUrl: normalizedResult.thumbnailUrl,
+	          previewImageUrl: normalizedResult.previewImageUrl,
           title: normalizedResult.title,
           providerTaskId: normalizedResult.providerTaskId,
           primaryClipId: normalizedResult.primaryClipId,
@@ -354,11 +379,17 @@ function convertSWTaskToPromptHistorySummary(
     ? {
         url: swTask.result.url,
         urls: swTask.result.urls,
+        contentUrl: swTask.result.contentUrl,
+        mimeType: swTask.result.mimeType,
+        remoteTaskId: swTask.result.remoteTaskId,
+        providerTaskId: swTask.result.providerTaskId,
         thumbnailUrl: swTask.result.thumbnailUrl,
         thumbnailUrls: swTask.result.thumbnailUrls,
         previewImageUrl: swTask.result.previewImageUrl,
         title: swTask.result.title,
         resultKind: swTask.result.resultKind,
+        targetWidth: swTask.result.targetWidth,
+        targetHeight: swTask.result.targetHeight,
         duration: swTask.result.duration,
         chatResponse: swTask.result.chatResponse
           ? swTask.result.chatResponse.slice(0, 500)
@@ -414,11 +445,25 @@ function convertSWTaskToPromptHistorySummary(
  * 任务缓存结构
  */
 interface TaskCache {
-  byType: Map<TaskType, Task[]>; // 按类型过滤的缓存
+  byQuery: Map<string, Task[]>; // 按查询条件过滤的缓存
 }
 
 /** 活跃任务最大加载数量（与 STORAGE_LIMITS.MAX_RETAINED_TASKS 对齐） */
 const MAX_ACTIVE_LOAD = STORAGE_LIMITS.MAX_RETAINED_TASKS * 2; // 200
+
+function getTaskQueryCacheKey(options: {
+  status?: TaskStatus;
+  type?: TaskType;
+  limit: number;
+  includeArchived: boolean;
+}): string {
+  return JSON.stringify({
+    type: options.type ?? null,
+    status: options.status ?? null,
+    limit: options.limit,
+    includeArchived: options.includeArchived,
+  });
+}
 
 /**
  * 任务存储读取服务
@@ -462,10 +507,17 @@ class TaskStorageReader extends BaseStorageReader<TaskCache> {
     const includeArchived = options?.includeArchived ?? false;
     const limit = options?.limit ?? MAX_ACTIVE_LOAD;
 
-    // 检查缓存（仅类型过滤）
+    // 检查缓存。缓存 key 必须包含 includeArchived/status/limit，避免
+    // 非归档查询污染 refresh/cache-miss 的 includeArchived 恢复路径。
     if (this.isCacheValid() && this.cache) {
-      if (hasTypeFilter && !hasStatusFilter) {
-        const cached = this.cache.byType.get(options!.type!);
+      if (hasTypeFilter) {
+        const cacheKey = getTaskQueryCacheKey({
+          type: options!.type!,
+          status: options?.status,
+          limit,
+          includeArchived,
+        });
+        const cached = this.cache.byQuery.get(cacheKey);
         if (cached) {
           return cached;
         }
@@ -517,12 +569,18 @@ class TaskStorageReader extends BaseStorageReader<TaskCache> {
 
       // 更新缓存
       if (!this.cache || !this.isCacheValid()) {
-        this.cache = { byType: new Map() };
+        this.cache = { byQuery: new Map() };
         this.updateCacheTimestamp();
       }
 
-      if (hasTypeFilter && !hasStatusFilter) {
-        this.cache.byType.set(options!.type!, tasks);
+      if (hasTypeFilter) {
+        const cacheKey = getTaskQueryCacheKey({
+          type: options!.type!,
+          status: options?.status,
+          limit,
+          includeArchived,
+        });
+        this.cache.byQuery.set(cacheKey, tasks);
       }
 
       return tasks;

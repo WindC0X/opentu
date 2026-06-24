@@ -227,9 +227,9 @@ export const mjImageAdapter: ImageModelAdapter = {
       throw new Error('MJ submit missing task id');
     }
 
-    const handleSubmitted = request.params?.onSubmitted;
+    const handleSubmitted = request.onSubmitted || request.params?.onSubmitted;
     if (typeof handleSubmitted === 'function') {
-      handleSubmitted(taskId);
+      await handleSubmitted(taskId);
     }
 
     for (let attempt = 0; attempt < DEFAULT_POLL_MAX_ATTEMPTS; attempt += 1) {

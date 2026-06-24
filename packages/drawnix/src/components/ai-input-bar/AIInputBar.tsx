@@ -177,6 +177,7 @@ import {
   type AIInputPrefillEventDetail,
 } from '../../services/ai-input-ui-events';
 import { normalizeKnowledgeContextRefs } from '../../services/generation-context-service';
+import { ensureGeneratedImageCacheUrlReady } from '../../utils/generated-media-cache';
 
 /**
  * 将 WorkflowDefinition 转换为 WorkflowMessageData
@@ -290,6 +291,27 @@ function normalizeAIInputImageUrl(url: string): string {
   }
 }
 
+async function ensureAIInputReferenceImageReady(
+  item: SelectedContent
+): Promise<string | undefined> {
+  if (!item.url) {
+    return undefined;
+  }
+
+  const normalizedUrl = normalizeAIInputImageDataUrl(item.url);
+  const ready = await ensureGeneratedImageCacheUrlReady(normalizedUrl, {
+    contentUrl: item.contentUrl,
+    metadata: {
+      remoteTaskId: item.remoteTaskId,
+      providerTaskId: item.providerTaskId || item.remoteTaskId,
+      contentUrl: item.contentUrl,
+      mimeType: item.mimeType,
+      name: item.name,
+    },
+  });
+  return ready.url;
+}
+
 function buildPromptLineageMeta(
   workflow: WorkflowDefinition,
   step: Pick<WorkflowDefinition['steps'][number], 'mcp' | 'args'>
@@ -389,6 +411,10 @@ interface SelectedContent {
   name: string; // 显示名称
   width?: number; // 图片/视频宽度
   height?: number; // 图片/视频高度
+  contentUrl?: string; // 生成媒体 rehydrate content URL
+  remoteTaskId?: string;
+  providerTaskId?: string;
+  mimeType?: string;
 }
 
 function getSelectionKeyForModel(
@@ -728,6 +754,10 @@ const SelectionWatcher: React.FC<{
               type: isVideo ? 'video' : 'image',
               width: img.width,
               height: img.height,
+              contentUrl: img.contentUrl,
+              remoteTaskId: img.remoteTaskId,
+              providerTaskId: img.providerTaskId,
+              mimeType: img.mimeType,
             });
           }
 
@@ -2087,6 +2117,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             width: image.width,
             height: image.height,
             maskImage: image.maskImage,
+            contentUrl: image.contentUrl,
+            remoteTaskId: image.remoteTaskId,
+            providerTaskId: image.providerTaskId,
+            mimeType: image.mimeType,
           }))
         );
         setSelectedModel(nextModelId);
@@ -2271,6 +2305,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             name: asset.name || `素材-${Date.now()}`,
             width: img.naturalWidth || undefined,
             height: img.naturalHeight || undefined,
+            contentUrl: asset.contentUrl,
+            remoteTaskId: asset.remoteTaskId,
+            providerTaskId: asset.providerTaskId,
+            mimeType: asset.mimeType,
           };
           setUploadedContent((prev) => [...prev, newContent]);
           setShowMediaLibrary(false);
@@ -2280,6 +2318,10 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
             type: 'image',
             url: asset.url,
             name: asset.name || `素材-${Date.now()}`,
+            contentUrl: asset.contentUrl,
+            remoteTaskId: asset.remoteTaskId,
+            providerTaskId: asset.providerTaskId,
+            mimeType: asset.mimeType,
           };
           setUploadedContent((prev) => [...prev, newContent]);
           setShowMediaLibrary(false);
@@ -3026,16 +3068,24 @@ export const AIInputBar: React.FC<AIInputBarProps> = React.memo(
               (dim): dim is { width: number; height: number } =>
                 dim !== undefined
             );
+          const [imageUrls, graphicsUrls] = await Promise.all([
+            Promise.all(imageItems.map(ensureAIInputReferenceImageReady)),
+            Promise.all(graphicsItems.map(ensureAIInputReferenceImageReady)),
+          ]);
 
           const selection = {
             texts: allContent
               .filter((item) => item.type === 'text' && item.text)
               .map((item) => item.text!),
-            images: imageItems.map((item) => item.url!),
+            images: imageUrls.filter(
+              (url): url is string => typeof url === 'string' && url.length > 0
+            ),
             videos: allContent
               .filter((item) => item.type === 'video' && item.url)
               .map((item) => item.url!),
-            graphics: graphicsItems.map((item) => item.url!),
+            graphics: graphicsUrls.filter(
+              (url): url is string => typeof url === 'string' && url.length > 0
+            ),
             // 添加图片尺寸信息（始终传递数组，避免下游处理 undefined）
             imageDimensions: imageDimensions,
             maskImage:

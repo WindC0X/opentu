@@ -36,6 +36,10 @@ import { RetryImage } from '../retry-image';
 import { HoverTip } from '../shared/hover';
 import { UnifiedMediaViewer, type MediaItem } from '../shared/media-preview';
 import { VideoPosterPreview } from '../shared/VideoPosterPreview';
+import {
+  resolveGeneratedImageContentUrl,
+  resolveGeneratedVideoContentUrl,
+} from '../../utils/generated-media-cache';
 import './prompt-history-tool.scss';
 
 const CATEGORY_OPTIONS: Array<{
@@ -122,15 +126,36 @@ function previewToMediaItem(
   index: number
 ): MediaItem | null {
   if (preview.kind === 'image') {
+    const rehydrateSourceUrl = resolveGeneratedImageContentUrl({
+      contentUrl: preview.contentUrl,
+      remoteTaskId: preview.remoteTaskId,
+      providerTaskId: preview.providerTaskId,
+    });
     return {
       id: `${record.id}-result-${index}`,
       url: preview.url,
       type: 'image',
       title: preview.title || record.title,
       prompt: record.sentPrompt,
+      rehydrateCacheUrl: preview.url,
+      rehydrateSourceUrl,
+      rehydrateMetadata: {
+        taskId: record.taskIds[index] || record.taskId,
+        remoteTaskId: preview.remoteTaskId,
+        providerTaskId: preview.providerTaskId || preview.remoteTaskId,
+        contentUrl: rehydrateSourceUrl,
+        mimeType: preview.mimeType,
+        prompt: record.sentPrompt,
+        model: record.model,
+      },
     };
   }
   if (preview.kind === 'video') {
+    const rehydrateSourceUrl = resolveGeneratedVideoContentUrl({
+      contentUrl: preview.contentUrl,
+      remoteTaskId: preview.remoteTaskId,
+      providerTaskId: preview.providerTaskId,
+    });
     return {
       id: `${record.id}-result-${index}`,
       url: preview.url,
@@ -139,6 +164,17 @@ function previewToMediaItem(
       title: preview.title || record.title,
       duration: preview.duration,
       prompt: record.sentPrompt,
+      rehydrateCacheUrl: preview.url,
+      rehydrateSourceUrl,
+      rehydrateMetadata: {
+        taskId: record.taskIds[index] || record.taskId,
+        remoteTaskId: preview.remoteTaskId,
+        providerTaskId: preview.providerTaskId || preview.remoteTaskId,
+        contentUrl: rehydrateSourceUrl,
+        mimeType: preview.mimeType || 'video/mp4',
+        prompt: record.sentPrompt,
+        model: record.model,
+      },
     };
   }
   if (preview.kind === 'audio' && preview.url) {
@@ -574,9 +610,7 @@ export const PromptHistoryTool: React.FC<PromptHistoryToolProps> = ({
               : dialogState.record?.sentPrompt || dialogState.sentPrompt,
             tags: dialogTags,
             category: dialogState.record?.category,
-            ...(canEditCurrentSentPrompt
-              ? { allowSentPromptEdit: true }
-              : {}),
+            ...(canEditCurrentSentPrompt ? { allowSentPromptEdit: true } : {}),
           });
     if (!success) {
       MessagePlugin.error('保存失败');
@@ -608,12 +642,9 @@ export const PromptHistoryTool: React.FC<PromptHistoryToolProps> = ({
     void loadPage('reset');
   }, [dialogState, dialogTags, loadPage]);
 
-  const updateDialogState = useCallback(
-    (patch: Partial<PromptDialogState>) => {
-      setDialogState((prev) => (prev ? { ...prev, ...patch } : prev));
-    },
-    []
-  );
+  const updateDialogState = useCallback((patch: Partial<PromptDialogState>) => {
+    setDialogState((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, []);
 
   const openPreview = useCallback(
     (
@@ -733,10 +764,7 @@ export const PromptHistoryTool: React.FC<PromptHistoryToolProps> = ({
           </button>
         )}
         {loadingMode === 'reset' && (
-          <Loader2
-            size={14}
-            className="prompt-history-tool__summary-loading"
-          />
+          <Loader2 size={14} className="prompt-history-tool__summary-loading" />
         )}
       </div>
 
@@ -860,6 +888,11 @@ export const PromptHistoryTool: React.FC<PromptHistoryToolProps> = ({
                               ) : (
                                 <RetryImage
                                   src={item.posterUrl || item.url}
+                                  rehydrateCacheUrl={
+                                    item.rehydrateCacheUrl || item.url
+                                  }
+                                  rehydrateSourceUrl={item.rehydrateSourceUrl}
+                                  rehydrateMetadata={item.rehydrateMetadata}
                                   alt={item.title || record.title}
                                   showSkeleton={false}
                                   eager
@@ -881,10 +914,20 @@ export const PromptHistoryTool: React.FC<PromptHistoryToolProps> = ({
                                   alt={item.title || record.title}
                                   thumbnailSize="small"
                                   activateVideoOnClick={false}
+                                  rehydrateCacheUrl={
+                                    item.rehydrateCacheUrl || item.url
+                                  }
+                                  rehydrateSourceUrl={item.rehydrateSourceUrl}
+                                  rehydrateMetadata={item.rehydrateMetadata}
                                 />
                               ) : (
                                 <RetryImage
                                   src={item.posterUrl || item.url}
+                                  rehydrateCacheUrl={
+                                    item.rehydrateCacheUrl || item.url
+                                  }
+                                  rehydrateSourceUrl={item.rehydrateSourceUrl}
+                                  rehydrateMetadata={item.rehydrateMetadata}
                                   alt={item.title || record.title}
                                   showSkeleton={false}
                                   eager
@@ -911,7 +954,9 @@ export const PromptHistoryTool: React.FC<PromptHistoryToolProps> = ({
                       <button
                         type="button"
                         className="prompt-history-tool__create-btn"
-                        onClick={(event) => handleOpenCreateDialog(record, event)}
+                        onClick={(event) =>
+                          handleOpenCreateDialog(record, event)
+                        }
                         aria-label={`基于 ${record.title} 创建`}
                       >
                         <Plus size={15} />
@@ -932,7 +977,11 @@ export const PromptHistoryTool: React.FC<PromptHistoryToolProps> = ({
                         onClick={(event) => handleTogglePinned(record, event)}
                         aria-label={record.pinned ? '取消置顶' : '置顶'}
                       >
-                        {record.pinned ? <PinOff size={15} /> : <Pin size={15} />}
+                        {record.pinned ? (
+                          <PinOff size={15} />
+                        ) : (
+                          <Pin size={15} />
+                        )}
                       </button>
                     </div>
                   </td>

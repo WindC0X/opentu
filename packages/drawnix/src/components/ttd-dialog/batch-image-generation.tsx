@@ -77,9 +77,35 @@ import {
 } from '../../services/ai-generation-preferences-service';
 import { buildMJPromptSuffix } from '../../utils/mj-params';
 import { isCreativeEmbeddedMode } from '../../services/creative-mode';
+import {
+  buildCreativeImageRuntimeTaskParams,
+  getCreativeImageAspectRatioFromParams,
+} from './creative-image-task-params';
+import { sanitizeTaskErrorDisplayMessage } from '../../services/creative-error-sanitizer';
 
 // 本地缓存 key
 const BATCH_IMAGE_CACHE_KEY = LS_KEYS_TO_MIGRATE.BATCH_IMAGE_CACHE;
+
+function getSafeBatchTaskError(task: Task | undefined): {
+  message: string;
+  details?: string;
+} | null {
+  if (!task?.error) {
+    return null;
+  }
+  const message = sanitizeTaskErrorDisplayMessage(
+    task.error.message,
+    '生成失败'
+  );
+  const details = sanitizeTaskErrorDisplayMessage(
+    task.error.details?.originalError,
+    message
+  );
+  return {
+    message,
+    details: details && details !== message ? details : undefined,
+  };
+}
 
 // 任务行数据
 interface TaskRow {
@@ -215,6 +241,9 @@ function normalizeRowParamsForModel(
 ): Record<string, string> {
   const compatibleParams = getCompatibleParams(modelId);
   const sizeParam = compatibleParams.find((param) => param.id === 'size');
+  const aspectRatioParam = compatibleParams.find(
+    (param) => param.id === 'aspectRatio'
+  );
   const rawParams = isStringRecord(row.params) ? row.params : {};
   const normalizedParams: Record<string, string> = {
     ...defaultParams,
@@ -227,6 +256,14 @@ function normalizeRowParamsForModel(
     : undefined;
   if (normalizedSize) {
     normalizedParams.size = normalizedSize;
+  }
+
+  const rawAspectRatio = rawParams.aspectRatio || rawParams.size || row.size;
+  const normalizedAspectRatio = aspectRatioParam
+    ? parseParamInputValue(aspectRatioParam, rawAspectRatio)
+    : undefined;
+  if (normalizedAspectRatio) {
+    normalizedParams.aspectRatio = normalizedAspectRatio;
   }
 
   return sanitizeImageToolExtraParams(modelId, normalizedParams);
@@ -517,9 +554,7 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
     (initialRoute.modelId
       ? createModelRef(initialRoute.profileId, initialRoute.modelId)
       : null);
-  const [selectedModel, setSelectedModel] = useState<string>(
-    initialModelId
-  );
+  const [selectedModel, setSelectedModel] = useState<string>(initialModelId);
   const [selectedModelRef, setSelectedModelRef] = useState<ModelRef | null>(
     initialModelRef
   );
@@ -2130,30 +2165,40 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
         for (const { task, rowIndex } of validTasks) {
           const generateCount = task.count || 1;
           const batchId = `batch_${task.id}_${globalBatchTimestamp}`;
-          const rowParams = normalizeRowParamsForModel(
-            task,
-            selectedModel,
-            defaultModelParams
-          );
-          const normalizedAspectRatio =
-            rowParams.size || defaultModelParams.size || 'auto';
-          const normalizedSize =
-            normalizedAspectRatio === 'auto'
-              ? undefined
-              : normalizedAspectRatio;
           const currentImageModel =
             selectedModel ||
             resolveInvocationRoute('image').modelId ||
             'gemini-2.5-flash-image-vip';
+          const rowParams = normalizeRowParamsForModel(
+            task,
+            currentImageModel,
+            defaultModelParams
+          );
+          const normalizedAspectRatio = getCreativeImageAspectRatioFromParams(
+            currentImageModel,
+            rowParams,
+            defaultModelParams.aspectRatio
+          );
+          const normalizedSize =
+            rowParams.size && rowParams.size !== 'auto'
+              ? rowParams.size
+              : undefined;
           const isMJModel = currentImageModel.startsWith('mj');
+          const creativeRuntimeTaskParams = buildCreativeImageRuntimeTaskParams(
+            currentImageModel,
+            rowParams
+          );
+          const schemaBackedCreativeModel =
+            creativeRuntimeTaskParams.schemaBacked;
           const finalPrompt = isMJModel
             ? [task.prompt.trim(), buildMJPromptSuffix(rowParams)]
                 .filter(Boolean)
                 .join(' ')
             : task.prompt.trim();
-          const adapterParams = isMJModel
-            ? undefined
-            : buildTaskAdapterParams(rowParams);
+          const adapterParams =
+            isMJModel || schemaBackedCreativeModel
+              ? undefined
+              : buildTaskAdapterParams(rowParams);
 
           const uploadedImages = task.images.map((url, index) => ({
             type: 'url',
@@ -2180,6 +2225,7 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
               globalIndex: subTaskCounter,
               autoInsertToCanvas: true,
               ...(adapterParams ? { params: adapterParams } : {}),
+              ...creativeRuntimeTaskParams.taskParams,
             };
 
             const createdTask = createTask(taskParams, TaskType.IMAGE);
@@ -3090,30 +3136,38 @@ const BatchImageGeneration: React.FC<BatchImageGenerationProps> = ({
                   </div>
                 );
               })()}
-            {rowInfo.status === 'failed' && rowInfo.tasks[0]?.error && (
-              <div className="preview-error">
-                <span className="preview-error-message">
-                  {rowInfo.tasks[0].error.message}
-                </span>
-                {rowInfo.tasks[0].error.details?.originalError && (
-                  <HoverTip
-                    content={
-                      <div className="error-details-tooltip">
-                        <div className="error-details-title">原始错误信息:</div>
-                        <div className="error-details-content">
-                          {rowInfo.tasks[0].error.details.originalError}
-                        </div>
-                      </div>
-                    }
-                    theme="light"
-                    placement="bottom"
-                    showArrow={false}
-                  >
-                    <span className="preview-error-details-link">[详情]</span>
-                  </HoverTip>
-                )}
-              </div>
-            )}
+            {rowInfo.status === 'failed' &&
+              (() => {
+                const safeError = getSafeBatchTaskError(rowInfo.tasks[0]);
+                return safeError ? (
+                  <div className="preview-error">
+                    <span className="preview-error-message">
+                      {safeError.message}
+                    </span>
+                    {safeError.details && (
+                      <HoverTip
+                        content={
+                          <div className="error-details-tooltip">
+                            <div className="error-details-title">
+                              原始错误信息:
+                            </div>
+                            <div className="error-details-content">
+                              {safeError.details}
+                            </div>
+                          </div>
+                        }
+                        theme="light"
+                        placement="bottom"
+                        showArrow={false}
+                      >
+                        <span className="preview-error-details-link">
+                          [详情]
+                        </span>
+                      </HoverTip>
+                    )}
+                  </div>
+                ) : null;
+              })()}
             {rowInfo.status === 'partial' &&
               (() => {
                 const partialUrls = rowInfo.tasks

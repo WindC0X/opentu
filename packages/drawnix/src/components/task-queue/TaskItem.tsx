@@ -38,6 +38,13 @@ import {
   isLyricsResult,
 } from '../../utils/lyrics-task-utils';
 import { VideoPosterPreview } from '../shared/VideoPosterPreview';
+import {
+  isGeneratedVideoCacheUrl,
+  resolveGeneratedImageContentUrl,
+  resolveGeneratedVideoContentUrl,
+} from '../../utils/generated-media-cache';
+import { fitCreativeImagePreviewBox } from '../../utils/creative-image-display-size';
+import { sanitizeTaskErrorDisplayMessage } from '../../services/creative-error-sanitizer';
 import './task-queue.scss';
 import './task-progress-overlay.scss';
 import { HoverTip } from '../shared';
@@ -219,6 +226,28 @@ function getStatusLabel(status: TaskStatus): string {
 /**
  * TaskItem component - displays a single task
  */
+export function areTaskItemPropsEqual(
+  prev: Readonly<TaskItemProps>,
+  next: Readonly<TaskItemProps>
+): boolean {
+  return (
+    prev.task === next.task &&
+    prev.isSelected === next.isSelected &&
+    prev.selectionMode === next.selectionMode &&
+    prev.isCompact === next.isCompact &&
+    prev.onSelectionChange === next.onSelectionChange &&
+    prev.onRetry === next.onRetry &&
+    prev.onDelete === next.onDelete &&
+    prev.onDownload === next.onDownload &&
+    prev.onInsert === next.onInsert &&
+    prev.onCopy === next.onCopy &&
+    prev.onPreviewOpen === next.onPreviewOpen &&
+    prev.onEdit === next.onEdit &&
+    prev.onRegenerate === next.onRegenerate &&
+    prev.onExtractCharacter === next.onExtractCharacter
+  );
+}
+
 export const TaskItem: React.FC<TaskItemProps> = React.memo(
   ({
     task,
@@ -341,14 +370,16 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
         : rawMediaUrl;
 
     const { isCached, cacheWarning: detectedCacheWarning } = useUnifiedCache(
-      isCharacterTask || isAudioTask ? undefined : mediaUrl
+      isCharacterTask ? undefined : mediaUrl
     );
     const cacheWarning =
-      isPreviewableTask && !isAudioTask && !isCached
+      isPreviewableTask && !isCached
         ? detectedCacheWarning || task.result?.cacheWarning
         : undefined;
     const cacheWarningTip = cacheWarning
-      ? `${cacheWarning.message}${cacheWarning.expiresHint ? `\n${cacheWarning.expiresHint}` : ''}`
+      ? `${cacheWarning.message}${
+          cacheWarning.expiresHint ? `\n${cacheWarning.expiresHint}` : ''
+        }`
       : '';
 
     // Use original URL or cached URL (Service Worker handles caching automatically)
@@ -370,6 +401,134 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
         ? undefined
         : task.result?.previewImageUrl
       : mediaUrl;
+    const generatedImageContentUrl =
+      task.type === TaskType.IMAGE
+        ? resolveGeneratedImageContentUrl({
+            contentUrl:
+              typeof task.result?.contentUrl === 'string'
+                ? task.result.contentUrl
+                : undefined,
+            remoteTaskId: task.result?.remoteTaskId,
+            providerTaskId: task.result?.providerTaskId,
+            taskRemoteId: task.remoteId,
+          })
+        : undefined;
+    const generatedImageRehydrateMetadata = useMemo(
+      () =>
+        generatedImageContentUrl
+          ? {
+              taskId: task.id,
+              remoteTaskId: task.result?.remoteTaskId || task.remoteId,
+              providerTaskId:
+                task.result?.providerTaskId ||
+                task.result?.remoteTaskId ||
+                task.remoteId,
+              contentUrl: generatedImageContentUrl,
+              mimeType: task.result?.mimeType,
+              prompt: task.params.prompt,
+              model: task.params.model,
+            }
+          : undefined,
+      [
+        generatedImageContentUrl,
+        task.id,
+        task.remoteId,
+        task.result?.mimeType,
+        task.result?.providerTaskId,
+        task.result?.remoteTaskId,
+        task.params.model,
+        task.params.prompt,
+      ]
+    );
+    const generatedVideoContentUrl =
+      task.type === TaskType.VIDEO
+        ? resolveGeneratedVideoContentUrl({
+            contentUrl:
+              typeof task.result?.contentUrl === 'string'
+                ? task.result.contentUrl
+                : undefined,
+            remoteTaskId: task.result?.remoteTaskId,
+            providerTaskId: task.result?.providerTaskId,
+            taskRemoteId: task.remoteId,
+          })
+        : undefined;
+    const generatedVideoRehydrateMetadata = useMemo(
+      () =>
+        generatedVideoContentUrl
+          ? {
+              taskId: task.id,
+              remoteTaskId: task.result?.remoteTaskId || task.remoteId,
+              providerTaskId:
+                task.result?.providerTaskId ||
+                task.result?.remoteTaskId ||
+                task.remoteId,
+              contentUrl: generatedVideoContentUrl,
+              mimeType: task.result?.mimeType,
+              prompt: task.params.prompt,
+              model: task.params.model,
+            }
+          : undefined,
+      [
+        generatedVideoContentUrl,
+        task.id,
+        task.remoteId,
+        task.result?.mimeType,
+        task.result?.providerTaskId,
+        task.result?.remoteTaskId,
+        task.params.model,
+        task.params.prompt,
+      ]
+    );
+    const previewBoxStyle = useMemo<React.CSSProperties | undefined>(() => {
+      if (task.type !== TaskType.IMAGE) {
+        return undefined;
+      }
+      const maxWidth = isCompactLayout ? 100 : 120;
+      const maxHeight = isCompactLayout ? 75 : 90;
+      const fitted = fitCreativeImagePreviewBox(
+        {
+          width:
+            imageDimensions?.width || task.result?.width || task.params.width,
+          height:
+            imageDimensions?.height ||
+            task.result?.height ||
+            task.params.height,
+          targetWidth: task.result?.targetWidth,
+          targetHeight: task.result?.targetHeight,
+          size: task.params.size,
+          userParams: task.params.userParams,
+        },
+        maxWidth,
+        maxHeight
+      );
+      return {
+        width: `${fitted.width}px`,
+        height: `${fitted.height}px`,
+        justifySelf: 'center',
+      };
+    }, [
+      isCompactLayout,
+      imageDimensions?.height,
+      imageDimensions?.width,
+      task.params.height,
+      task.params.size,
+      task.params.userParams,
+      task.params.width,
+      task.result?.height,
+      task.result?.targetHeight,
+      task.result?.targetWidth,
+      task.result?.width,
+      task.type,
+    ]);
+    const safeTaskErrorMessage = isFailed
+      ? sanitizeTaskErrorDisplayMessage(task.error?.message, '生成失败')
+      : '';
+    const safeTaskOriginalError = isFailed
+      ? sanitizeTaskErrorDisplayMessage(
+          task.error?.details?.originalError,
+          safeTaskErrorMessage || '生成失败'
+        )
+      : '';
 
     // 获取预览图URL（任务列表使用小尺寸）
     const thumbnailUrl = useThumbnailUrl(
@@ -549,7 +708,7 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
             task.type === TaskType.VIDEO ||
             task.type === TaskType.IMAGE ||
             task.type === TaskType.AUDIO) && (
-            <div className="task-item__preview-wrapper">
+            <div className="task-item__preview-wrapper" style={previewBoxStyle}>
               <div
                 className="task-item__preview"
                 data-track="task_click_preview"
@@ -590,6 +749,9 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                       <>
                         <RetryImage
                           src={thumbnailUrl || mediaUrl}
+                          rehydrateCacheUrl={mediaUrl}
+                          rehydrateSourceUrl={generatedImageContentUrl}
+                          rehydrateMetadata={generatedImageRehydrateMetadata}
                           alt="Generated"
                           maxRetries={5}
                           fallback={
@@ -655,6 +817,13 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                           poster={task.result?.previewImageUrl}
                           alt={displayPrompt || '视频预览'}
                           thumbnailSize="small"
+                          rehydrateCacheUrl={
+                            isGeneratedVideoCacheUrl(mediaUrl)
+                              ? mediaUrl
+                              : undefined
+                          }
+                          rehydrateSourceUrl={generatedVideoContentUrl}
+                          rehydrateMetadata={generatedVideoRehydrateMetadata}
                           videoProps={{
                             muted: true,
                             playsInline: true,
@@ -682,7 +851,9 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                     )}
                     {cacheWarning && (
                       <HoverTip content={cacheWarningTip} showArrow={false}>
-                        <span className="task-item__cache-warning-badge">需下载</span>
+                        <span className="task-item__cache-warning-badge">
+                          需下载
+                        </span>
                       </HoverTip>
                     )}
                   </>
@@ -700,7 +871,9 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
             </HoverTip>
             {isChatTask && videoAnalyzerSubtitle && (
               <HoverTip content={videoAnalyzerSubtitle} showArrow={false}>
-                <div className="task-item__subtitle">{videoAnalyzerSubtitle}</div>
+                <div className="task-item__subtitle">
+                  {videoAnalyzerSubtitle}
+                </div>
               </HoverTip>
             )}
           </div>
@@ -976,8 +1149,9 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
             {isFailed && task.error && (
               <div className="task-item__error">
                 <div className="task-item__error-message">
-                  {task.error.message}
-                  {task.error.details?.originalError && (
+                  {safeTaskErrorMessage}
+                  {safeTaskOriginalError &&
+                    safeTaskOriginalError !== safeTaskErrorMessage && (
                     <HoverTip
                       content={
                         <div className="task-item__error-details-tooltip">
@@ -985,7 +1159,7 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                             详细错误:
                           </div>
                           <div className="task-item__error-details-content">
-                            {task.error.details.originalError}
+                            {safeTaskOriginalError}
                           </div>
                         </div>
                       }
@@ -999,7 +1173,7 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
                         [详情]
                       </span>
                     </HoverTip>
-                  )}
+                    )}
                 </div>
               </div>
             )}
@@ -1008,18 +1182,5 @@ export const TaskItem: React.FC<TaskItemProps> = React.memo(
       </div>
     );
   },
-  (prev, next) => {
-    // 性能优化：仅在关键属性变化时重绘
-    return (
-      prev.task.id === next.task.id &&
-      prev.task.status === next.task.status &&
-      prev.task.progress === next.task.progress &&
-      prev.task.error?.message === next.task.error?.message &&
-      prev.task.result === next.task.result &&
-      prev.isSelected === next.isSelected &&
-      prev.selectionMode === next.selectionMode &&
-      prev.isCompact === next.isCompact &&
-      prev.onRegenerate === next.onRegenerate
-    );
-  }
+  areTaskItemPropsEqual
 );

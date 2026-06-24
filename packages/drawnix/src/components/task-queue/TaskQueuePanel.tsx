@@ -68,6 +68,7 @@ import {
   buildImageTaskPrefillInitialData,
 } from '../../utils/image-task-prefill';
 import { requestAIInputPrefill } from '../../services/ai-input-ui-events';
+import { ensureGeneratedImageCacheUrlReady } from '../../utils/generated-media-cache';
 import './task-queue.scss';
 import { HoverTip } from '../shared';
 
@@ -604,14 +605,62 @@ export const TaskQueuePanel: React.FC<TaskQueuePanelProps> = ({
           ? taskResult.urls
           : [taskResult.url];
         for (const url of urls) {
-          await insertImageFromUrl(board, normalizeImageDataUrl(url));
+          const normalizedUrl = normalizeImageDataUrl(url);
+          const metadata = {
+            taskId: task.id,
+            remoteTaskId: taskResult.remoteTaskId || task.remoteId,
+            providerTaskId:
+              taskResult.providerTaskId ||
+              taskResult.remoteTaskId ||
+              task.remoteId,
+            contentUrl: taskResult.contentUrl,
+            mimeType: taskResult.mimeType,
+            prompt: task.params.prompt,
+            model: task.params.model,
+          };
+          const ready = await ensureGeneratedImageCacheUrlReady(normalizedUrl, {
+            contentUrl: taskResult.contentUrl,
+            metadata,
+          });
+          await insertImageFromUrl(
+            board,
+            ready.url,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            metadata
+          );
         }
         MessagePlugin.success(
           urls.length > 1 ? '多图已插入到白板' : '图片已插入到白板'
         );
       } else if (task.type === TaskType.VIDEO) {
         // 插入视频到白板
-        await insertVideoFromUrl(board, taskResult.url);
+        await insertVideoFromUrl(
+          board,
+          taskResult.url,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          {
+            taskId: task.id,
+            remoteTaskId: taskResult.remoteTaskId || task.remoteId,
+            providerTaskId:
+              taskResult.providerTaskId ||
+              taskResult.remoteTaskId ||
+              task.remoteId,
+            contentUrl: taskResult.contentUrl,
+            mimeType: taskResult.mimeType,
+            prompt: task.params.prompt,
+            model: task.params.model,
+          }
+        );
         // console.log('Video inserted to board:', taskId);
         MessagePlugin.success('视频已插入到白板');
       } else if (task.type === TaskType.AUDIO) {
@@ -902,6 +951,39 @@ export const TaskQueuePanel: React.FC<TaskQueuePanelProps> = ({
             type: mediaType,
             title:
               urls.length > 1 ? `${title} (${i + 1}/${urls.length})` : title,
+            ...(mediaType === 'image'
+              ? {
+                  rehydrateCacheUrl: normalizedUrl,
+                  rehydrateSourceUrl: task.result?.contentUrl,
+                  rehydrateMetadata: {
+                    taskId: task.id,
+                    remoteTaskId: task.result?.remoteTaskId || task.remoteId,
+                    providerTaskId:
+                      task.result?.providerTaskId ||
+                      task.result?.remoteTaskId ||
+                      task.remoteId,
+                    contentUrl: task.result?.contentUrl,
+                    mimeType: task.result?.mimeType,
+                    prompt: task.params.prompt,
+                    model: task.params.model,
+                  },
+                }
+              : {
+                  rehydrateCacheUrl: normalizedUrl,
+                  rehydrateSourceUrl: task.result?.contentUrl,
+                  rehydrateMetadata: {
+                    taskId: task.id,
+                    remoteTaskId: task.result?.remoteTaskId || task.remoteId,
+                    providerTaskId:
+                      task.result?.providerTaskId ||
+                      task.result?.remoteTaskId ||
+                      task.remoteId,
+                    contentUrl: task.result?.contentUrl,
+                    mimeType: task.result?.mimeType,
+                    prompt: task.params.prompt,
+                    model: task.params.model,
+                  },
+                }),
           });
         }
       }

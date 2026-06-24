@@ -124,13 +124,24 @@ export const compressImageUrl = (imageUrl: string, maxWidth: number = 512, maxHe
   });
 };
 
+export interface SelectedImageContent {
+  url: string;
+  name?: string;
+  width?: number;
+  height?: number;
+  contentUrl?: string;
+  remoteTaskId?: string;
+  providerTaskId?: string;
+  mimeType?: string;
+}
+
 export interface ExtractedContent {
   text: string;
-  images: { url: string; name?: string; width?: number; height?: number }[];
+  images: SelectedImageContent[];
 }
 
 export interface ProcessedContent {
-  remainingImages: { url: string; name?: string; width?: number; height?: number }[];
+  remainingImages: SelectedImageContent[];
   remainingText: string;
   graphicsImage?: string;
   maskImage?: string;
@@ -783,8 +794,33 @@ export const convertElementsToImage = async (board: PlaitBoard, elements: PlaitE
 /**
  * Extract image URLs from a Plait element
  */
-export const extractImagesFromElement = (element: PlaitElement, board?: PlaitBoard): { url: string; name?: string; width?: number; height?: number }[] => {
-  const images: { url: string; name?: string; width?: number; height?: number }[] = [];
+function getGeneratedImageSelectionMetadata(source: any): Pick<
+  SelectedImageContent,
+  'contentUrl' | 'remoteTaskId' | 'providerTaskId' | 'mimeType'
+> {
+  return {
+    contentUrl:
+      typeof source?.contentUrl === 'string' && source.contentUrl.trim()
+        ? source.contentUrl.trim()
+        : undefined,
+    remoteTaskId:
+      typeof source?.remoteTaskId === 'string' && source.remoteTaskId.trim()
+        ? source.remoteTaskId.trim()
+        : undefined,
+    providerTaskId:
+      typeof source?.providerTaskId === 'string' &&
+      source.providerTaskId.trim()
+        ? source.providerTaskId.trim()
+        : undefined,
+    mimeType:
+      typeof source?.mimeType === 'string' && source.mimeType.trim()
+        ? source.mimeType.trim()
+        : undefined,
+  };
+}
+
+export const extractImagesFromElement = (element: PlaitElement, board?: PlaitBoard): SelectedImageContent[] => {
+  const images: SelectedImageContent[] = [];
   
   // Handle MindElement with images
   if (board && MindElement.isMindElement(board, element)) {
@@ -798,6 +834,7 @@ export const extractImagesFromElement = (element: PlaitElement, board?: PlaitBoa
         name: `mind-image-${Date.now()}`,
         width: imgWidth,
         height: imgHeight,
+        ...getGeneratedImageSelectionMetadata(mindElement.image),
       });
     }
   }
@@ -812,6 +849,7 @@ export const extractImagesFromElement = (element: PlaitElement, board?: PlaitBoa
       name: `draw-image-${Date.now()}`,
       width: elemWidth,
       height: elemHeight,
+      ...getGeneratedImageSelectionMetadata(element),
     });
   }
   
@@ -823,6 +861,7 @@ export const extractImagesFromElement = (element: PlaitElement, board?: PlaitBoa
       name: `element-image-${Date.now()}`,
       width: imgObj.width,
       height: imgObj.height,
+      ...getGeneratedImageSelectionMetadata(imgObj),
     });
   }
   
@@ -1064,7 +1103,7 @@ async function resizeImageUrlForMaskEdit(
 export const extractImagesFromElementForAI = async (
   board: PlaitBoard,
   element: PlaitElement
-): Promise<{ url: string; name?: string; width?: number; height?: number }[]> => {
+): Promise<SelectedImageContent[]> => {
   return extractImagesFromElement(element, board);
 };
 
@@ -1078,7 +1117,7 @@ export const extractSelectedContent = (board: PlaitBoard): ExtractedContent => {
   const sortedElements = sortElementsByPosition(board, selectedElements);
   
   const texts: string[] = [];
-  const images: { url: string; name?: string; width?: number; height?: number }[] = [];
+  const images: SelectedImageContent[] = [];
   
   for (const element of sortedElements) {
     // Extract text
@@ -1191,7 +1230,7 @@ export const processSelectedContentForAI = async (
   }
   
   // Step 5: Extract images and text from remaining elements
-  const remainingImages: { url: string; name?: string; width?: number; height?: number }[] = [];
+  const remainingImages: SelectedImageContent[] = [];
   const remainingTexts: string[] = remainingElements
     .map((element) => getImageTransformPromptContext(element))
     .filter((text): text is string => !!text);

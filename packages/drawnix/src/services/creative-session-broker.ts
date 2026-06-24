@@ -696,9 +696,113 @@ async function initializeCreativeManagedSessionBrokerInternal(
 export function initializeCreativeManagedSessionBroker(
   fetcher: typeof fetch = fetch
 ): Promise<CreativeBootstrapResult> {
-  initializationPromise ||=
-    initializeCreativeManagedSessionBrokerInternal(fetcher);
+  initializationPromise ||= initializeCreativeManagedSessionBrokerInternal(
+    fetcher
+  ).then(
+    (result) => {
+      if (result.status === 'error') {
+        initializationPromise = null;
+      }
+      return result;
+    },
+    (error) => {
+      initializationPromise = null;
+      throw error;
+    }
+  );
   return initializationPromise;
+}
+
+export interface CreativeManagedSessionBrokerRecoveryOptions {
+  fetcher?: typeof fetch;
+  retryDelayMs?: number;
+  onAttemptSettled?: (result: CreativeBootstrapResult) => void;
+}
+
+export interface CreativeManagedSessionBrokerRecoveryController {
+  stop: () => void;
+}
+
+export function startCreativeManagedSessionBrokerRecovery(
+  options: CreativeManagedSessionBrokerRecoveryOptions = {}
+): CreativeManagedSessionBrokerRecoveryController {
+  const fetcher = options.fetcher || fetch;
+  const retryDelayMs = Math.max(250, options.retryDelayMs ?? 5000);
+  let stopped = false;
+  let inFlight = false;
+  let retryTimer: number | null = null;
+
+  const clearRetryTimer = () => {
+    if (retryTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(retryTimer);
+    }
+    retryTimer = null;
+  };
+
+  const scheduleRetry = () => {
+    if (stopped || typeof window === 'undefined' || retryTimer !== null) {
+      return;
+    }
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      void attempt();
+    }, retryDelayMs);
+  };
+
+  const attempt = async () => {
+    if (stopped || inFlight) {
+      return;
+    }
+    inFlight = true;
+    try {
+      const result = await initializeCreativeManagedSessionBroker(fetcher);
+      options.onAttemptSettled?.(result);
+      if (result.status === 'error') {
+        scheduleRetry();
+      } else {
+        clearRetryTimer();
+      }
+    } catch (error) {
+      options.onAttemptSettled?.({
+        status: 'error',
+        profileId: CREATIVE_MANAGED_PROFILE_ID,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      scheduleRetry();
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const retryOnSessionOpportunity = () => {
+    if (stopped) {
+      return;
+    }
+    clearRetryTimer();
+    void attempt();
+  };
+
+  if (typeof window !== 'undefined' && isCreativeEmbeddedMode()) {
+    window.addEventListener('focus', retryOnSessionOpportunity);
+    window.addEventListener('online', retryOnSessionOpportunity);
+    document.addEventListener('visibilitychange', retryOnSessionOpportunity);
+    void attempt();
+  }
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearRetryTimer();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', retryOnSessionOpportunity);
+        window.removeEventListener('online', retryOnSessionOpportunity);
+        document.removeEventListener(
+          'visibilitychange',
+          retryOnSessionOpportunity
+        );
+      }
+    },
+  };
 }
 
 export function resetCreativeManagedSessionBrokerForTests(): void {

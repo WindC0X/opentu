@@ -196,6 +196,26 @@ describe('WorkflowEngine Module', () => {
   describe('WorkflowEngine Class', () => {
     beforeEach(() => {
       vi.resetModules();
+      vi.doMock('../media-executor', () => ({
+        executorFactory: {
+          getFallbackExecutor: () => ({
+            generateText: async () => ({ content: 'test' }),
+          }),
+        },
+        taskStorageWriter: {},
+      }));
+      vi.doMock('../media-generation', () => ({
+        TaskStatus: {
+          FAILED: 'failed',
+          COMPLETED: 'completed',
+        },
+        generateImage: async () => ({
+          task: { id: 'image-task', status: 'completed', result: {} },
+        }),
+        generateVideo: async () => ({
+          task: { id: 'video-task', status: 'completed', result: {} },
+        }),
+      }));
     });
 
     it('should export WorkflowEngine class', async () => {
@@ -391,6 +411,91 @@ describe('WorkflowEngine Module', () => {
 
       const result = engine.getWorkflow('non-existent-id');
       expect(result).toBeUndefined();
+    });
+
+    it('awaits durable workflow persistence after media task creation before continuing generation', async () => {
+      vi.doMock('../media-executor', () => ({
+        executorFactory: {
+          getFallbackExecutor: () => ({
+            generateText: async () => ({ content: 'test' }),
+          }),
+        },
+        taskStorageWriter: {},
+      }));
+
+      let saveResolved = false;
+      const saveWorkflow = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              saveResolved = true;
+              resolve();
+            }, 0);
+          })
+      );
+
+      vi.doMock('../workflow-engine/workflow-storage-writer', () => ({
+        workflowStorageWriter: {
+          saveWorkflow,
+          getWorkflow: async () => null,
+        },
+      }));
+
+      vi.doMock('../media-generation', () => ({
+        TaskStatus: {
+          FAILED: 'failed',
+          COMPLETED: 'completed',
+        },
+        generateImage: async (_prompt: string, options: any) => {
+          await options.onTaskCreated?.('task-durable-1');
+          expect(saveResolved).toBe(true);
+          return {
+            task: {
+              id: 'task-durable-1',
+              status: 'completed',
+              result: { url: '/__aitu_cache__/image/task-durable-1.png' },
+            },
+          };
+        },
+        generateVideo: async () => ({
+          task: { id: 'video-task', status: 'completed', result: {} },
+        }),
+      }));
+
+      const { WorkflowEngine } = await import('../workflow-engine/engine');
+      const events: WorkflowEvent[] = [];
+      const engine = new WorkflowEngine({ onEvent: (event) => events.push(event) });
+      const workflow: Workflow = {
+        id: 'workflow-durable-taskid',
+        name: 'Durable task id workflow',
+        status: 'pending',
+        createdAt: 1,
+        updatedAt: 1,
+        steps: [
+          {
+            id: 'step-image',
+            mcp: 'generate_image',
+            args: { prompt: 'durable cat' },
+            description: 'Generate image',
+            status: 'pending',
+          },
+        ],
+      };
+
+      await engine.submitWorkflow(workflow);
+
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.type === 'completed')).toBe(true);
+      });
+      expect(saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          steps: [
+            expect.objectContaining({
+              result: expect.objectContaining({ taskId: 'task-durable-1' }),
+            }),
+          ],
+        })
+      );
     });
   });
 });

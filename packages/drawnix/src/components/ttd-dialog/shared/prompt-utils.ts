@@ -177,7 +177,7 @@ function createMediaPreviewExample(
   ) {
     return {
       kind: 'video',
-      src: item.previewUrl || item.downloadUrl || item.imageUrl,
+      src: item.previewUrl || item.downloadUrl || item.imageUrl || '',
       posterSrc: item.imageUrl,
       playable: true,
       alt,
@@ -186,7 +186,7 @@ function createMediaPreviewExample(
 
   return {
     kind: 'image',
-    src: item.imageUrl,
+    src: item.imageUrl || '',
     alt,
   };
 }
@@ -221,6 +221,7 @@ function createMediaHistorySeeds(
         : item.imageUrl;
 
     if (
+      !previewSrc ||
       previews.length >= 3 ||
       previews.some((preview) => preview.src === previewSrc)
     ) {

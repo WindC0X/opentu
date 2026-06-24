@@ -383,10 +383,10 @@ export class WorkflowEngine {
             .creativeParameterFallbackModelId as string | undefined,
           forceMainThread: this.options.forceFallbackExecutor,
           signal,
-          onTaskCreated: (taskId) => {
+          onTaskCreated: async (taskId) => {
             // 提前持久化 taskId，页面刷新后 useTaskWorkflowSync 可通过此映射匹配事件
             step.result = { taskId };
-            workflowStorageWriter.saveWorkflow(workflow);
+            await workflowStorageWriter.saveWorkflow(workflow);
           },
         });
 
@@ -417,10 +417,10 @@ export class WorkflowEngine {
           params: step.args.params as Record<string, unknown> | undefined,
           forceMainThread: this.options.forceFallbackExecutor,
           signal,
-          onTaskCreated: (taskId) => {
+          onTaskCreated: async (taskId) => {
             // 提前持久化 taskId，页面刷新后 useTaskWorkflowSync 可通过此映射匹配事件
             step.result = { taskId };
-            workflowStorageWriter.saveWorkflow(workflow);
+            await workflowStorageWriter.saveWorkflow(workflow);
           },
         });
 

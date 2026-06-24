@@ -123,16 +123,16 @@ describe('ai-generation-preferences-service', () => {
       'aitu_ai_image_tool_preferences',
       JSON.stringify({
         value: {
-          currentModel: 'gpt-image-2',
-          currentSelectionKey: 'provider-a::gpt-image-2',
+          currentModel: 'gpt-image-2-vip',
+          currentSelectionKey: 'provider-a::gpt-image-2-vip',
           extraParams: {
             quality: '2k',
           },
           aspectRatio: '16:9',
           scopedPreferences: {
-            'provider-a::gpt-image-2': {
-              modelId: 'gpt-image-2',
-              selectionKey: 'provider-a::gpt-image-2',
+            'provider-a::gpt-image-2-vip': {
+              modelId: 'gpt-image-2-vip',
+              selectionKey: 'provider-a::gpt-image-2-vip',
               extraParams: {
                 quality: '2k',
               },
@@ -149,7 +149,7 @@ describe('ai-generation-preferences-service', () => {
     );
 
     expect(
-      loadScopedAIImageToolPreferences('gpt-image-2', 'provider-a::gpt-image-2')
+      loadScopedAIImageToolPreferences('gpt-image-2-vip', 'provider-a::gpt-image-2-vip')
     ).toMatchObject({
       extraParams: {
         size: '16x9',
@@ -168,8 +168,8 @@ describe('ai-generation-preferences-service', () => {
     } = await import('../ai-generation-preferences-service');
 
     saveAIImageToolPreferences({
-      currentModel: 'gpt-image-2',
-      currentSelectionKey: 'provider-a::gpt-image-2',
+      currentModel: 'gpt-image-2-vip',
+      currentSelectionKey: 'provider-a::gpt-image-2-vip',
       extraParams: {
         resolution: '1k',
         quality: 'auto',
@@ -178,17 +178,17 @@ describe('ai-generation-preferences-service', () => {
     });
     saveScopedAIInputModelParams(
       'image',
-      'gpt-image-2',
+      'gpt-image-2-vip',
       {
         size: '16x9',
         resolution: '4k',
         quality: 'high',
       },
-      'provider-a::gpt-image-2'
+      'provider-a::gpt-image-2-vip'
     );
 
     expect(
-      loadScopedAIImageToolPreferences('gpt-image-2', 'provider-a::gpt-image-2')
+      loadScopedAIImageToolPreferences('gpt-image-2-vip', 'provider-a::gpt-image-2-vip')
     ).toMatchObject({
       extraParams: {
         size: '16x9',
@@ -208,17 +208,17 @@ describe('ai-generation-preferences-service', () => {
 
     saveScopedAIInputModelParams(
       'image',
-      'gpt-image-2',
+      'gpt-image-2-vip',
       {
         size: '3x4',
         resolution: '1k',
         quality: 'auto',
       },
-      'provider-a::gpt-image-2'
+      'provider-a::gpt-image-2-vip'
     );
     saveAIImageToolPreferences({
-      currentModel: 'gpt-image-2',
-      currentSelectionKey: 'provider-a::gpt-image-2',
+      currentModel: 'gpt-image-2-vip',
+      currentSelectionKey: 'provider-a::gpt-image-2-vip',
       extraParams: {
         resolution: '2k',
         quality: 'medium',
@@ -229,8 +229,8 @@ describe('ai-generation-preferences-service', () => {
     expect(
       loadScopedAIInputModelParams(
         'image',
-        'gpt-image-2',
-        'provider-a::gpt-image-2'
+        'gpt-image-2-vip',
+        'provider-a::gpt-image-2-vip'
       )
     ).toMatchObject({
       size: '16x9',
@@ -347,6 +347,76 @@ describe('ai-generation-preferences-service', () => {
         )
       ).toMatchObject({
         extraParams: { size: '1024x1024', quality: 'high' },
+      });
+    } finally {
+      clearRuntimeModelConfigs();
+    }
+  });
+
+  it('maps image-tool aspect ratio state to schema-backed aspectRatio params', async () => {
+    const {
+      clearRuntimeModelConfigs,
+      normalizeCreativeParameterSchema,
+      setRuntimeModelConfigs,
+      ModelVendor,
+    } = await import('../../constants/model-config');
+    const { loadScopedAIImageToolPreferences, saveAIImageToolPreferences } =
+      await import('../ai-generation-preferences-service');
+
+    const bindingId = 'mock:gpt-image-2:aspect-ratio';
+    const selectionKey = `new-api-creative::${bindingId}`;
+
+    try {
+      setRuntimeModelConfigs([
+        {
+          id: bindingId,
+          label: bindingId,
+          type: 'image',
+          vendor: ModelVendor.OTHER,
+          providerModelId: 'gpt-image-2',
+          selectionKey,
+          parameterSchema: normalizeCreativeParameterSchema(
+            [
+              {
+                id: 'aspectRatio',
+                label: '比例',
+                type: 'enum',
+                defaultValue: 'auto',
+                options: [
+                  { value: 'auto', label: '自动' },
+                  { value: '1:1', label: '1:1' },
+                  { value: '21:9', label: '21:9' },
+                ],
+              },
+              {
+                id: 'imageSize',
+                label: '分辨率',
+                type: 'enum',
+                defaultValue: '1K',
+                options: [{ value: '1K', label: '1K' }],
+              },
+            ],
+            'image',
+            bindingId
+          ),
+        },
+      ]);
+
+      saveAIImageToolPreferences({
+        currentModel: bindingId,
+        currentSelectionKey: selectionKey,
+        extraParams: { imageSize: '1K' },
+        aspectRatio: '21:9',
+      });
+
+      expect(
+        loadScopedAIImageToolPreferences(bindingId, selectionKey)
+      ).toMatchObject({
+        extraParams: {
+          aspectRatio: '21:9',
+          imageSize: '1K',
+        },
+        aspectRatio: '21:9',
       });
     } finally {
       clearRuntimeModelConfigs();

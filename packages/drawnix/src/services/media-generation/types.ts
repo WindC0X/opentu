@@ -49,7 +49,7 @@ export interface ImageGenerationOptions {
   /** 强制使用主线程（跳过 SW） */
   forceMainThread?: boolean;
   /** 任务创建后立即回调，用于提前持久化 taskId 到工作流步骤 */
-  onTaskCreated?: (taskId: string) => void;
+  onTaskCreated?: (taskId: string) => void | Promise<void>;
 }
 
 /**
@@ -69,7 +69,7 @@ export interface VideoGenerationOptions {
   signal?: AbortSignal;
   forceMainThread?: boolean;
   /** 任务创建后立即回调，用于提前持久化 taskId 到工作流步骤 */
-  onTaskCreated?: (taskId: string) => void;
+  onTaskCreated?: (taskId: string) => void | Promise<void>;
 }
 
 /**

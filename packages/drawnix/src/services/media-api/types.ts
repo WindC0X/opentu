@@ -166,5 +166,5 @@ export interface PollingOptions {
  */
 export interface AsyncImageOptions extends PollingOptions {
   /** 提交成功后的回调，返回远程任务 ID */
-  onSubmitted?: (remoteId: string) => void;
+  onSubmitted?: (remoteId: string) => void | Promise<void>;
 }

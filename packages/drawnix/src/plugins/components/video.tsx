@@ -1,12 +1,24 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import classNames from 'classnames';
+import { GENERATED_MEDIA_CACHE_MISS_EVENT } from '../../utils/asset-cleanup';
+import {
+  extractGeneratedVideoTaskId,
+  isGeneratedVideoCacheUrl,
+} from '../../utils/generated-media-cache';
 
 export interface VideoItem {
+  id?: string;
+  boardId?: string;
   url: string;
   width?: number;
   height?: number;
   poster?: string;
   videoType?: string;
+  elementId?: string;
+  contentUrl?: string;
+  remoteTaskId?: string;
+  providerTaskId?: string;
+  mimeType?: string;
 }
 
 export interface VideoProps {
@@ -22,15 +34,55 @@ export const Video: React.FC<VideoProps> = (props: VideoProps) => {
   const [isLoading, setIsLoading] = useState(true);
 
   const { videoItem, isFocus = false, isSelected = false, readonly = false } = props;
-  const { url: rawUrl, poster, videoType } = videoItem;
+  const { url: rawUrl, poster } = videoItem;
+
+  const reportedCacheMissUrlRef = useRef<string | null>(null);
 
   // 清理 URL 中的 #video 标识符（用于视频类型识别，但不影响实际播放）
   const url = rawUrl?.replace('#video', '') || '';
+
+  useEffect(() => {
+    reportedCacheMissUrlRef.current = null;
+    setVideoError(false);
+    setIsLoading(true);
+  }, [rawUrl]);
+
+  const reportGeneratedVideoCacheMiss = useCallback(() => {
+    if (
+      typeof window === 'undefined' ||
+      !rawUrl ||
+      !isGeneratedVideoCacheUrl(rawUrl) ||
+      reportedCacheMissUrlRef.current === rawUrl
+    ) {
+      return;
+    }
+
+    reportedCacheMissUrlRef.current = rawUrl;
+    window.dispatchEvent(
+      new CustomEvent(GENERATED_MEDIA_CACHE_MISS_EVENT, {
+        detail: {
+          mediaType: 'video',
+          boardId: videoItem.boardId,
+          taskId:
+            videoItem.remoteTaskId ||
+            videoItem.providerTaskId ||
+            extractGeneratedVideoTaskId(rawUrl),
+          elementId: videoItem.elementId || videoItem.id,
+          mediaUrl: rawUrl,
+          contentUrl: videoItem.contentUrl,
+          remoteTaskId: videoItem.remoteTaskId,
+          providerTaskId: videoItem.providerTaskId,
+          mimeType: videoItem.mimeType,
+        },
+      })
+    );
+  }, [rawUrl, videoItem]);
   
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
       const handleLoadedData = () => {
+        reportedCacheMissUrlRef.current = null;
         setIsLoading(false);
         setVideoError(false);
       };
@@ -38,6 +90,7 @@ export const Video: React.FC<VideoProps> = (props: VideoProps) => {
       const handleError = () => {
         setIsLoading(false);
         setVideoError(true);
+        reportGeneratedVideoCacheMiss();
       };
 
       video.addEventListener('loadeddata', handleLoadedData);
@@ -49,7 +102,7 @@ export const Video: React.FC<VideoProps> = (props: VideoProps) => {
       };
     }
     return undefined;
-  }, [url]);
+  }, [reportGeneratedVideoCacheMiss]);
 
   const stopCanvasPropagation = (e: React.SyntheticEvent) => {
     if (readonly) {
@@ -158,7 +211,11 @@ export const Video: React.FC<VideoProps> = (props: VideoProps) => {
         }}
         onPointerDown={stopCanvasPropagation}
         onPointerUp={stopCanvasPropagation}
-        onError={() => setVideoError(true)}
+        onError={() => {
+          setIsLoading(false);
+          setVideoError(true);
+          reportGeneratedVideoCacheMiss();
+        }}
       />
       {readonly && (
         <div style={{

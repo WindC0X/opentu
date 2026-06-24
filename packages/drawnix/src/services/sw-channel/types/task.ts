@@ -24,7 +24,11 @@ export type TaskType = 'image' | 'video' | 'character' | 'inspiration_board' | '
 /**
  * 任务执行阶段
  */
-export type TaskExecutionPhase = 'submitting' | 'polling' | 'downloading';
+export type TaskExecutionPhase =
+  | 'submitting'
+  | 'polling'
+  | 'materializing'
+  | 'downloading';
 
 // ============================================================================
 // 实体类型

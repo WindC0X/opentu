@@ -37,7 +37,6 @@ import {
 } from './shared';
 import {
   DEFAULT_ASPECT_RATIO,
-  ASPECT_RATIO_OPTIONS,
   convertAspectRatioToSize,
 } from '../../constants/image-aspect-ratios';
 import { DialogTaskList } from '../task-queue/DialogTaskList';
@@ -67,7 +66,6 @@ import { promptForApiKey } from '../../utils/gemini-api';
 import { buildMJPromptSuffix } from '../../utils/mj-params';
 import {
   getCompatibleParams,
-  getSizeOptionsForModel,
   type ModelConfig,
 } from '../../constants/model-config';
 import { useSelectableModels } from '../../hooks/use-runtime-models';
@@ -78,6 +76,12 @@ import {
   getSelectionKey,
 } from '../../utils/model-selection';
 import { KnowledgeNoteContextSelector } from '../shared';
+import {
+  applyCreativeImageAspectRatioToParams,
+  buildCreativeImageRuntimeTaskParams,
+  getCreativeImageAspectRatioFromParams,
+  mergeCreativeImageEditableTaskParams,
+} from './creative-image-task-params';
 import { isCreativeEmbeddedMode } from '../../services/creative-mode';
 
 interface AIImageGenerationProps {
@@ -109,24 +113,15 @@ interface AIImageGenerationProps {
   }) => void | Promise<void>;
 }
 
-function getAspectRatioFromSizeParam(size?: string): string | undefined {
-  if (!size) return undefined;
-  if (size === 'auto') return DEFAULT_ASPECT_RATIO;
-
-  const aspectRatio = size.replace(/[xX]/g, ':');
-  return ASPECT_RATIO_OPTIONS.some((option) => option.value === aspectRatio)
-    ? aspectRatio
-    : undefined;
-}
-
 function getAspectRatioFromParams(
+  modelId: string,
   params: Record<string, string>,
   fallbackAspectRatio?: string
 ): string {
-  return (
-    getAspectRatioFromSizeParam(params.size) ||
-    fallbackAspectRatio ||
-    DEFAULT_ASPECT_RATIO
+  return getCreativeImageAspectRatioFromParams(
+    modelId,
+    params,
+    fallbackAspectRatio
   );
 }
 
@@ -135,22 +130,11 @@ function applyAspectRatioToParams(
   params: Record<string, string>,
   nextAspectRatio?: string
 ): Record<string, string> {
-  if (modelId.startsWith('mj') || !nextAspectRatio) {
-    return params;
-  }
-
-  const nextSize =
-    nextAspectRatio === DEFAULT_ASPECT_RATIO
-      ? 'auto'
-      : convertAspectRatioToSize(nextAspectRatio);
-  if (
-    !nextSize ||
-    !getSizeOptionsForModel(modelId).some((option) => option.value === nextSize)
-  ) {
-    return params;
-  }
-
-  return params.size === nextSize ? params : { ...params, size: nextSize };
+  return applyCreativeImageAspectRatioToParams(
+    modelId,
+    params,
+    nextAspectRatio
+  );
 }
 
 function buildMaskEditTaskParams(images: ReferenceImage[]) {
@@ -217,16 +201,11 @@ const AIImageGeneration = ({
     (initialRoute.modelId
       ? createModelRef(initialRoute.profileId, initialRoute.modelId)
       : null);
-  const [currentModel, setCurrentModel] = useState(
-    initialModelId
-  );
+  const [currentModel, setCurrentModel] = useState(initialModelId);
   const [currentModelRef, setCurrentModelRef] = useState<ModelRef | null>(
     initialModelRef
   );
-  const initialSelectionKey = getSelectionKey(
-    initialModelId,
-    initialModelRef
-  );
+  const initialSelectionKey = getSelectionKey(initialModelId, initialModelRef);
   const initialScopedPreferences = loadScopedAIImageToolPreferences(
     initialModelId,
     initialSelectionKey
@@ -260,6 +239,7 @@ const AIImageGeneration = ({
   const [aspectRatio, setAspectRatio] = useState<string>(
     initialAspectRatio ||
       getAspectRatioFromParams(
+        initialModelId,
         initialScopedPreferences.extraParams,
         initialScopedPreferences.aspectRatio
       )
@@ -320,34 +300,40 @@ const AIImageGeneration = ({
     setMjSelectedParams(nextParams);
     setAspectRatio(
       getAspectRatioFromParams(
+        currentModel,
         nextParams,
         initialAspectRatio || scopedPreferences.aspectRatio
       )
     );
   }, [currentModel, currentModelRef, initialAspectRatio, isManualEdit]);
 
-  const handleMJParamChange = useCallback((paramId: string, value: string) => {
-    if (!value || value === 'default') {
-      if (paramId === 'size') {
-        setAspectRatio(DEFAULT_ASPECT_RATIO);
+  const handleMJParamChange = useCallback(
+    (paramId: string, value: string) => {
+      if (!value || value === 'default') {
+        if (paramId === 'size' || paramId === 'aspectRatio') {
+          setAspectRatio(DEFAULT_ASPECT_RATIO);
+        }
+        setMjSelectedParams((prev) => {
+          const next = { ...prev };
+          delete next[paramId];
+          return next;
+        });
+        return;
+      }
+      if (paramId === 'size' || paramId === 'aspectRatio') {
+        setAspectRatio(
+          getAspectRatioFromParams(currentModel, { [paramId]: value })
+        );
       }
       setMjSelectedParams((prev) => {
-        const next = { ...prev };
-        delete next[paramId];
-        return next;
+        return {
+          ...prev,
+          [paramId]: value,
+        };
       });
-      return;
-    }
-    if (paramId === 'size') {
-      setAspectRatio(
-        getAspectRatioFromSizeParam(value) || DEFAULT_ASPECT_RATIO
-      );
-    }
-    setMjSelectedParams((prev) => ({
-      ...prev,
-      [paramId]: value,
-    }));
-  }, []);
+    },
+    [currentModel]
+  );
 
   // 处理宽度变化
   const handleWidthChange = useCallback((width: number) => {
@@ -372,7 +358,9 @@ const AIImageGeneration = ({
     const propsKey = JSON.stringify({
       prompt: initialPrompt,
       images: initialImages?.map((img) => img.url),
-      knowledgeContextRefs: initialKnowledgeContextRefs.map((ref) => ref.noteId),
+      knowledgeContextRefs: initialKnowledgeContextRefs.map(
+        (ref) => ref.noteId
+      ),
       elementIds: initialSelectedElementIds,
       width: initialWidth,
       height: initialHeight,
@@ -483,12 +471,7 @@ const AIImageGeneration = ({
     };
     geminiSettings.addListener(handleSettingsChange);
     return () => geminiSettings.removeListener(handleSettingsChange);
-  }, [
-    creativeEmbeddedMode,
-    currentModel,
-    currentModelRef,
-    visibleImageModels,
-  ]);
+  }, [creativeEmbeddedMode, currentModel, currentModelRef, visibleImageModels]);
 
   useEffect(() => {
     if (visibleImageModels.length === 0) {
@@ -594,7 +577,7 @@ const AIImageGeneration = ({
     setUploadedImages([]);
     setKnowledgeContextRefs([]);
     setError(null);
-    setAspectRatio(getAspectRatioFromParams(resetParams));
+    setAspectRatio(getAspectRatioFromParams(currentModel, resetParams));
     setMobilePanel('config');
     // Clear manual edit mode
     setIsManualEdit(false);
@@ -630,16 +613,7 @@ const AIImageGeneration = ({
   const handleEditTask = (task: any) => {
     // console.log('Image handleEditTask - task params:', task.params);
     const taskModel = task.params.model || currentModel;
-    const taskExtraParams = {
-      ...(task.params.params || {}),
-      ...(task.params.size !== undefined ? { size: task.params.size } : {}),
-      ...(task.params.resolution !== undefined
-        ? { resolution: task.params.resolution }
-        : {}),
-      ...(task.params.quality !== undefined
-        ? { quality: task.params.quality }
-        : {}),
-    };
+    const taskExtraParams = mergeCreativeImageEditableTaskParams(task.params);
     const sanitizedTaskParams =
       Object.keys(taskExtraParams).length > 0
         ? sanitizeImageToolExtraParams(taskModel, taskExtraParams)
@@ -673,7 +647,11 @@ const AIImageGeneration = ({
     }
 
     setAspectRatio(
-      getAspectRatioFromParams(sanitizedTaskParams, task.params.aspectRatio)
+      getAspectRatioFromParams(
+        taskModel,
+        sanitizedTaskParams,
+        task.params.aspectRatio
+      )
     );
 
     setError(null);
@@ -764,7 +742,8 @@ const AIImageGeneration = ({
           typeof height === 'string' ? parseInt(height) || 1024 : height;
         // Convert File objects to base64 data URLs for serialization
         const convertedImages = await convertImagesToSerializable();
-        const uploadedImageParams = stripMaskFromReferenceImages(convertedImages);
+        const uploadedImageParams =
+          stripMaskFromReferenceImages(convertedImages);
 
         // 如果数量大于1，使用批量生成
         if (effectiveCount > 1) {
@@ -780,9 +759,17 @@ const AIImageGeneration = ({
                 .join(' ')
             : (prompt || '').trim();
 
-          // 非 MJ 模型的额外参数（如 seedream_quality）透传给 adapter
+          const creativeRuntimeTaskParams = buildCreativeImageRuntimeTaskParams(
+            currentImageModel,
+            mjSelectedParams
+          );
+          const schemaBackedCreativeModel =
+            creativeRuntimeTaskParams.schemaBacked;
+
+          // 非 schema-backed / 非 MJ 模型的额外参数（如 seedream_quality）透传给 legacy adapter
           const extraParams =
             !currentImageModel.startsWith('mj') &&
+            !schemaBackedCreativeModel &&
             Object.keys(mjSelectedParams).length > 0
               ? mjSelectedParams
               : undefined;
@@ -818,6 +805,7 @@ const AIImageGeneration = ({
               pptReplaceElementId,
               ...maskEditParams,
               ...(extraParams ? { params: extraParams } : {}),
+              ...creativeRuntimeTaskParams.taskParams,
             };
 
             const task = createTask(taskParams, TaskType.IMAGE);
@@ -859,10 +847,17 @@ const AIImageGeneration = ({
               .filter(Boolean)
               .join(' ')
           : (prompt || '').trim();
+        const creativeRuntimeTaskParams = buildCreativeImageRuntimeTaskParams(
+          currentImageModel,
+          mjSelectedParams
+        );
+        const schemaBackedCreativeModel =
+          creativeRuntimeTaskParams.schemaBacked;
 
-        // 非 MJ 模型的额外参数（如 seedream_quality）透传给 adapter
+        // 非 schema-backed / 非 MJ 模型的额外参数（如 seedream_quality）透传给 legacy adapter
         const extraParams =
           !currentImageModel.startsWith('mj') &&
+          !schemaBackedCreativeModel &&
           Object.keys(mjSelectedParams).length > 0
             ? mjSelectedParams
             : undefined;
@@ -900,6 +895,7 @@ const AIImageGeneration = ({
           pptReplaceElementId,
           ...maskEditParams,
           ...(extraParams ? { params: extraParams } : {}),
+          ...creativeRuntimeTaskParams.taskParams,
         };
 
         // 创建任务并添加到队列

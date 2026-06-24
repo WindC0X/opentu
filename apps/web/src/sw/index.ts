@@ -5042,6 +5042,15 @@ async function handleCacheUrlRequest(request: Request): Promise<Response> {
       });
     }
 
+    await notifyImageCacheFailed(
+      url.toString(),
+      isAudio
+        ? 'media_cache_miss_audio'
+        : isVideo
+        ? 'media_cache_miss_video'
+        : 'media_cache_miss_image'
+    );
+
     // 如果 Cache API 没有，返回 404。fetch 调试面板会记录状态，避免正常 miss 刷控制台。
     return new Response('Media not found', {
       status: 404,

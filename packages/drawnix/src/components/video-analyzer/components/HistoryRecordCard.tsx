@@ -5,6 +5,7 @@ import type { Task } from '../../../types/task.types';
 import { TaskStatus, TaskType } from '../../../types/task.types';
 import { HoverTip, RetryImage } from '../../shared';
 import { VideoPosterPreview } from '../../shared/VideoPosterPreview';
+import { resolveGeneratedVideoContentUrl } from '../../../utils/generated-media-cache';
 
 export interface RelatedTasks {
   rewrite: Task[];
@@ -34,6 +35,17 @@ function getTaskThumbnailUrl(task: Task): string | null {
   }
 
   return task.result.thumbnailUrls?.[0] || task.result.url || null;
+}
+
+function getTaskVideoRehydrateSourceUrl(task: Task): string | undefined {
+  if (task.type !== TaskType.VIDEO || !task.result) {
+    return undefined;
+  }
+  return resolveGeneratedVideoContentUrl({
+    contentUrl: task.result.contentUrl,
+    remoteTaskId: task.result.remoteTaskId,
+    providerTaskId: task.result.providerTaskId,
+  });
 }
 
 function statusLabel(status: TaskStatus): string {
@@ -227,6 +239,7 @@ const RelatedTaskItem: React.FC<{
     Boolean(previewTasks?.length);
   const thumbnailUrl = getTaskThumbnailUrl(task);
   const primaryUrl = mediaUrls[0];
+  const videoRehydrateSourceUrl = getTaskVideoRehydrateSourceUrl(task);
 
   const handleItemClick = useCallback(
     (event: React.MouseEvent) => {
@@ -260,6 +273,22 @@ const RelatedTaskItem: React.FC<{
                 alt=""
                 className="va-history-related-task-thumb-media"
                 thumbnailSize="small"
+                rehydrateCacheUrl={primaryUrl}
+                rehydrateSourceUrl={videoRehydrateSourceUrl}
+                rehydrateMetadata={
+                  videoRehydrateSourceUrl
+                    ? {
+                        taskId: task.id,
+                        remoteTaskId: task.result?.remoteTaskId,
+                        providerTaskId:
+                          task.result?.providerTaskId || task.result?.remoteTaskId,
+                        contentUrl: videoRehydrateSourceUrl,
+                        mimeType: task.result?.mimeType || 'video/mp4',
+                        prompt: task.params?.prompt,
+                        model: task.params?.model,
+                      }
+                    : undefined
+                }
                 videoProps={{
                   preload: 'metadata',
                   muted: true,

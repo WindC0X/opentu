@@ -36,6 +36,10 @@ export interface ImageGenerationAnchorBatchSlot {
   taskId?: string;
   status: ImageGenerationAnchorBatchSlotStatus;
   previewImageUrl?: string;
+  previewContentUrl?: string;
+  previewRemoteTaskId?: string;
+  previewProviderTaskId?: string;
+  previewMimeType?: string;
   error?: string;
 }
 
@@ -79,6 +83,10 @@ export interface ImageGenerationAnchorViewModel {
   title: string;
   subtitle: string;
   previewImageUrl?: string;
+  previewContentUrl?: string;
+  previewRemoteTaskId?: string;
+  previewProviderTaskId?: string;
+  previewMimeType?: string;
   batchPreview?: ImageGenerationAnchorBatchPreview;
   progress: number | null;
   progressMode: 'determinate' | 'indeterminate' | 'hidden';
@@ -118,6 +126,10 @@ export interface PlaitImageGenerationAnchor extends PlaitElement {
   title: string;
   subtitle?: string;
   previewImageUrl?: string;
+  previewContentUrl?: string;
+  previewRemoteTaskId?: string;
+  previewProviderTaskId?: string;
+  previewMimeType?: string;
   progress?: number | null;
   error?: string;
   transitionMode: ImageGenerationAnchorTransitionMode;

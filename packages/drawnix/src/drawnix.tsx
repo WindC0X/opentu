@@ -123,6 +123,7 @@ import { useI18n } from './i18n';
 import { safeReload } from './utils/active-tasks';
 import { useTabSync } from './hooks/useTabSync';
 import { canvasAudioPlaybackService } from './services/canvas-audio-playback-service';
+import { isCreativeEmbeddedMode } from './services/creative-mode';
 import { useCanvasAudioPlaybackSelector } from './hooks/useCanvasAudioPlayback';
 import { isAudioNodeElement } from './types/audio-node.types';
 import {
@@ -136,7 +137,7 @@ import {
 } from './services/ppt/ppt-ui-events';
 import { syncEditedPPTSlideImage } from './utils/frame-insertion-utils';
 import { initializeCreativeDocumentCloudSync } from './services/creative-document-sync';
-import { initializeCreativeManagedSessionBroker } from './services/creative-session-broker';
+import { startCreativeManagedSessionBrokerRecovery } from './services/creative-session-broker';
 import { CreativeDocumentCloudSyncBadge } from './components/creative-document-sync-status/CreativeDocumentCloudSyncBadge';
 import type { MediaLibraryModalProps } from './types/asset.types';
 import { SelectionMode } from './types/asset.types';
@@ -256,10 +257,11 @@ function detectMobileViewport(): boolean {
     return false;
   }
 
-  const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
-  const compactViewport = window.matchMedia?.('(max-width: 768px)').matches ?? false;
-  const touchCapable =
-    navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+  const coarsePointer =
+    window.matchMedia?.('(pointer: coarse)').matches ?? false;
+  const compactViewport =
+    window.matchMedia?.('(max-width: 768px)').matches ?? false;
+  const touchCapable = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 
   return compactViewport || (coarsePointer && touchCapable);
 }
@@ -358,9 +360,12 @@ export const Drawnix: React.FC<DrawnixProps> = ({
   }, [enableDeferredRuntime]);
 
   useEffect(() => {
-    void initializeCreativeManagedSessionBroker().finally(() => {
-      initializeCreativeDocumentCloudSync();
+    const recovery = startCreativeManagedSessionBrokerRecovery({
+      onAttemptSettled: () => {
+        initializeCreativeDocumentCloudSync();
+      },
     });
+    return () => recovery.stop();
   }, []);
 
   useEffect(() => {
@@ -696,18 +701,30 @@ export const Drawnix: React.FC<DrawnixProps> = ({
       const credentialReason = reason || classifyApiCredentialError(message);
 
       // 显示错误提示
-      MessagePlugin.error({
-        content:
+      const embeddedCreative = isCreativeEmbeddedMode();
+      let authErrorContent: string;
+      if (embeddedCreative) {
+        authErrorContent =
+          credentialReason === 'missing'
+            ? '当前平台渠道未配置或不可用，请联系管理员'
+            : '当前平台渠道认证失败，请联系管理员检查渠道配置';
+      } else {
+        authErrorContent =
           credentialReason === 'missing'
             ? '缺少 API Key，请先在设置中配置'
-            : 'API Key 无效或已过期，请重新配置',
+            : 'API Key 无效或已过期，请重新配置';
+      }
+      MessagePlugin.error({
+        content: authErrorContent,
         duration: 5000,
       });
 
       console.error('[Drawnix] API auth error:', message);
 
-      // 打开设置对话框
-      setAppState((prev) => ({ ...prev, openSettings: true }));
+      if (!embeddedCreative) {
+        // 打开设置对话框
+        setAppState((prev) => ({ ...prev, openSettings: true }));
+      }
     };
 
     window.addEventListener(API_AUTH_ERROR_EVENT, handleApiAuthError);
@@ -1715,11 +1732,9 @@ const DrawnixContent: React.FC<DrawnixContentProps> = ({
         <Suspense fallback={null}>
           <ChatDrawer ref={chatDrawerRef} />
         </Suspense>
-        {deferredRuntimeEnabled && (
-          <Suspense fallback={null}>
-            <DrawnixDeferredRuntime board={board} value={value} />
-          </Suspense>
-        )}
+        <Suspense fallback={null}>
+          <DrawnixDeferredRuntime board={board} value={value} />
+        </Suspense>
         {shouldRenderDeferredFeatures && (
           <Suspense fallback={null}>
             <DrawnixDeferredFeatures

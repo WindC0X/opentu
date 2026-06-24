@@ -15,7 +15,17 @@ const ThumbnailImage: React.FC<{
   src: string;
   fallbackSrc?: string;
   alt: string;
-}> = ({ src, fallbackSrc, alt }) => {
+  rehydrateCacheUrl?: string;
+  rehydrateSourceUrl?: string;
+  rehydrateMetadata?: Record<string, unknown>;
+}> = ({
+  src,
+  fallbackSrc,
+  alt,
+  rehydrateCacheUrl,
+  rehydrateSourceUrl,
+  rehydrateMetadata,
+}) => {
   const [currentSrc, setCurrentSrc] = useState(src);
   const [failed, setFailed] = useState(false);
 
@@ -35,6 +45,9 @@ const ThumbnailImage: React.FC<{
   return (
     <RetryImage
       src={currentSrc}
+      rehydrateCacheUrl={rehydrateCacheUrl || fallbackSrc || src}
+      rehydrateSourceUrl={rehydrateSourceUrl}
+      rehydrateMetadata={rehydrateMetadata}
       alt={alt}
       className="thumbnail-queue__image"
       showSkeleton={false}
@@ -179,6 +192,9 @@ export const ThumbnailQueue: React.FC<ThumbnailQueueProps> = ({
                   className="thumbnail-queue__video"
                   alt={item.alt || item.title || ''}
                   thumbnailSize="small"
+                  rehydrateCacheUrl={item.rehydrateCacheUrl || normalizedUrl}
+                  rehydrateSourceUrl={item.rehydrateSourceUrl}
+                  rehydrateMetadata={item.rehydrateMetadata}
                   videoProps={{
                     muted: true,
                     preload: 'metadata',
@@ -208,6 +224,9 @@ export const ThumbnailQueue: React.FC<ThumbnailQueueProps> = ({
                 src={thumbnailUrl}
                 alt={item.alt || item.title || ''}
                 fallbackSrc={normalizedUrl}
+                rehydrateCacheUrl={item.rehydrateCacheUrl || normalizedUrl}
+                rehydrateSourceUrl={item.rehydrateSourceUrl}
+                rehydrateMetadata={item.rehydrateMetadata}
               />
             )}
           </div>

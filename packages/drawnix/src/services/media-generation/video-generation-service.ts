@@ -90,6 +90,9 @@ export async function generateVideo(
           ? parseInt(effectiveOptions.duration, 10)
           : effectiveOptions.duration,
       size: effectiveOptions.size,
+      inputReference: effectiveOptions.inputReference,
+      inputReferences: effectiveOptions.inputReferences,
+      referenceImages: effectiveOptions.referenceImages,
       params: effectiveOptions.params,
       promptMeta: effectiveOptions.promptMeta,
     },
@@ -105,7 +108,14 @@ export async function generateVideo(
       prompt: sanitizedParams.prompt,
       model: effectiveOptions.model || 'veo3',
       modelRef: effectiveOptions.modelRef || null,
+      duration:
+        typeof effectiveOptions.duration === 'string'
+          ? parseInt(effectiveOptions.duration, 10)
+          : effectiveOptions.duration,
       size: effectiveOptions.size,
+      inputReference: effectiveOptions.inputReference,
+      inputReferences: effectiveOptions.inputReferences,
+      referenceImages: effectiveOptions.referenceImages,
       params: effectiveOptions.params,
       promptMeta: effectiveOptions.promptMeta,
     },
@@ -118,7 +128,7 @@ export async function generateVideo(
   });
 
   // 通知调用方 taskId，以便提前持久化到工作流步骤
-  options.onTaskCreated?.(taskId);
+  await options.onTaskCreated?.(taskId);
 
   // 构建 executor 参数
   const executorParams: VideoGenerationParams = {

@@ -19,6 +19,10 @@ export interface SelectedContentItem {
   name: string;
   width?: number;
   height?: number;
+  contentUrl?: string;
+  remoteTaskId?: string;
+  providerTaskId?: string;
+  mimeType?: string;
 }
 
 /** 重试处理器类型 */

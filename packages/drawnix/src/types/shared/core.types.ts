@@ -83,6 +83,8 @@ export enum TaskExecutionPhase {
   SUBMITTING = 'submitting',
   /** Task submitted, polling for completion (video only) */
   POLLING = 'polling',
+  /** Remote task is complete, local content download/cache materialization is retrying */
+  MATERIALIZING = 'materializing',
   /** Task completed, downloading result */
   DOWNLOADING = 'downloading',
 }
@@ -171,6 +173,8 @@ export interface GenerationParams {
   creativeManaged?: boolean;
   /** Local-only provider model id used to preserve static fallback params for managed no-schema bindings across retry/resume. */
   creativeParameterFallbackModelId?: string;
+  /** Local retry attempt for regenerate semantics. 0/undefined is the original submit. */
+  retryAttempt?: number;
   /** Image generation mode for providers that distinguish generation/edit */
   generationMode?: 'text_to_image' | 'image_to_image' | 'image_edit';
   /** Whether this image task is generating a PPT slide image */
@@ -268,6 +272,16 @@ export interface TaskResult {
   width?: number;
   /** Content height in pixels */
   height?: number;
+  /** Same-origin broker content URL used to rehydrate local generated media cache */
+  contentUrl?: string;
+  /** MIME type of the generated content */
+  mimeType?: string;
+  /** Remote public task id used by the broker */
+  remoteTaskId?: string;
+  /** Expected provider target width in pixels, distinct from actual decoded width */
+  targetWidth?: number;
+  /** Expected provider target height in pixels, distinct from actual decoded height */
+  targetHeight?: number;
   /** Video duration in seconds (video only) */
   duration?: number;
   /** Video thumbnail URL (video only) */

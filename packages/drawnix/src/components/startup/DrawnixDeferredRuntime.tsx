@@ -4,6 +4,7 @@ import type { DrawnixBoard } from '../../hooks/use-drawnix';
 import { useTaskStorage } from '../../hooks/useTaskStorage';
 import { useTaskExecutor } from '../../hooks/useTaskExecutor';
 import { useAutoInsertToCanvas } from '../../hooks/useAutoInsertToCanvas';
+import { useGeneratedMediaCacheMissRecovery } from '../../hooks/useGeneratedMediaCacheMissRecovery';
 import { useImageGenerationAnchorSync } from '../../hooks/useImageGenerationAnchorSync';
 import { useBeforeUnload } from '../../hooks/useBeforeUnload';
 import { useProviderProfiles } from '../../hooks/use-provider-profiles';
@@ -536,6 +537,7 @@ export function DrawnixDeferredRuntime({
     insertPrompt: false,
     groupSimilarTasks: true,
   });
+  useGeneratedMediaCacheMissRecovery(board, isTaskStorageReady);
   useImageGenerationAnchorSync({ board, enabled: isTaskStorageReady });
   useBeforeUnload();
 

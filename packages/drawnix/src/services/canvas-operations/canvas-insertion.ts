@@ -4,7 +4,7 @@
  * 将AI生成的内容（文本、图片、视频）插入到画布中
  */
 
-import { PlaitBoard, Point } from '@plait/core';
+import { PlaitBoard, Point, Transforms } from '@plait/core';
 import { DrawTransforms } from '@plait/draw';
 import { insertImageFromUrl } from '../../data/image';
 import { insertVideoFromUrl } from '../../data/video';
@@ -32,6 +32,11 @@ import {
   parseSvgDimensions,
   svgToDataUrl,
 } from '../../utils/svg-utils';
+import {
+  getGeneratedImageCanvasMetadata,
+  hasGeneratedImageCanvasMetadata,
+} from '../../utils/generated-image-canvas-metadata';
+import { getGeneratedVideoCanvasMetadata } from '../../utils/generated-video-canvas-metadata';
 
 export { setCanvasBoard, getCanvasBoard } from './canvas-board-ref';
 
@@ -140,11 +145,20 @@ async function insertImageToCanvas(
   board: PlaitBoard,
   imageUrl: string,
   point: Point,
-  dimensions?: { width: number; height: number }
+  dimensions?: { width: number; height: number },
+  metadata?: Record<string, unknown>
 ): Promise<{ width: number; height: number }> {
-  const size = dimensions || { width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE, height: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE };
+  const size = dimensions || {
+    width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+    height: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+  };
+  const childrenCountBefore = board.children.length;
   // 传入 skipImageLoad=true 和尺寸，立即插入图片不等待下载
   await insertImageFromUrl(board, imageUrl, point, false, size, true, true);
+  const canvasMetadata = getGeneratedImageCanvasMetadata(metadata);
+  if (hasGeneratedImageCanvasMetadata(canvasMetadata)) {
+    Transforms.setNode(board, canvasMetadata as any, [childrenCountBefore]);
+  }
   return size;
 }
 
@@ -156,18 +170,43 @@ async function insertVideoToCanvas(
   board: PlaitBoard,
   videoUrl: string,
   point: Point,
-  dimensions?: { width: number; height: number }
+  dimensions?: { width: number; height: number },
+  metadata?: Record<string, unknown>
 ): Promise<{ width: number; height: number }> {
   // 如果提供了尺寸，直接使用
+  const canvasMetadata = getGeneratedVideoCanvasMetadata(metadata);
   if (dimensions) {
-    await insertVideoFromUrl(board, videoUrl, point, false, dimensions, true, true);
+    await insertVideoFromUrl(
+      board,
+      videoUrl,
+      point,
+      false,
+      dimensions,
+      true,
+      true,
+      true,
+      { ...canvasMetadata }
+    );
     return dimensions;
   }
 
   // 否则使用默认 16:9 尺寸立即插入
-  const defaultSize = { width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE, height: Math.round(LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE * (9 / 16)) };
-  await insertVideoFromUrl(board, videoUrl, point, false, defaultSize, true, true);
-  
+  const defaultSize = {
+    width: LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE,
+    height: Math.round(LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE * (9 / 16)),
+  };
+  await insertVideoFromUrl(
+    board,
+    videoUrl,
+    point,
+    false,
+    defaultSize,
+    true,
+    true,
+    true,
+    { ...canvasMetadata }
+  );
+
   // 异步获取真实尺寸并在以后更新（可选），目前为了响应速度，直接返回默认尺寸
   return defaultSize;
 }
@@ -210,7 +249,10 @@ async function insertSvgToCanvas(
   const normalized = normalizeSvg(svgCode);
   const dimensions = parseSvgDimensions(normalized);
 
-  const targetWidth = Math.min(dimensions.width, LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE);
+  const targetWidth = Math.min(
+    dimensions.width,
+    LAYOUT_CONSTANTS.MEDIA_DEFAULT_SIZE
+  );
   const aspectRatio = dimensions.height / dimensions.width;
   const targetHeight = targetWidth * aspectRatio;
 
@@ -228,7 +270,9 @@ async function insertSvgToCanvas(
 /**
  * 执行画布插入
  */
-export async function executeCanvasInsertion(params: CanvasInsertionParams): Promise<MCPResult> {
+export async function executeCanvasInsertion(
+  params: CanvasInsertionParams
+): Promise<MCPResult> {
   const board = readCanvasBoard();
 
   if (!board) {
@@ -239,7 +283,11 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
     };
   }
 
-  const { items, verticalGap = LAYOUT_CONSTANTS.DEFAULT_VERTICAL_GAP, horizontalGap = LAYOUT_CONSTANTS.DEFAULT_HORIZONTAL_GAP } = params;
+  const {
+    items,
+    verticalGap = LAYOUT_CONSTANTS.DEFAULT_VERTICAL_GAP,
+    horizontalGap = LAYOUT_CONSTANTS.DEFAULT_HORIZONTAL_GAP,
+  } = params;
 
   if (!items || items.length === 0) {
     return {
@@ -257,7 +305,8 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
           board,
           item.content,
           item.type,
-          item.dimensions
+          item.dimensions,
+          { metadata: item.metadata }
         );
         if (inserted) {
           return {
@@ -328,7 +377,13 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
           });
         } else if (item.type === 'image') {
           const childrenCountBefore = board.children.length;
-          const imgSize = await insertImageToCanvas(board, item.content, point, item.dimensions);
+          const imgSize = await insertImageToCanvas(
+            board,
+            item.content,
+            point,
+            item.dimensions,
+            item.metadata
+          );
           const insertedElement = board.children[childrenCountBefore] as
             | { id?: string }
             | undefined;
@@ -341,7 +396,13 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
           });
         } else if (item.type === 'video') {
           const childrenCountBefore = board.children.length;
-          const vidSize = await insertVideoToCanvas(board, item.content, point, item.dimensions);
+          const vidSize = await insertVideoToCanvas(
+            board,
+            item.content,
+            point,
+            item.dimensions,
+            item.metadata
+          );
           const insertedElement = board.children[childrenCountBefore] as
             | { id?: string }
             | undefined;
@@ -394,7 +455,12 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
 
           if (item.type === 'text') {
             const childrenCountBefore = board.children.length;
-            const size = await insertTextToCanvas(board, item.content, point, item.label);
+            const size = await insertTextToCanvas(
+              board,
+              item.content,
+              point,
+              item.label
+            );
             const insertedElement = board.children[childrenCountBefore] as
               | { id?: string }
               | undefined;
@@ -408,7 +474,13 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
             });
           } else if (item.type === 'image') {
             const childrenCountBefore = board.children.length;
-            const imgSize = await insertImageToCanvas(board, item.content, point, item.dimensions);
+            const imgSize = await insertImageToCanvas(
+              board,
+              item.content,
+              point,
+              item.dimensions,
+              item.metadata
+            );
             const insertedElement = board.children[childrenCountBefore] as
               | { id?: string }
               | undefined;
@@ -422,7 +494,13 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
             });
           } else if (item.type === 'video') {
             const childrenCountBefore = board.children.length;
-            const vidSize = await insertVideoToCanvas(board, item.content, point, item.dimensions);
+            const vidSize = await insertVideoToCanvas(
+              board,
+              item.content,
+              point,
+              item.dimensions,
+              item.metadata
+            );
             const insertedElement = board.children[childrenCountBefore] as
               | { id?: string }
               | undefined;
@@ -493,8 +571,10 @@ export async function executeCanvasInsertion(params: CanvasInsertionParams): Pro
         items: insertedItems,
         firstElementId:
           insertedItems.length > 0 ? insertedItems[0].elementId : undefined,
-        firstElementPosition: insertedItems.length > 0 ? insertedItems[0].point : undefined,
-        firstElementSize: insertedItems.length > 0 ? insertedItems[0].size : undefined,
+        firstElementPosition:
+          insertedItems.length > 0 ? insertedItems[0].point : undefined,
+        firstElementSize:
+          insertedItems.length > 0 ? insertedItems[0].size : undefined,
       },
       type: 'text',
     };
@@ -530,15 +610,21 @@ export async function quickInsert(
 export async function insertImageGroup(
   imageUrls: string[],
   point?: Point,
-  dimensions?: { width: number; height: number }
+  dimensions?:
+    | { width: number; height: number }
+    | Array<{ width: number; height: number } | undefined>,
+  metadata?:
+    | Record<string, unknown>
+    | Array<Record<string, unknown> | undefined>
 ): Promise<MCPResult> {
   const groupId = `img-group-${Date.now()}`;
   return executeCanvasInsertion({
-    items: imageUrls.map(url => ({
+    items: imageUrls.map((url, index) => ({
       type: 'image' as ContentType,
       content: url,
       groupId,
-      dimensions,
+      dimensions: Array.isArray(dimensions) ? dimensions[index] : dimensions,
+      metadata: Array.isArray(metadata) ? metadata[index] : metadata,
     })),
     startPoint: point,
   });
@@ -570,7 +656,7 @@ export async function insertAIFlow(
     });
   } else {
     const groupId = `result-group-${Date.now()}`;
-    results.forEach(r => {
+    results.forEach((r) => {
       items.push({
         type: r.type,
         content: r.url,

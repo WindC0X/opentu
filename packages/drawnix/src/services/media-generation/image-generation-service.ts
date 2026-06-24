@@ -227,7 +227,7 @@ export async function generateImage(
   });
 
   // 通知调用方 taskId，以便提前持久化到工作流步骤
-  options.onTaskCreated?.(taskId);
+  await options.onTaskCreated?.(taskId);
 
   // 构建 executor 参数
   const executorParams: ImageGenerationParams = {

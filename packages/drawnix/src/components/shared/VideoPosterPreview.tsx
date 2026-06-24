@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PlayCircleIcon } from 'tdesign-icons-react';
 import { useThumbnailUrl } from '../../hooks/useThumbnailUrl';
+import { rehydrateGeneratedVideoCacheUrl } from '../../utils/generated-media-cache';
 import './VideoPosterPreview.scss';
 
 const THUMBNAIL_PLACEHOLDER_SIZE = 1;
@@ -84,6 +85,9 @@ export interface VideoPosterPreviewProps {
   imageLoading?: 'lazy' | 'eager';
   activateVideoOnClick?: boolean;
   playOnActivate?: boolean;
+  rehydrateCacheUrl?: string;
+  rehydrateSourceUrl?: string;
+  rehydrateMetadata?: Record<string, unknown>;
   onClick?: React.MouseEventHandler<HTMLImageElement | HTMLVideoElement>;
   videoProps?: Omit<
     React.VideoHTMLAttributes<HTMLVideoElement>,
@@ -116,6 +120,9 @@ export const VideoPosterPreview: React.FC<VideoPosterPreviewProps> = ({
   imageLoading = 'lazy',
   activateVideoOnClick = false,
   playOnActivate = false,
+  rehydrateCacheUrl,
+  rehydrateSourceUrl,
+  rehydrateMetadata,
   onClick,
   videoProps,
 }) => {
@@ -144,6 +151,9 @@ export const VideoPosterPreview: React.FC<VideoPosterPreviewProps> = ({
   const [resolvedPoster, setResolvedPoster] = useState<string | null>(() => getCachedResolvedPoster(posterCandidate));
   const [retryCount, setRetryCount] = useState(0);
   const [showVideo, setShowVideo] = useState(false);
+  const [videoReloadKey, setVideoReloadKey] = useState(0);
+  const [isRehydratingVideo, setIsRehydratingVideo] = useState(false);
+  const videoRehydrateInFlightRef = useRef(false);
   const shouldRequireExplicitActivation = activateVideoOnClick;
 
   useEffect(() => {
@@ -154,6 +164,7 @@ export const VideoPosterPreview: React.FC<VideoPosterPreviewProps> = ({
     setResolvedPoster(getCachedResolvedPoster(posterCandidate));
     setRetryCount(0);
     setShowVideo(false);
+    setVideoReloadKey(0);
     activatedByClickRef.current = false;
     if (retryTimerRef.current !== null) {
       window.clearTimeout(retryTimerRef.current);
@@ -288,6 +299,31 @@ export const VideoPosterPreview: React.FC<VideoPosterPreviewProps> = ({
   const handleVideoClick: React.MouseEventHandler<HTMLVideoElement> = (event) => {
     onClick?.(event);
   };
+  const handleVideoError: React.ReactEventHandler<HTMLVideoElement> = (event) => {
+    videoProps?.onError?.(event);
+    if (videoRehydrateInFlightRef.current) {
+      return;
+    }
+    const cacheUrl = rehydrateCacheUrl || src;
+    if (!cacheUrl || !rehydrateSourceUrl) {
+      return;
+    }
+    videoRehydrateInFlightRef.current = true;
+    setIsRehydratingVideo(true);
+    void rehydrateGeneratedVideoCacheUrl(cacheUrl, rehydrateSourceUrl, {
+      ...rehydrateMetadata,
+      contentUrl: rehydrateSourceUrl,
+    })
+      .then((blob) => {
+        if (blob) {
+          setVideoReloadKey((value) => value + 1);
+        }
+      })
+      .finally(() => {
+        videoRehydrateInFlightRef.current = false;
+        setIsRehydratingVideo(false);
+      });
+  };
   const showPlayOverlay = activateVideoOnClick && !showVideo;
 
   if (!showVideo && resolvedPoster) {
@@ -326,6 +362,7 @@ export const VideoPosterPreview: React.FC<VideoPosterPreviewProps> = ({
 
   return renderPreviewWithOverlay(
     <video
+      key={videoReloadKey}
       ref={videoRef}
       src={src}
       poster={resolvedPoster || normalizedPoster}
@@ -333,6 +370,8 @@ export const VideoPosterPreview: React.FC<VideoPosterPreviewProps> = ({
       playsInline
       {...videoProps}
       onClick={handleVideoClick}
+      onError={handleVideoError}
+      aria-busy={isRehydratingVideo || undefined}
     />,
     false
   );

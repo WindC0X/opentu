@@ -235,12 +235,23 @@ describe('prompt-history-service', () => {
           result: {
             url: 'https://example.com/full.png',
             thumbnailUrl: 'https://example.com/thumb.png',
+            contentUrl: '/creative/relay/v1/images/tasks/remote-1/content',
+            remoteTaskId: 'remote-1',
+            providerTaskId: 'provider-1',
+            mimeType: 'image/webp',
             format: 'png',
             size: 1,
           } as PromptHistoryTaskSummary['result'],
         })
       ).resultPreview
-    ).toMatchObject({ kind: 'image', url: 'https://example.com/thumb.png' });
+    ).toMatchObject({
+      kind: 'image',
+      url: 'https://example.com/thumb.png',
+      contentUrl: '/creative/relay/v1/images/tasks/remote-1/content',
+      remoteTaskId: 'remote-1',
+      providerTaskId: 'provider-1',
+      mimeType: 'image/webp',
+    });
 
     expect(
       taskSummaryToPromptHistoryRecord(
@@ -309,6 +320,42 @@ describe('prompt-history-service', () => {
         })
       ).resultPreview
     ).toEqual({ kind: 'error', text: '失败原因' });
+  });
+
+  it('sanitizes failed task result previews while preserving safe provider text', async () => {
+    const { taskSummaryToPromptHistoryRecord } = await import(
+      './prompt-history-service'
+    );
+
+    expect(
+      taskSummaryToPromptHistoryRecord(
+        createSummary({
+          status: TaskStatus.FAILED,
+          error: {
+            code: 'ERR',
+            message:
+              'Authorization Bearer token failed against https://example.com/raw.png',
+          },
+          result: undefined,
+        })
+      ).resultPreview
+    ).toEqual({ kind: 'error', text: '任务失败' });
+
+    expect(
+      taskSummaryToPromptHistoryRecord(
+        createSummary({
+          status: TaskStatus.FAILED,
+          error: {
+            code: 'ERR',
+            message: 'provider rejected prompt: image policy violation',
+          },
+          result: undefined,
+        })
+      ).resultPreview
+    ).toEqual({
+      kind: 'error',
+      text: 'provider rejected prompt: image policy violation',
+    });
   });
 
   it('classifies PPT slide image tasks separately and uses the slide prompt', async () => {

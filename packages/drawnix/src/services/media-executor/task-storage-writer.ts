@@ -8,9 +8,9 @@
  * 此模块仅用于降级场景。
  */
 
-import { normalizeImageDataUrl } from '@aitu/utils';
 import { APP_DB_NAME, APP_DB_STORES } from '../app-database';
 import type { TaskInvocationRouteSnapshot } from '../../types/task.types';
+import { normalizeImageDataUrl } from '../../utils/image-data-url';
 
 // 使用主线程专用数据库
 const DB_NAME = APP_DB_NAME;
@@ -24,7 +24,29 @@ type SWTaskType =
   | 'character'
   | 'inspiration_board'
   | 'chat';
-type SWTaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+type SWTaskStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface TaskStorageWriteGuard {
+  expectedRetryAttempt?: number;
+  expectedStartedAt?: number;
+}
+
+function normalizeRetryAttempt(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
+
+function isTerminalTaskStatus(status: SWTaskStatus): boolean {
+  return (
+    status === 'completed' || status === 'failed' || status === 'cancelled'
+  );
+}
 
 /**
  * SW 端的任务结构（与 SWTask 保持一致）
@@ -59,6 +81,11 @@ export interface SWTask {
     lyricsTitle?: string;
     lyricsTags?: string[];
     providerTaskId?: string;
+    remoteTaskId?: string;
+    contentUrl?: string;
+    mimeType?: string;
+    targetWidth?: number;
+    targetHeight?: number;
     primaryClipId?: string;
     clipIds?: string[];
     clips?: Array<{
@@ -109,6 +136,34 @@ export interface SWTask {
 class TaskStorageWriter {
   private db: IDBDatabase | null = null;
   private dbPromise: Promise<IDBDatabase> | null = null;
+  private taskWriteLocks = new Map<string, Promise<void>>();
+
+  private async withTaskWriteLock<T>(
+    taskId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous = this.taskWriteLocks.get(taskId) || Promise.resolve();
+    let releaseCurrent: (() => void) | undefined;
+    const current = previous
+      .catch(() => undefined)
+      .then(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseCurrent = resolve;
+          })
+      );
+    this.taskWriteLocks.set(taskId, current);
+
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      releaseCurrent?.();
+      if (this.taskWriteLocks.get(taskId) === current) {
+        this.taskWriteLocks.delete(taskId);
+      }
+    }
+  }
 
   /**
    * 获取数据库连接
@@ -211,16 +266,53 @@ class TaskStorageWriter {
   /**
    * 更新任务状态
    */
-  async updateStatus(taskId: string, status: SWTaskStatus): Promise<void> {
-    const task = await this.getTask(taskId);
-    if (task) {
+  async updateStatus(
+    taskId: string,
+    status: SWTaskStatus,
+    guard?: TaskStorageWriteGuard
+  ): Promise<boolean> {
+    return this.withTaskWriteLock(taskId, async () => {
+      const task = await this.getTask(taskId);
+      if (!task) {
+        return false;
+      }
+      if (this.shouldSkipGuardedWrite(task, guard)) {
+        return false;
+      }
       task.status = status;
       task.updatedAt = Date.now();
       if (status === 'processing' && !task.startedAt) {
         task.startedAt = Date.now();
       }
       await this.saveTask(task);
+      return true;
+    });
+  }
+
+  private shouldSkipGuardedWrite(
+    task: SWTask,
+    guard?: TaskStorageWriteGuard
+  ): boolean {
+    if (isTerminalTaskStatus(task.status)) {
+      return true;
     }
+    if (
+      guard &&
+      typeof guard.expectedRetryAttempt === 'number' &&
+      normalizeRetryAttempt(task.params?.retryAttempt) !==
+        guard.expectedRetryAttempt
+    ) {
+      return true;
+    }
+    if (
+      guard &&
+      typeof guard.expectedStartedAt === 'number' &&
+      (typeof task.startedAt !== 'number' ||
+        task.startedAt !== guard.expectedStartedAt)
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -229,25 +321,43 @@ class TaskStorageWriter {
   async updateProgress(
     taskId: string,
     progress: number,
-    phase?: string
-  ): Promise<void> {
-    const task = await this.getTask(taskId);
-    if (task) {
+    phase?: string,
+    guard?: TaskStorageWriteGuard
+  ): Promise<boolean> {
+    return this.withTaskWriteLock(taskId, async () => {
+      const task = await this.getTask(taskId);
+      if (!task) {
+        return false;
+      }
+      if (this.shouldSkipGuardedWrite(task, guard)) {
+        return false;
+      }
       task.progress = progress;
       task.updatedAt = Date.now();
       if (phase) {
         task.executionPhase = phase;
       }
       await this.saveTask(task);
-    }
+      return true;
+    });
   }
 
   /**
    * 完成任务
    */
-  async completeTask(taskId: string, result: SWTask['result']): Promise<void> {
-    const task = await this.getTask(taskId);
-    if (task) {
+  async completeTask(
+    taskId: string,
+    result: SWTask['result'],
+    guard?: TaskStorageWriteGuard
+  ): Promise<boolean> {
+    return this.withTaskWriteLock(taskId, async () => {
+      const task = await this.getTask(taskId);
+      if (!task) {
+        return false;
+      }
+      if (this.shouldSkipGuardedWrite(task, guard)) {
+        return false;
+      }
       const normalizedResult =
         task.type === 'image' && result
           ? {
@@ -269,20 +379,32 @@ class TaskStorageWriter {
       task.updatedAt = Date.now();
       task.progress = 100;
       await this.saveTask(task);
-    }
+      return true;
+    });
   }
 
   /**
    * 任务失败
    */
-  async failTask(taskId: string, error: SWTask['error']): Promise<void> {
-    const task = await this.getTask(taskId);
-    if (task) {
+  async failTask(
+    taskId: string,
+    error: SWTask['error'],
+    guard?: TaskStorageWriteGuard
+  ): Promise<boolean> {
+    return this.withTaskWriteLock(taskId, async () => {
+      const task = await this.getTask(taskId);
+      if (!task) {
+        return false;
+      }
+      if (this.shouldSkipGuardedWrite(task, guard)) {
+        return false;
+      }
       task.status = 'failed';
       task.error = error;
       task.updatedAt = Date.now();
       await this.saveTask(task);
-    }
+      return true;
+    });
   }
 
   /**
@@ -291,10 +413,17 @@ class TaskStorageWriter {
   async updateRemoteId(
     taskId: string,
     remoteId: string,
-    invocationRoute?: TaskInvocationRouteSnapshot
-  ): Promise<void> {
-    const task = await this.getTask(taskId);
-    if (task) {
+    invocationRoute?: TaskInvocationRouteSnapshot,
+    guard?: TaskStorageWriteGuard
+  ): Promise<boolean> {
+    return this.withTaskWriteLock(taskId, async () => {
+      const task = await this.getTask(taskId);
+      if (!task) {
+        return false;
+      }
+      if (this.shouldSkipGuardedWrite(task, guard)) {
+        return false;
+      }
       task.remoteId = remoteId;
       if (invocationRoute) {
         task.invocationRoute = invocationRoute;
@@ -302,7 +431,8 @@ class TaskStorageWriter {
       task.updatedAt = Date.now();
       task.executionPhase = 'polling';
       await this.saveTask(task);
-    }
+      return true;
+    });
   }
 
   /**
@@ -327,7 +457,7 @@ class TaskStorageWriter {
   /**
    * 批量导入任务（用于云同步恢复）
    * 只导入不存在的任务，已存在的跳过
-   * 
+   *
    * @returns 成功导入的任务数量
    */
   async importTasks(
@@ -345,49 +475,18 @@ class TaskStorageWriter {
 
     for (let i = 0; i < tasks.length; i += batchSize) {
       const batch = tasks.slice(i, i + batchSize);
-      const result = await new Promise<{ imported: number; skipped: number }>((resolve, reject) => {
-        const transaction = db.transaction(TASKS_STORE, 'readwrite');
-        const store = transaction.objectStore(TASKS_STORE);
+      const result = await new Promise<{ imported: number; skipped: number }>(
+        (resolve, reject) => {
+          const transaction = db.transaction(TASKS_STORE, 'readwrite');
+          const store = transaction.objectStore(TASKS_STORE);
 
-        let imported = 0;
-        let skipped = 0;
-        let completed = 0;
+          let imported = 0;
+          let skipped = 0;
+          let completed = 0;
 
-        // 处理每个任务
-        for (const task of batch) {
-          if (options.replaceExisting) {
-            const putRequest = store.put(task);
-            putRequest.onsuccess = () => {
-              imported++;
-              completed++;
-              if (completed === batch.length) {
-                resolve({ imported, skipped });
-              }
-            };
-            putRequest.onerror = () => {
-              // 单个任务失败不影响其他任务
-              skipped++;
-              completed++;
-              if (completed === batch.length) {
-                resolve({ imported, skipped });
-              }
-            };
-            continue;
-          }
-
-          // 先检查是否存在
-          const getRequest = store.get(task.id);
-
-          getRequest.onsuccess = () => {
-            if (getRequest.result) {
-              // 任务已存在，跳过
-              skipped++;
-              completed++;
-              if (completed === batch.length) {
-                resolve({ imported, skipped });
-              }
-            } else {
-              // 任务不存在，插入
+          // 处理每个任务
+          for (const task of batch) {
+            if (options.replaceExisting) {
               const putRequest = store.put(task);
               putRequest.onsuccess = () => {
                 imported++;
@@ -404,23 +503,56 @@ class TaskStorageWriter {
                   resolve({ imported, skipped });
                 }
               };
+              continue;
             }
-          };
 
-          getRequest.onerror = () => {
-            skipped++;
-            completed++;
-            if (completed === batch.length) {
-              resolve({ imported, skipped });
-            }
-          };
+            // 先检查是否存在
+            const getRequest = store.get(task.id);
+
+            getRequest.onsuccess = () => {
+              if (getRequest.result) {
+                // 任务已存在，跳过
+                skipped++;
+                completed++;
+                if (completed === batch.length) {
+                  resolve({ imported, skipped });
+                }
+              } else {
+                // 任务不存在，插入
+                const putRequest = store.put(task);
+                putRequest.onsuccess = () => {
+                  imported++;
+                  completed++;
+                  if (completed === batch.length) {
+                    resolve({ imported, skipped });
+                  }
+                };
+                putRequest.onerror = () => {
+                  // 单个任务失败不影响其他任务
+                  skipped++;
+                  completed++;
+                  if (completed === batch.length) {
+                    resolve({ imported, skipped });
+                  }
+                };
+              }
+            };
+
+            getRequest.onerror = () => {
+              skipped++;
+              completed++;
+              if (completed === batch.length) {
+                resolve({ imported, skipped });
+              }
+            };
+          }
+
+          transaction.onerror = () => reject(transaction.error);
         }
-
-        transaction.onerror = () => reject(transaction.error);
-      });
+      );
       totalImported += result.imported;
       totalSkipped += result.skipped;
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
     return { imported: totalImported, skipped: totalSkipped };

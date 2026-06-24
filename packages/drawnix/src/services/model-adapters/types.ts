@@ -52,6 +52,10 @@ export interface ImageGenerationRequest {
   modelRef?: ModelRef | null;
   /** Stable request id for backend idempotency, scoped to one local image task. */
   idempotencyKey?: string;
+  /** Internal progress callback for async/provider-task image adapters. */
+  onProgress?: (progress: number, status?: string) => void;
+  /** Internal submitted callback; must be awaited before polling continues. */
+  onSubmitted?: (remoteId: string) => void | Promise<void>;
   size?: string;
   generationMode?: 'text_to_image' | 'image_to_image' | 'image_edit';
   referenceImages?: string[];
@@ -84,6 +88,12 @@ export interface VideoGenerationRequest {
   referenceImages?: string[];
   /** Stable request id for backend idempotency, scoped to one user action. */
   idempotencyKey?: string;
+  /** Internal abort signal for submit/poll lifecycles. */
+  signal?: AbortSignal;
+  /** Internal submitted callback; must be awaited before polling continues. */
+  onSubmitted?: (remoteId: string) => void | Promise<void>;
+  /** Internal progress callback for async/provider-task video adapters. */
+  onProgress?: (progress: number, status?: string) => void;
   params?: Record<string, unknown>;
 }
 
@@ -100,6 +110,14 @@ export interface AudioGenerationRequest {
   prompt: string;
   model?: string;
   modelRef?: ModelRef | null;
+  /** Stable request id for backend idempotency, scoped to one local audio task. */
+  idempotencyKey?: string;
+  /** Internal abort signal for submit/poll lifecycles. */
+  signal?: AbortSignal;
+  /** Internal progress callback for async/provider-task audio adapters. */
+  onProgress?: (progress: number, status?: string) => void;
+  /** Internal submitted callback; must be awaited before polling continues. */
+  onSubmitted?: (remoteId: string) => void | Promise<void>;
   title?: string;
   tags?: string;
   mv?: string;

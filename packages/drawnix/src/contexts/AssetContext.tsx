@@ -45,7 +45,6 @@ import {
   AssetCategory as AssetCategoryEnum,
   DEFAULT_FILTER_STATE,
 } from '../types/asset.types';
-import { TaskType } from '../types/task.types';
 import { AssetContext } from './asset-context-instance';
 import { audioPlaylistService } from '../services/audio-playlist-service';
 import { setGlobalAssetMap } from '../stores/asset-map-store';
@@ -59,6 +58,7 @@ import {
   isAssetLibraryUrl,
   isLegacyCacheUrl,
 } from '../utils/virtual-media-url';
+import { assetTaskRecordToAssets } from '../components/media-library/media-library-projection';
 
 /**
  * Asset Provider Props
@@ -487,126 +487,10 @@ export function AssetProvider({ children }: AssetProviderProps) {
    * Convert completed task to Asset
    * 将已完成的任务转换为素材
    */
-  const taskToAssets = useCallback((task: AssetTaskRecord): Asset[] => {
-    const result = task.result;
-    if (!result) {
-      return [];
-    }
-
-    const assetType =
-      task.type === TaskType.IMAGE
-        ? AssetTypeEnum.IMAGE
-        : task.type === TaskType.AUDIO
-        ? AssetTypeEnum.AUDIO
-        : AssetTypeEnum.VIDEO;
-
-    const mimeType =
-      task.type === TaskType.AUDIO
-        ? 'audio/mpeg'
-        : result.format === 'mp4'
-        ? 'video/mp4'
-        : result.format === 'webm'
-        ? 'video/webm'
-        : `image/${result.format || 'png'}`;
-
-    const assetCategory = normalizeAssetCategory(
-      task.params.assetMetadata?.category
-    );
-    const characterMeta = buildCharacterMeta({
-      characterName: task.params.assetMetadata?.characterName,
-      characterPrompt: task.params.assetMetadata?.characterPrompt,
-      prompt: task.params.prompt,
-    });
-
-    if (task.type === TaskType.AUDIO) {
-      const clipAssets = (result.clips || [])
-        .map((clip, index): Asset | null => {
-          const audioUrl =
-            typeof clip.audioUrl === 'string' && clip.audioUrl.trim()
-              ? clip.audioUrl
-              : result.urls?.[index];
-          if (!audioUrl) {
-            return null;
-          }
-
-          const fallbackBaseName =
-            result.title ||
-            task.params.title ||
-            task.params.prompt?.substring(0, 30) ||
-            'AI音频';
-          const clipKey = clip.clipId || clip.id || String(index);
-          const clipDuration =
-            typeof clip.duration === 'number' ? clip.duration : result.duration;
-
-          return {
-            id: `${task.id}::${clipKey}`,
-            taskId: task.id,
-            type: AssetTypeEnum.AUDIO,
-            source: AssetSourceEnum.AI_GENERATED,
-            url: audioUrl,
-            name:
-              clip.title ||
-              ((result.clips?.length || result.urls?.length || 0) > 1
-                ? `${fallbackBaseName} ${index + 1}`
-                : fallbackBaseName),
-            mimeType,
-            createdAt: task.completedAt || task.createdAt,
-            size: result.size,
-            category: assetCategory,
-            characterMeta,
-            prompt: task.params.prompt,
-            modelName: task.params.model,
-            duration: clipDuration,
-            clipId: clip.clipId || clip.id,
-            providerTaskId: result.providerTaskId || task.remoteId || task.id,
-            thumbnail:
-              clip.imageLargeUrl || clip.imageUrl || result.previewImageUrl,
-          };
-        })
-        .filter((asset): asset is Asset => asset !== null);
-
-      if (clipAssets.length > 0) {
-        return clipAssets;
-      }
-    }
-
-    const name =
-      task.type === TaskType.AUDIO
-        ? result.title ||
-          task.params.title ||
-          task.params.prompt?.substring(0, 30) ||
-          'AI音频'
-        : task.params.prompt?.substring(0, 30) || 'AI生成';
-
-    return [
-      {
-        id: task.id,
-        taskId: task.id,
-        type: assetType,
-        source: AssetSourceEnum.AI_GENERATED,
-        url: result.url,
-        name,
-        mimeType,
-        createdAt: task.completedAt || task.createdAt,
-        size: result.size,
-        category: assetCategory,
-        characterMeta,
-        cacheWarning: result.cacheWarning,
-        prompt: task.params.prompt,
-        modelName: task.params.model,
-        duration: task.type === TaskType.AUDIO ? result.duration : undefined,
-        providerTaskId:
-          task.type === TaskType.AUDIO
-            ? result.providerTaskId || task.remoteId || task.id
-            : undefined,
-        clipId:
-          task.type === TaskType.AUDIO
-            ? result.primaryClipId || result.clipIds?.[0]
-            : undefined,
-        ...(result.previewImageUrl && { thumbnail: result.previewImageUrl }),
-      },
-    ];
-  }, []);
+  const taskToAssets = useCallback(
+    (task: AssetTaskRecord): Asset[] => assetTaskRecordToAssets(task),
+    []
+  );
 
   /**
    * 从 IndexedDB 获取本地缓存的媒体资源
@@ -729,6 +613,14 @@ export function AssetProvider({ children }: AssetProviderProps) {
               typeof item.metadata?.providerTaskId === 'string'
                 ? item.metadata.providerTaskId
                 : item.metadata?.taskId,
+            remoteTaskId:
+              typeof item.metadata?.remoteTaskId === 'string'
+                ? item.metadata.remoteTaskId
+                : undefined,
+            contentUrl:
+              typeof item.metadata?.contentUrl === 'string'
+                ? item.metadata.contentUrl
+                : undefined,
             clipId:
               typeof item.metadata?.clipId === 'string'
                 ? item.metadata.clipId
@@ -821,6 +713,14 @@ export function AssetProvider({ children }: AssetProviderProps) {
             typeof cachedMetadata?.metadata?.providerTaskId === 'string'
               ? cachedMetadata.metadata.providerTaskId
               : cachedMetadata?.metadata?.taskId;
+          const cachedRemoteTaskId =
+            typeof cachedMetadata?.metadata?.remoteTaskId === 'string'
+              ? cachedMetadata.metadata.remoteTaskId
+              : undefined;
+          const cachedContentUrl =
+            typeof cachedMetadata?.metadata?.contentUrl === 'string'
+              ? cachedMetadata.metadata.contentUrl
+              : undefined;
           const cachedCategory = normalizeAssetCategory(
             cachedMetadata?.metadata?.category
           );
@@ -839,6 +739,8 @@ export function AssetProvider({ children }: AssetProviderProps) {
             duration: asset.duration ?? cachedDuration,
             clipId: asset.clipId || cachedClipId,
             providerTaskId: asset.providerTaskId || cachedProviderTaskId,
+            remoteTaskId: asset.remoteTaskId || cachedRemoteTaskId,
+            contentUrl: asset.contentUrl || cachedContentUrl,
             taskId: asset.taskId || cachedMetadata?.metadata?.taskId,
             cacheWarning:
               asset.cacheWarning || cachedMetadata?.metadata?.cacheWarning,

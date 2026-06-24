@@ -530,7 +530,7 @@ export const klingAdapter: VideoModelAdapter = {
     });
 
     const taskId = submitResponse.data.task_id;
-    onSubmitted?.(taskId);
+    await onSubmitted?.(taskId);
     onProgress?.(10, 'processing');
     let attempts = 0;
 

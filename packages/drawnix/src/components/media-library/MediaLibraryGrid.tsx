@@ -70,11 +70,7 @@ import type {
   SortOption,
   Asset,
 } from '../../types/asset.types';
-import {
-  AssetType,
-  AssetSource,
-  AssetCategory,
-} from '../../types/asset.types';
+import { AssetType, AssetSource, AssetCategory } from '../../types/asset.types';
 import { useDrawnix } from '../../hooks/use-drawnix';
 import {
   removeElementsByAssetIds,
@@ -98,6 +94,8 @@ import {
   buildAssetDownloadItems,
   smartDownload,
 } from '../../utils/download-utils';
+import { assetToUnifiedMediaItem } from './media-library-projection';
+import { ensureGeneratedImageCacheUrlReady } from '../../utils/generated-media-cache';
 import './MediaLibraryGrid.scss';
 import './VirtualAssetGrid.scss';
 import { HoverTip } from '../shared/hover';
@@ -275,7 +273,11 @@ function matchesSelectionScope(
   }
 
   return (
-    matchesType && matchesSource && matchesCategory && matchesSearch && matchesPlaylist
+    matchesType &&
+    matchesSource &&
+    matchesCategory &&
+    matchesSearch &&
+    matchesPlaylist
   );
 }
 
@@ -416,9 +418,8 @@ export function MediaLibraryGrid({
       image: assets.filter((a) => a.type === AssetType.IMAGE).length,
       video: assets.filter((a) => a.type === AssetType.VIDEO).length,
       audio: assets.filter((a) => a.type === AssetType.AUDIO).length,
-      character: assets.filter(
-        (a) => a.category === AssetCategory.CHARACTER
-      ).length,
+      character: assets.filter((a) => a.category === AssetCategory.CHARACTER)
+        .length,
       local: assets.filter((a) => a.source === AssetSource.LOCAL).length,
       ai: assets.filter((a) => a.source === AssetSource.AI_GENERATED).length,
     };
@@ -1204,25 +1205,7 @@ export function MediaLibraryGrid({
   // 将素材转换为预览项
   const convertToMediaItems = useCallback(
     (assetList: Asset[]): UnifiedMediaItem[] => {
-      return assetList.map((asset) => ({
-        id: asset.id,
-        url:
-          asset.type === AssetType.IMAGE
-            ? normalizeImageDataUrl(asset.url)
-            : asset.url,
-        type:
-          asset.type === AssetType.VIDEO
-            ? 'video'
-            : asset.type === AssetType.AUDIO
-            ? 'audio'
-            : 'image',
-        title: asset.name,
-        alt: asset.name,
-        posterUrl: asset.thumbnail,
-        prompt: asset.prompt,
-        artist: asset.modelName,
-        album: asset.type === AssetType.AUDIO ? 'Aitu Generated' : undefined,
-      }));
+      return assetList.map(assetToUnifiedMediaItem);
     },
     []
   );
@@ -1261,7 +1244,26 @@ export function MediaLibraryGrid({
         try {
           const asset = filteredResult.assets.find((a) => a.id === item.id);
           if (item.type === 'video') {
-            await insertVideoFromUrl(board, item.url);
+            const metadata = item.rehydrateMetadata || {
+              taskId: asset?.taskId || asset?.id || item.id,
+              remoteTaskId: asset?.remoteTaskId,
+              providerTaskId: asset?.providerTaskId,
+              contentUrl: item.rehydrateSourceUrl || asset?.contentUrl,
+              mimeType: asset?.mimeType,
+              prompt: asset?.prompt,
+              model: asset?.modelName,
+            };
+            await insertVideoFromUrl(
+              board,
+              item.url,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              metadata
+            );
           } else if (item.type === 'audio') {
             await insertAudioFromUrl(board, item.url, {
               title: asset?.name || item.title,
@@ -1273,7 +1275,33 @@ export function MediaLibraryGrid({
               providerTaskId: asset?.providerTaskId,
             });
           } else {
-            await insertImageFromUrl(board, normalizeImageDataUrl(item.url));
+            const metadata = item.rehydrateMetadata || {
+              taskId: asset?.taskId || asset?.id || item.id,
+              remoteTaskId: asset?.remoteTaskId,
+              providerTaskId: asset?.providerTaskId,
+              contentUrl: asset?.contentUrl,
+              mimeType: asset?.mimeType,
+              prompt: asset?.prompt,
+              model: asset?.modelName,
+            };
+            const ready = await ensureGeneratedImageCacheUrlReady(
+              normalizeImageDataUrl(item.url),
+              {
+                contentUrl: item.rehydrateSourceUrl || asset?.contentUrl,
+                metadata,
+              }
+            );
+            await insertImageFromUrl(
+              board,
+              ready.url,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              metadata
+            );
           }
           // 插入成功后关闭预览
           setPreviewVisible(false);
@@ -1525,9 +1553,7 @@ export function MediaLibraryGrid({
                         aria-label={`${opt.label}：${count}`}
                         aria-pressed={isActive}
                         className={`media-library-grid__type-tab ${
-                          isActive
-                            ? 'media-library-grid__type-tab--active'
-                            : ''
+                          isActive ? 'media-library-grid__type-tab--active' : ''
                         }`}
                         onClick={() =>
                           setFilters({

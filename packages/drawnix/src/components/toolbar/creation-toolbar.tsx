@@ -66,6 +66,7 @@ import {
   useSetPointer,
 } from '../../hooks/use-drawnix';
 import { addImage } from '../../utils/image';
+import { getReadyMediaLibraryImageInsertUrl } from '../../utils/media-library-image-insert';
 import { useI18n, Translations } from '../../i18n';
 import { ToolbarSectionProps } from './toolbar.types';
 import { useToolbarConfig } from '../../hooks/use-toolbar-config';
@@ -290,7 +291,10 @@ export const CreationToolbar: React.FC<ToolbarSectionProps> = ({
     async (asset: Asset) => {
       try {
         if (asset.type === AssetType.IMAGE) {
-          await insertImageFromUrl(board, asset.url);
+          await insertImageFromUrl(
+            board,
+            await getReadyMediaLibraryImageInsertUrl(asset)
+          );
         } else if (asset.type === AssetType.VIDEO) {
           await insertVideoFromUrl(board, asset.url);
         } else if (asset.type === AssetType.AUDIO) {

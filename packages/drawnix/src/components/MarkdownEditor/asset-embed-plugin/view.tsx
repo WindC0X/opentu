@@ -32,6 +32,10 @@ import {
 } from '../media-size-utils';
 import { RetryImage } from '../../retry-image';
 import { VideoPosterPreview } from '../../shared/VideoPosterPreview';
+import {
+  isGeneratedVideoCacheUrl,
+  resolveGeneratedVideoContentUrl,
+} from '../../../utils/generated-media-cache';
 import { assetEmbedSchema } from './schema';
 
 interface AssetEmbedViewProps {
@@ -299,6 +303,11 @@ const AssetEmbedView: React.FC<AssetEmbedViewProps> = ({
   }
 
   if (asset.type === AssetType.VIDEO) {
+    const videoRehydrateSourceUrl = resolveGeneratedVideoContentUrl({
+      contentUrl: asset.contentUrl,
+      remoteTaskId: asset.remoteTaskId,
+      providerTaskId: asset.providerTaskId,
+    });
     return mediaFrame(
       <div className="collimind-asset-embed__video-wrap">
         <VideoPosterPreview
@@ -309,6 +318,23 @@ const AssetEmbedView: React.FC<AssetEmbedViewProps> = ({
           thumbnailSize="large"
           activateVideoOnClick
           playOnActivate
+          rehydrateCacheUrl={
+            isGeneratedVideoCacheUrl(asset.url) ? asset.url : undefined
+          }
+          rehydrateSourceUrl={videoRehydrateSourceUrl}
+          rehydrateMetadata={
+            videoRehydrateSourceUrl
+              ? {
+                  taskId: asset.taskId || asset.id,
+                  remoteTaskId: asset.remoteTaskId,
+                  providerTaskId: asset.providerTaskId || asset.remoteTaskId,
+                  contentUrl: videoRehydrateSourceUrl,
+                  mimeType: asset.mimeType,
+                  prompt: asset.prompt,
+                  model: asset.modelName,
+                }
+              : undefined
+          }
           videoProps={{
             controls: true,
             preload: 'metadata',

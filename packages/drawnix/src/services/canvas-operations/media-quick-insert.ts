@@ -54,16 +54,37 @@ async function insertMedia(
   type: CanvasMediaType,
   content: string,
   point: Point,
-  dimensions?: { width: number; height: number }
+  dimensions?: { width: number; height: number },
+  metadata?: Record<string, unknown>
 ): Promise<{ width: number; height: number }> {
   const size = dimensions || getDefaultMediaSize(type);
 
   if (type === 'video') {
-    await insertVideoFromUrl(board, content, point, false, size, true, true);
+    await insertVideoFromUrl(
+      board,
+      content,
+      point,
+      false,
+      size,
+      true,
+      true,
+      undefined,
+      metadata
+    );
     return size;
   }
 
-  await insertImageFromUrl(board, content, point, false, size, true, true);
+  await insertImageFromUrl(
+    board,
+    content,
+    point,
+    false,
+    size,
+    true,
+    true,
+    undefined,
+    metadata
+  );
   return size;
 }
 
@@ -71,7 +92,8 @@ export async function quickInsertCanvasMedia(
   type: CanvasMediaType,
   content: string,
   point?: Point,
-  dimensions?: { width: number; height: number }
+  dimensions?: { width: number; height: number },
+  metadata?: Record<string, unknown>
 ): Promise<CanvasMediaInsertResult> {
   const board = getCanvasBoard();
 
@@ -89,7 +111,8 @@ export async function quickInsertCanvasMedia(
         board,
         content,
         type,
-        dimensions
+        dimensions,
+        { metadata }
       );
 
       if (inserted) {
@@ -124,7 +147,14 @@ export async function quickInsertCanvasMedia(
       }) ||
       CANVAS_INSERTION_LAYOUT.DEFAULT_POINT;
     const childrenCountBefore = board.children.length;
-    const size = await insertMedia(board, type, content, targetPoint, dimensions);
+    const size = await insertMedia(
+      board,
+      type,
+      content,
+      targetPoint,
+      dimensions,
+      metadata
+    );
     const insertedElement = board.children[childrenCountBefore] as
       | { id?: string }
       | undefined;

@@ -224,7 +224,11 @@ function sanitizeSelectedParams(
   compatibleParams.forEach((param) => {
     if (excludeParamIds.has(param.id) || param.id === 'size') return;
 
-    const persistedValue = persistedParams[param.id];
+    const persistedValue =
+      param.id === 'aspectRatio'
+        ? persistedParams[param.id] ||
+          aspectRatioParamToAspectRatio(persistedParams.size)
+        : persistedParams[param.id];
     const isValidPersistedValue =
       param.valueType === 'enum'
         ? param.options?.some((option) => option.value === persistedValue)
@@ -451,11 +455,6 @@ function isValidGenerationType(value: unknown): value is GenerationType {
 }
 
 function getSupportedAspectRatios(modelId: string): Set<string> {
-  const sizeOptions = getSizeOptionsForModel(modelId);
-  if (sizeOptions.length === 0) {
-    return new Set(ASPECT_RATIO_OPTIONS.map((option) => option.value));
-  }
-
   const supported = new Set<string>();
   const knownAspectRatios = new Map(
     ASPECT_RATIO_OPTIONS.map((option) => [
@@ -463,6 +462,26 @@ function getSupportedAspectRatios(modelId: string): Set<string> {
       option.value,
     ])
   );
+
+  const aspectRatioParam = getCompatibleParams(modelId).find(
+    (param) => param.id === 'aspectRatio'
+  );
+  aspectRatioParam?.options?.forEach((option) => {
+    const normalized = knownAspectRatios.get(
+      String(option.value).trim().replace(/[：:]/g, 'x').replace(/×/g, 'x')
+    );
+    if (normalized) {
+      supported.add(normalized);
+    }
+  });
+  if (supported.size > 0) {
+    return supported;
+  }
+
+  const sizeOptions = getSizeOptionsForModel(modelId);
+  if (sizeOptions.length === 0) {
+    return new Set(ASPECT_RATIO_OPTIONS.map((option) => option.value));
+  }
 
   sizeOptions.forEach((option) => {
     if (option.value === 'auto') {
@@ -512,6 +531,38 @@ function sizeParamToAspectRatio(size: unknown): string | undefined {
     : undefined;
 }
 
+function aspectRatioParamToAspectRatio(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) {
+    return undefined;
+  }
+
+  const normalized = value.trim().replace(/[xX]/g, ':');
+  return ASPECT_RATIO_OPTIONS.some((option) => option.value === normalized)
+    ? normalized
+    : undefined;
+}
+
+function getSupportedImageToolAspectRatioParamValue(
+  modelId: string,
+  aspectRatio: unknown
+): string | undefined {
+  const sanitizedAspectRatio = sanitizeAspectRatio(modelId, aspectRatio);
+  const aspectRatioParam = getCompatibleParams(modelId).find(
+    (param) => param.id === 'aspectRatio'
+  );
+  if (!aspectRatioParam) {
+    return undefined;
+  }
+  if (!aspectRatioParam.options || aspectRatioParam.options.length === 0) {
+    return sanitizedAspectRatio;
+  }
+  return aspectRatioParam.options.some(
+    (option) => option.value === sanitizedAspectRatio
+  )
+    ? sanitizedAspectRatio
+    : undefined;
+}
+
 function getSupportedImageToolSizeFromAspectRatio(
   modelId: string,
   aspectRatio: unknown
@@ -533,6 +584,15 @@ function mergeImageToolAspectRatioParams(
   aspectRatio: unknown
 ): PersistedParams {
   const params = asRecord(rawParams);
+  if (!params.aspectRatio) {
+    const aspectRatioParamValue = getSupportedImageToolAspectRatioParamValue(
+      modelId,
+      aspectRatioParamToAspectRatio(params.size) || aspectRatio
+    );
+    if (aspectRatioParamValue) {
+      return { ...params, aspectRatio: aspectRatioParamValue };
+    }
+  }
   if (params.size) {
     return params;
   }
@@ -650,7 +710,9 @@ export function loadAIImageToolPreferences(
     extraParams,
     aspectRatio: sanitizeAspectRatio(
       currentModel,
-      sizeParamToAspectRatio(extraParams.size) || stored.aspectRatio
+      aspectRatioParamToAspectRatio(extraParams.aspectRatio) ||
+        sizeParamToAspectRatio(extraParams.size) ||
+        stored.aspectRatio
     ),
   };
 }
@@ -859,7 +921,9 @@ export function loadScopedAIImageToolPreferences(
     extraParams,
     aspectRatio: sanitizeAspectRatio(
       modelId,
-      sizeParamToAspectRatio(extraParams.size) || storedAspectRatio
+      aspectRatioParamToAspectRatio(extraParams.aspectRatio) ||
+        sizeParamToAspectRatio(extraParams.size) ||
+        storedAspectRatio
     ),
   };
 }

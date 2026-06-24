@@ -22,6 +22,10 @@ import { cacheRemoteUrl } from '../services/media-executor/fallback-utils';
 import { normalizeImageDataUrl } from '@aitu/utils';
 import { AssetSource, AssetType } from '../types/asset.types';
 import { getInsertionPointFromSavedSelection } from '../utils/canvas-insertion-layout';
+import {
+  getGeneratedImageCanvasMetadata,
+  hasGeneratedImageCanvasMetadata,
+} from '../utils/generated-image-canvas-metadata';
 
 export const loadHTMLImageElement = (dataURL: DataURL, crossOrigin = false) => {
   const normalizedURL = normalizeImageDataUrl(dataURL) as DataURL;
@@ -334,7 +338,8 @@ export const insertImageFromUrl = async (
   // 如果为 true 且提供了 referenceDimensions，则跳过图片加载直接使用提供的尺寸
   skipImageLoad?: boolean,
   // 如果为 true，图片加载后不再按真实比例改写尺寸
-  lockReferenceDimensions?: boolean
+  lockReferenceDimensions?: boolean,
+  metadata?: Record<string, unknown>
 ) => {
   // 外部 URL 和 data URL 先缓存到本地
   let resolvedUrl = normalizeImageDataUrl(imageUrl);
@@ -361,7 +366,9 @@ export const insertImageFromUrl = async (
     const inserted = await insertMediaIntoSelectedFrame(
       board,
       resolvedUrl,
-      'image'
+      'image',
+      undefined,
+      { metadata }
     );
     if (inserted) return;
   }
@@ -459,6 +466,10 @@ export const insertImageFromUrl = async (
   const childrenCountBefore = board.children.length;
 
   DrawTransforms.insertImage(board, imageItem, insertionPoint);
+  const canvasMetadata = getGeneratedImageCanvasMetadata(metadata);
+  if (hasGeneratedImageCanvasMetadata(canvasMetadata)) {
+    Transforms.setNode(board, canvasMetadata as any, [childrenCountBefore]);
+  }
 
   // 埋点：图片插入画布
   analytics.track('asset_insert_canvas', {

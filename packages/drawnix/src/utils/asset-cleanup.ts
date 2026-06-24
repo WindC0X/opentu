@@ -10,10 +10,17 @@ import {
   ASSET_LIBRARY_URL_PREFIX,
   CACHE_URL_PREFIX,
   isVirtualMediaUrl,
+  normalizeVirtualMediaUrl,
 } from './virtual-media-url';
+import {
+  extractGeneratedImageTaskId,
+  isGeneratedImageCacheUrl,
+} from './generated-media-cache';
 
 const VIRTUAL_IMAGE_ERROR_RETRY_DELAYS = [250, 750, 1500];
 const virtualImageErrorAttempts = new Map<string, number>();
+export const GENERATED_MEDIA_CACHE_MISS_EVENT =
+  'creative:generated-media-cache-miss';
 
 const getVirtualImageErrorKey = (
   board: PlaitBoard,
@@ -57,11 +64,44 @@ function verifyVirtualImageCache(
       }
 
       virtualImageErrorAttempts.delete(key);
+      if (isGeneratedImageCacheUrl(imageUrl)) {
+        reportGeneratedMediaCacheMiss(board, element, imageUrl);
+        return;
+      }
+
       removeElementFromBoard(board, element);
     })
     .catch(() => {
       virtualImageErrorAttempts.delete(key);
     });
+}
+
+function getBoardId(board: PlaitBoard): string | undefined {
+  const value = (board as { __plait_id?: unknown; id?: unknown }).__plait_id ||
+    (board as { id?: unknown }).id;
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function reportGeneratedMediaCacheMiss(
+  board: PlaitBoard,
+  element: PlaitElement,
+  imageUrl: string
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(GENERATED_MEDIA_CACHE_MISS_EVENT, {
+      detail: {
+        mediaType: 'image',
+        boardId: getBoardId(board),
+        taskId: extractGeneratedImageTaskId(imageUrl),
+        elementId: element.id,
+        imageUrl,
+        mediaUrl: imageUrl,
+      },
+    })
+  );
 }
 
 /**

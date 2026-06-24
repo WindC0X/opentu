@@ -232,6 +232,14 @@ export interface SelectedContentItem {
   width?: number;
   /** 媒体自然高度 */
   height?: number;
+  /** Same-origin broker content URL used to rehydrate generated image cache */
+  contentUrl?: string;
+  /** Remote public task id used by the broker */
+  remoteTaskId?: string;
+  /** Provider task id used for generated-media metadata */
+  providerTaskId?: string;
+  /** MIME type of the selected media */
+  mimeType?: string;
 }
 
 /** AI 输入上下文 - 完整的用户输入信息 */

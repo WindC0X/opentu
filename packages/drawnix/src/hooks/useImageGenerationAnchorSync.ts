@@ -23,6 +23,7 @@ import {
 } from '../utils/image-generation-anchor-task';
 import { parseSizeToPixels } from '../utils/size-ratio';
 import { hasResolvedImageGenerationBatchCount } from '../utils/image-generation-anchor-batch';
+import { sanitizeTaskErrorDisplayMessage } from '../services/creative-error-sanitizer';
 
 export interface UseImageGenerationAnchorSyncOptions {
   board: PlaitBoard | null;
@@ -100,12 +101,15 @@ function deriveAnchorError(
     .map((task) => workflowCompletionService.getPostProcessingStatus(task.id))
     .find((result) => result?.status === 'failed');
 
-  return (
+  const rawError =
     failedPostProcessing?.error ||
     primaryTask?.error?.message ||
     primaryTask?.error?.details?.originalError ||
-    anchor.error
-  );
+    anchor.error;
+
+  return rawError
+    ? sanitizeTaskErrorDisplayMessage(rawError, '生成失败')
+    : undefined;
 }
 
 function deriveAnchorPreviewImageUrl(
@@ -126,6 +130,37 @@ function deriveAnchorPreviewImageUrl(
     result?.urls?.find((url) => typeof url === 'string' && url.length > 0) ||
     anchor.previewImageUrl
   );
+}
+
+function deriveAnchorPreviewMetadata(
+  anchor: PlaitImageGenerationAnchor,
+  primaryTask: Task | null
+): Pick<
+  PlaitImageGenerationAnchor,
+  | 'previewContentUrl'
+  | 'previewRemoteTaskId'
+  | 'previewProviderTaskId'
+  | 'previewMimeType'
+> {
+  const result = primaryTask?.result as
+    | {
+        contentUrl?: string;
+        remoteTaskId?: string;
+        providerTaskId?: string;
+        mimeType?: string;
+      }
+    | undefined;
+
+  return {
+    previewContentUrl: result?.contentUrl || anchor.previewContentUrl,
+    previewRemoteTaskId:
+      result?.remoteTaskId ||
+      primaryTask?.remoteId ||
+      anchor.previewRemoteTaskId,
+    previewProviderTaskId:
+      result?.providerTaskId || anchor.previewProviderTaskId,
+    previewMimeType: result?.mimeType || anchor.previewMimeType,
+  };
 }
 
 function getStaleAnchorRetryTaskId(
@@ -402,6 +437,10 @@ export function useImageGenerationAnchorSync({
       const { viewModel, nextPatch } = controllerResult;
 
       const patch: Partial<PlaitImageGenerationAnchor> = {};
+      const nextPreviewMetadata = deriveAnchorPreviewMetadata(
+        anchor,
+        primaryTask
+      );
 
       if (!shallowEqualIds(anchor.taskIds, mergedTaskIds)) {
         patch.taskIds = mergedTaskIds;
@@ -429,6 +468,34 @@ export function useImageGenerationAnchorSync({
 
       if ((anchor.previewImageUrl ?? '') !== (nextPreviewImageUrl ?? '')) {
         patch.previewImageUrl = nextPreviewImageUrl;
+      }
+
+      if (
+        (anchor.previewContentUrl ?? '') !==
+        (nextPreviewMetadata.previewContentUrl ?? '')
+      ) {
+        patch.previewContentUrl = nextPreviewMetadata.previewContentUrl;
+      }
+
+      if (
+        (anchor.previewRemoteTaskId ?? '') !==
+        (nextPreviewMetadata.previewRemoteTaskId ?? '')
+      ) {
+        patch.previewRemoteTaskId = nextPreviewMetadata.previewRemoteTaskId;
+      }
+
+      if (
+        (anchor.previewProviderTaskId ?? '') !==
+        (nextPreviewMetadata.previewProviderTaskId ?? '')
+      ) {
+        patch.previewProviderTaskId = nextPreviewMetadata.previewProviderTaskId;
+      }
+
+      if (
+        (anchor.previewMimeType ?? '') !==
+        (nextPreviewMetadata.previewMimeType ?? '')
+      ) {
+        patch.previewMimeType = nextPreviewMetadata.previewMimeType;
       }
 
       const geometryPatch = buildAnchorGeometryPatch(
@@ -486,14 +553,12 @@ export function useImageGenerationAnchorSync({
       const batchIndex = getImageGenerationAnchorTaskBatchIndex(task);
       let hasExplicitBatchMatch = false;
       if (workflowId && batchId && typeof batchIndex === 'number') {
-        const byBatchSlot = ImageGenerationAnchorTransforms.getAnchorByBatchSlot(
-          board,
-          {
+        const byBatchSlot =
+          ImageGenerationAnchorTransforms.getAnchorByBatchSlot(board, {
             workflowId,
             batchId,
             batchIndex,
-          }
-        );
+          });
         if (byBatchSlot) {
           candidateAnchorIds.add(byBatchSlot.id);
           hasExplicitBatchMatch = true;

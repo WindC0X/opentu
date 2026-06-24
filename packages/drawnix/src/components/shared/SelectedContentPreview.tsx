@@ -13,7 +13,9 @@ import React, { useState, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import { Video, Play, Type, X } from 'lucide-react';
 import type { SelectedContentItem } from '../../types/chat.types';
+import { RetryImage } from '../retry-image';
 import { HoverTip } from './hover';
+import { resolveGeneratedImageContentUrl } from '../../utils/generated-media-cache';
 import './selected-content-preview.scss';
 
 export interface SelectedContentPreviewProps {
@@ -37,13 +39,70 @@ interface HoveredContent {
   maskImage?: string;
   width?: number;
   height?: number;
+  contentUrl?: string;
+  remoteTaskId?: string;
+  providerTaskId?: string;
+  mimeType?: string;
   text?: string;
   x: number;
   y: number;
 }
 
+function renderImage(
+  item: Pick<
+    SelectedContentItem,
+    | 'url'
+    | 'name'
+    | 'contentUrl'
+    | 'remoteTaskId'
+    | 'providerTaskId'
+    | 'mimeType'
+  >
+) {
+  if (!item.url) {
+    return null;
+  }
+
+  const rehydrateSourceUrl = resolveGeneratedImageContentUrl({
+    contentUrl: item.contentUrl,
+    remoteTaskId: item.remoteTaskId,
+    providerTaskId: item.providerTaskId,
+  });
+
+  if (!rehydrateSourceUrl) {
+    return <img src={item.url} alt={item.name} />;
+  }
+
+  return (
+    <RetryImage
+      src={item.url}
+      alt={item.name}
+      showSkeleton={false}
+      rehydrateCacheUrl={item.url}
+      rehydrateSourceUrl={rehydrateSourceUrl}
+      rehydrateMetadata={{
+        remoteTaskId: item.remoteTaskId,
+        providerTaskId: item.providerTaskId || item.remoteTaskId,
+        contentUrl: rehydrateSourceUrl,
+        mimeType: item.mimeType,
+      }}
+    />
+  );
+}
+
 function renderImageWithMask(
-  item: Pick<SelectedContentItem, 'url' | 'maskImage' | 'name' | 'width' | 'height'>,
+  item: Pick<
+    SelectedContentItem,
+    | 'url'
+    | 'maskImage'
+    | 'name'
+    | 'width'
+    | 'height'
+    | 'contentUrl'
+    | 'remoteTaskId'
+    | 'providerTaskId'
+    | 'mimeType'
+  >,
   className: string
 ) {
   if (!item.url) {
@@ -51,7 +110,7 @@ function renderImageWithMask(
   }
 
   if (!item.maskImage) {
-    return <img src={item.url} alt={item.name} />;
+    return renderImage(item);
   }
   const mediaPairStyle =
     item.width && item.height && item.width > 0 && item.height > 0
@@ -62,7 +121,7 @@ function renderImageWithMask(
 
   return (
     <div className={`${className}__media-pair`} style={mediaPairStyle}>
-      <img src={item.url} alt={item.name} />
+      {renderImage(item)}
       <div className={`${className}__mask-thumb`}>
         <img src={item.maskImage} alt={`${item.name} mask`} />
       </div>
@@ -78,25 +137,34 @@ export const SelectedContentPreview: React.FC<SelectedContentPreviewProps> = ({
   onRemove,
   removableStartIndex = 0,
 }) => {
-  const [hoveredContent, setHoveredContent] = useState<HoveredContent | null>(null);
+  const [hoveredContent, setHoveredContent] = useState<HoveredContent | null>(
+    null
+  );
 
   // Handle content hover for preview
-  const handleContentMouseEnter = useCallback((item: SelectedContentItem, e: React.MouseEvent<HTMLDivElement>) => {
-    if (!enableHoverPreview) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const topY = rect.top - 10;
-    setHoveredContent({
-      type: item.type,
-      url: item.url,
-      maskImage: item.maskImage,
-      width: item.width,
-      height: item.height,
-      text: item.text,
-      x: centerX,
-      y: topY,
-    });
-  }, [enableHoverPreview]);
+  const handleContentMouseEnter = useCallback(
+    (item: SelectedContentItem, e: React.MouseEvent<HTMLDivElement>) => {
+      if (!enableHoverPreview) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const topY = rect.top - 10;
+      setHoveredContent({
+        type: item.type,
+        url: item.url,
+        maskImage: item.maskImage,
+        width: item.width,
+        height: item.height,
+        contentUrl: item.contentUrl,
+        remoteTaskId: item.remoteTaskId,
+        providerTaskId: item.providerTaskId,
+        mimeType: item.mimeType,
+        text: item.text,
+        x: centerX,
+        y: topY,
+      });
+    },
+    [enableHoverPreview]
+  );
 
   const handleContentMouseLeave = useCallback(() => {
     setHoveredContent(null);
@@ -107,58 +175,65 @@ export const SelectedContentPreview: React.FC<SelectedContentPreviewProps> = ({
   return (
     <>
       {/* Hover preview - large content (rendered to body via portal) */}
-      {enableHoverPreview && hoveredContent && ReactDOM.createPortal(
-        <div
-          className={`selected-content-preview__hover selected-content-preview__hover--${hoveredContent.type}`}
-          style={{
-            left: `${hoveredContent.x}px`,
-            top: `${hoveredContent.y}px`,
-            transform: 'translate(-50%, -100%)',
-          }}
-        >
-          {/* Image or graphics preview */}
-          {(hoveredContent.type === 'image' || hoveredContent.type === 'graphics') && hoveredContent.url && (
-            renderImageWithMask(
-              {
-                url: hoveredContent.url,
-                maskImage: hoveredContent.maskImage,
-                width: hoveredContent.width,
-                height: hoveredContent.height,
-                name: 'Preview',
-              },
-              'selected-content-preview'
-            )
-          )}
+      {enableHoverPreview &&
+        hoveredContent &&
+        ReactDOM.createPortal(
+          <div
+            className={`selected-content-preview__hover selected-content-preview__hover--${hoveredContent.type}`}
+            style={{
+              left: `${hoveredContent.x}px`,
+              top: `${hoveredContent.y}px`,
+              transform: 'translate(-50%, -100%)',
+            }}
+          >
+            {/* Image or graphics preview */}
+            {(hoveredContent.type === 'image' ||
+              hoveredContent.type === 'graphics') &&
+              hoveredContent.url &&
+              renderImageWithMask(
+                {
+                  url: hoveredContent.url,
+                  maskImage: hoveredContent.maskImage,
+                  width: hoveredContent.width,
+                  height: hoveredContent.height,
+                  contentUrl: hoveredContent.contentUrl,
+                  remoteTaskId: hoveredContent.remoteTaskId,
+                  providerTaskId: hoveredContent.providerTaskId,
+                  mimeType: hoveredContent.mimeType,
+                  name: 'Preview',
+                },
+                'selected-content-preview'
+              )}
 
-          {/* Video preview */}
-          {hoveredContent.type === 'video' && hoveredContent.url && (
-            <div className="selected-content-preview__hover-video">
-              <video
-                src={hoveredContent.url}
-                controls
-                autoPlay
-                muted
-                loop
-                playsInline
-              />
-            </div>
-          )}
+            {/* Video preview */}
+            {hoveredContent.type === 'video' && hoveredContent.url && (
+              <div className="selected-content-preview__hover-video">
+                <video
+                  src={hoveredContent.url}
+                  controls
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                />
+              </div>
+            )}
 
-          {/* Text preview */}
-          {hoveredContent.type === 'text' && hoveredContent.text && (
-            <div className="selected-content-preview__hover-text">
-              <div className="selected-content-preview__hover-text-header">
-                <Type size={16} />
-                <span>{language === 'zh' ? '文字内容' : 'Text Content'}</span>
+            {/* Text preview */}
+            {hoveredContent.type === 'text' && hoveredContent.text && (
+              <div className="selected-content-preview__hover-text">
+                <div className="selected-content-preview__hover-text-header">
+                  <Type size={16} />
+                  <span>{language === 'zh' ? '文字内容' : 'Text Content'}</span>
+                </div>
+                <div className="selected-content-preview__hover-text-content">
+                  {hoveredContent.text}
+                </div>
               </div>
-              <div className="selected-content-preview__hover-text-content">
-                {hoveredContent.text}
-              </div>
-            </div>
-          )}
-        </div>,
-        document.body
-      )}
+            )}
+          </div>,
+          document.body
+        )}
 
       {/* Content preview grid */}
       <div className={`selected-content-preview ${className || ''}`}>
@@ -177,7 +252,10 @@ export const SelectedContentPreview: React.FC<SelectedContentPreviewProps> = ({
               {item.type === 'text' ? (
                 // Text content preview
                 <div className="selected-content-preview__text">
-                  <Type size={14} className="selected-content-preview__text-icon" />
+                  <Type
+                    size={14}
+                    className="selected-content-preview__text-icon"
+                  />
                   <span className="selected-content-preview__text-content">
                     {item.text && item.text.length > 20
                       ? `${item.text.substring(0, 20)}...`

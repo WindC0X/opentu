@@ -22,6 +22,7 @@ import {
   getImageTaskProgressStatusText,
   resolveImageTaskDisplayProgress,
 } from './image-task-progress';
+import { sanitizeTaskErrorDisplayMessage } from '../services/creative-error-sanitizer';
 
 const PHASE_LABELS: Record<ImageGenerationAnchorPhase, string> = {
   submitted: '已提交',
@@ -60,6 +61,65 @@ const clampProgress = (value: number | null | undefined): number | null => {
 
   return Math.max(0, Math.min(100, value));
 };
+
+interface TaskGeneratedPreviewMetadata {
+  contentUrl?: string;
+  remoteTaskId?: string;
+  providerTaskId?: string;
+  mimeType?: string;
+}
+
+function getTaskGeneratedPreviewMetadata(
+  task: Task | null | undefined
+): TaskGeneratedPreviewMetadata {
+  const result = task?.result as
+    | {
+        contentUrl?: string;
+        remoteTaskId?: string;
+        providerTaskId?: string;
+        mimeType?: string;
+      }
+    | undefined;
+
+  return {
+    contentUrl: result?.contentUrl,
+    remoteTaskId: result?.remoteTaskId || task?.remoteId,
+    providerTaskId: result?.providerTaskId,
+    mimeType: result?.mimeType,
+  };
+}
+
+function getAnchorGeneratedPreviewMetadata(
+  anchor: PlaitImageGenerationAnchor,
+  task: Task | null | undefined
+): TaskGeneratedPreviewMetadata {
+  const taskMetadata = getTaskGeneratedPreviewMetadata(task);
+  return {
+    contentUrl: taskMetadata.contentUrl || anchor.previewContentUrl,
+    remoteTaskId: taskMetadata.remoteTaskId || anchor.previewRemoteTaskId,
+    providerTaskId: taskMetadata.providerTaskId || anchor.previewProviderTaskId,
+    mimeType: taskMetadata.mimeType || anchor.previewMimeType,
+  };
+}
+
+function buildBatchSlotPreviewMetadata(
+  metadata: TaskGeneratedPreviewMetadata
+): Partial<ImageGenerationAnchorBatchSlot> {
+  const fields: Partial<ImageGenerationAnchorBatchSlot> = {};
+  if (metadata.contentUrl) {
+    fields.previewContentUrl = metadata.contentUrl;
+  }
+  if (metadata.remoteTaskId) {
+    fields.previewRemoteTaskId = metadata.remoteTaskId;
+  }
+  if (metadata.providerTaskId) {
+    fields.previewProviderTaskId = metadata.providerTaskId;
+  }
+  if (metadata.mimeType) {
+    fields.previewMimeType = metadata.mimeType;
+  }
+  return fields;
+}
 
 function sortBatchTasks(tasks: Task[]): Task[] {
   return [...tasks].sort((left, right) => {
@@ -132,6 +192,26 @@ function deriveTaskBatchSlotStatus(
   return derivePlaceholderSlotStatus(phase);
 }
 
+function getSafeTaskFailureMessage(task: Task): string | undefined {
+  const taskMessage = sanitizeTaskErrorDisplayMessage(task.error?.message, '');
+  if (taskMessage) {
+    return taskMessage;
+  }
+
+  const originalError = sanitizeTaskErrorDisplayMessage(
+    task.error?.details?.originalError,
+    ''
+  );
+  if (originalError) {
+    return originalError;
+  }
+
+  const postProcessingError = workflowCompletionService.getPostProcessingStatus(
+    task.id
+  )?.error;
+  return sanitizeTaskErrorDisplayMessage(postProcessingError, '') || undefined;
+}
+
 function buildBatchPreview(
   anchor: PlaitImageGenerationAnchor,
   phase: ImageGenerationAnchorPhase,
@@ -148,6 +228,7 @@ function buildBatchPreview(
   sortedTasks.forEach((task) => {
     const slotStatus = deriveTaskBatchSlotStatus(task, phase);
     const previewUrls = getTaskResultPreviewUrls(task);
+    const previewMetadata = getTaskGeneratedPreviewMetadata(task);
 
     if (previewUrls.length > 0) {
       previewUrls.forEach((previewUrl, index) => {
@@ -156,12 +237,10 @@ function buildBatchPreview(
           taskId: task.id,
           status: slotStatus,
           previewImageUrl: previewUrl,
+          ...buildBatchSlotPreviewMetadata(previewMetadata),
           error:
             slotStatus === 'failed'
-              ? task.error?.message ||
-                task.error?.details?.originalError ||
-                workflowCompletionService.getPostProcessingStatus(task.id)
-                  ?.error
+              ? getSafeTaskFailureMessage(task)
               : undefined,
         });
       });
@@ -173,11 +252,7 @@ function buildBatchPreview(
       taskId: task.id,
       status: slotStatus,
       error:
-        slotStatus === 'failed'
-          ? task.error?.message ||
-            task.error?.details?.originalError ||
-            workflowCompletionService.getPostProcessingStatus(task.id)?.error
-          : undefined,
+        slotStatus === 'failed' ? getSafeTaskFailureMessage(task) : undefined,
     });
   });
 
@@ -401,6 +476,7 @@ export function buildImageGenerationAnchorViewModel(
     phase === 'failed'
       ? { type: 'dismiss' as const, label: '关闭' }
       : undefined;
+  const previewMetadata = getAnchorGeneratedPreviewMetadata(anchor, task);
 
   return {
     id: anchor.id,
@@ -409,6 +485,10 @@ export function buildImageGenerationAnchorViewModel(
     title: anchor.title || workflow?.name || '图片生成',
     subtitle,
     previewImageUrl: anchor.previewImageUrl,
+    previewContentUrl: previewMetadata.contentUrl,
+    previewRemoteTaskId: previewMetadata.remoteTaskId,
+    previewProviderTaskId: previewMetadata.providerTaskId,
+    previewMimeType: previewMetadata.mimeType,
     batchPreview,
     progress,
     progressMode,

@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlaitBoard } from '@plait/core';
@@ -114,7 +116,8 @@ vi.mock('../../plugins/with-image-generation-anchor', () => ({
       ((board as unknown as { children: unknown[] }).children ?? []).find(
         (anchor) =>
           (anchor as { type?: string }).type === 'generation-anchor' &&
-          (anchor as { workflowId?: string }).workflowId === options.workflowId &&
+          (anchor as { workflowId?: string }).workflowId ===
+            options.workflowId &&
           (anchor as { batchId?: string }).batchId === options.batchId &&
           (anchor as { batchIndex?: number }).batchIndex === options.batchIndex
       ) ?? null,
@@ -332,6 +335,32 @@ describe('useImageGenerationAnchorSync', () => {
     expect(anchor.error).toBe('插入失败');
   });
 
+  it('sanitizes sensitive provider material before storing anchor errors', () => {
+    const board = createBoard(createAnchor({ taskIds: ['task-1'] }));
+    taskState.tasks = [
+      createTask({
+        status: TaskStatus.FAILED,
+        error: {
+          code: 'IMAGE_GENERATION_ERROR',
+          message:
+            'provider failed with Authorization bearer token at https://provider.example/task',
+          details: {
+            originalError: 'provider failed with api_key=secret',
+            timestamp: 1,
+          },
+        },
+      }),
+    ];
+
+    renderHook(() => useImageGenerationAnchorSync({ board, enabled: true }));
+
+    const [anchor] = (
+      board as unknown as { children: PlaitImageGenerationAnchor[] }
+    ).children;
+    expect(anchor.phase).toBe('failed');
+    expect(anchor.error).toBe('生成失败');
+  });
+
   it('does not complete a stack anchor before the requested slot count is covered', () => {
     const board = createBoard(
       createAnchor({
@@ -429,6 +458,10 @@ describe('useImageGenerationAnchorSync', () => {
         url: 'https://example.com/generated.png',
         format: 'png',
         size: 0,
+        contentUrl: '/creative/relay/v1/images/tasks/remote-task-1/content',
+        remoteTaskId: 'remote-task-1',
+        providerTaskId: 'provider-task-1',
+        mimeType: 'image/png',
       },
     });
     taskState.tasks = [completedTask];
@@ -451,6 +484,12 @@ describe('useImageGenerationAnchorSync', () => {
     expect(anchor.phase).toBe('completed');
     expect(anchor.expectedInsertPosition).toEqual([200, 300]);
     expect(anchor.previewImageUrl).toBe('https://example.com/generated.png');
+    expect(anchor.previewContentUrl).toBe(
+      '/creative/relay/v1/images/tasks/remote-task-1/content'
+    );
+    expect(anchor.previewRemoteTaskId).toBe('remote-task-1');
+    expect(anchor.previewProviderTaskId).toBe('provider-task-1');
+    expect(anchor.previewMimeType).toBe('image/png');
     expect(anchor.points).toEqual([
       [200, 300],
       [690, 578],

@@ -16,6 +16,11 @@ import { DrawTransforms } from '@plait/draw';
 import { isFrameElement, type PlaitFrame } from '../types/frame.types';
 import { FrameTransforms } from '../plugins/with-frame';
 import { getImageRegion } from '../services/ppt/ppt-layout-engine';
+import {
+  getGeneratedImageCanvasMetadata,
+  hasGeneratedImageCanvasMetadata,
+} from './generated-image-canvas-metadata';
+import { getGeneratedVideoCanvasMetadata } from './generated-video-canvas-metadata';
 import type {
   PPTFrameMeta,
   PPTSlideImageHistoryItem,
@@ -37,6 +42,11 @@ export type FrameMediaInsertionResult =
       elementId?: string;
     }
   | undefined;
+
+type FrameMediaInsertionOptions = {
+  fit?: 'contain' | 'stretch';
+  metadata?: Record<string, unknown>;
+};
 
 export interface PPTSlideImageInfo {
   element?: any;
@@ -623,7 +633,7 @@ export async function insertMediaIntoSelectedFrame(
   mediaUrl: string,
   mediaType: 'image' | 'video',
   mediaDimensions?: { width: number; height: number },
-  options?: { fit?: 'contain' | 'stretch' }
+  options?: FrameMediaInsertionOptions
 ): Promise<FrameMediaInsertionResult> {
   const frame = getSelectedInsertionFrame(board);
   if (!frame) return undefined;
@@ -666,7 +676,7 @@ export async function insertMediaIntoFrame(
   frameDimensions: { width: number; height: number },
   mediaDimensions?: { width: number; height: number },
   targetRegion?: { x: number; y: number; width: number; height: number },
-  options?: { fit?: 'contain' | 'stretch' }
+  options?: FrameMediaInsertionOptions
 ): Promise<FrameMediaInsertionResult> {
   // 查找目标 Frame
   const frameElement = board.children.find(
@@ -749,6 +759,7 @@ export async function insertMediaIntoFrame(
         height: mediaHeight,
         isVideo: true,
         videoType: 'video',
+        ...getGeneratedVideoCanvasMetadata(options?.metadata),
       } as any,
       insertionPoint
     );
@@ -822,6 +833,12 @@ export async function insertMediaIntoFrame(
         );
       }
       FrameTransforms.bindToFrame(board, newElement, frameElement);
+      if (mediaType === 'image') {
+        const canvasMetadata = getGeneratedImageCanvasMetadata(options?.metadata);
+        if (hasGeneratedImageCanvasMetadata(canvasMetadata)) {
+          Transforms.setNode(board, canvasMetadata as any, [childrenCountBefore]);
+        }
+      }
     }
   }
 

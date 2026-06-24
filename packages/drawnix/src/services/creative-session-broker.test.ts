@@ -20,6 +20,7 @@ import type {
 import {
   initializeCreativeManagedSessionBroker,
   resetCreativeManagedSessionBrokerForTests,
+  startCreativeManagedSessionBrokerRecovery,
 } from './creative-session-broker';
 import {
   getCreativeDefaultVisibleModels,
@@ -1095,4 +1096,110 @@ describe('initializeCreativeManagedSessionBroker bootstrap auth', () => {
     expect(creativeCatalog.selectedModelIds).toEqual([]);
     expect(creativeCatalog.error).toBe('creative_session_unavailable');
   });
+
+  it('retries bootstrap after an unauthorized initialization once the session recovers', async () => {
+    let bootstrapCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        bootstrapCalls += 1;
+        if (bootstrapCalls === 1) {
+          return statusResponse(401);
+        }
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-recovered',
+              nonce: 'nonce-recovered',
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({
+          data: [{ id: 'gpt-5.5', type: 'text' }],
+        });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    });
+
+    const first = await initializeCreativeManagedSessionBroker(fetcher);
+    const second = await initializeCreativeManagedSessionBroker(fetcher);
+
+    expect(first.status).toBe('error');
+    expect(second.status).toBe('ready');
+    expect(getCreativeSessionAuthMaterial()).toEqual({
+      csrfToken: 'csrf-recovered',
+      nonce: 'nonce-recovered',
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      '/creative/api/bootstrap',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'GET',
+      })
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      '/creative/api/models',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'GET',
+      })
+    );
+    expect(
+      fetcher.mock.calls.filter(
+        ([calledEndpoint]: Parameters<typeof fetch>) =>
+          String(calledEndpoint) === '/creative/api/bootstrap'
+      )
+    ).toHaveLength(2);
+  });
+
+  it('automatically retries failed bootstrap until the browser session recovers', async () => {
+    vi.useFakeTimers();
+    let bootstrapCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async (endpoint: RequestInfo | URL) => {
+      if (String(endpoint) === '/creative/api/bootstrap') {
+        bootstrapCalls += 1;
+        if (bootstrapCalls === 1) {
+          return statusResponse(401);
+        }
+        return jsonResponse({
+          data: {
+            auth: {
+              mode: 'session-broker',
+              csrfToken: 'csrf-auto-recovered',
+              nonce: 'nonce-auto-recovered',
+            },
+          },
+        });
+      }
+      if (String(endpoint) === '/creative/api/models') {
+        return jsonResponse({
+          data: [{ id: 'gpt-5.5', type: 'text' }],
+        });
+      }
+      throw new Error(`unexpected endpoint ${String(endpoint)}`);
+    });
+    const settled: string[] = [];
+
+    const recovery = startCreativeManagedSessionBrokerRecovery({
+      fetcher,
+      retryDelayMs: 1000,
+      onAttemptSettled: (result) => settled.push(result.status),
+    });
+
+    await vi.waitFor(() => expect(settled).toEqual(['error']));
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(settled).toEqual(['error', 'ready']));
+
+    expect(getCreativeSessionAuthMaterial()).toEqual({
+      csrfToken: 'csrf-auto-recovered',
+      nonce: 'nonce-auto-recovered',
+    });
+    expect(fetcher).toHaveBeenCalledWith('/creative/api/models', expect.any(Object));
+
+    recovery.stop();
+    vi.useRealTimers();
+  });
+
 });

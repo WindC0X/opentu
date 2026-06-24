@@ -52,6 +52,8 @@ export interface VideoGenerationParams {
   inputReference?: string;
   /** Stable request id for backend idempotency, scoped to one user action. */
   idempotencyKey?: string;
+  /** Internal abort signal for submit/poll lifecycles. */
+  signal?: AbortSignal;
 }
 
 // Video generation response (submit)
@@ -99,9 +101,34 @@ interface PollingOptions {
   interval?: number; // Polling interval in ms (default: 5000)
   maxAttempts?: number; // Max polling attempts (default: 1080 = 90min at 5s interval)
   onProgress?: (progress: number, status: string) => void;
-  onSubmitted?: (videoId: string) => void; // Callback when video is submitted (for saving remoteId)
+  onSubmitted?: (videoId: string) => void | Promise<void>; // Callback when video is submitted (for saving remoteId)
   routeModel?: string | ModelRef | null;
   params?: Record<string, unknown>;
+  signal?: AbortSignal;
+}
+
+function createVideoAbortError(): Error {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException('Aborted', 'AbortError');
+  }
+  const error = new Error('Aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfVideoAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createVideoAbortError();
+  }
+}
+
+function isVideoAbortError(error: unknown): boolean {
+  return (
+    (typeof DOMException !== 'undefined' &&
+      error instanceof DOMException &&
+      error.name === 'AbortError') ||
+    (error instanceof Error && error.name === 'AbortError')
+  );
 }
 
 function inferAuthType(
@@ -330,6 +357,7 @@ class VideoAPIService {
   async submitVideoGeneration(
     params: VideoGenerationParams
   ): Promise<VideoSubmitResponse> {
+    throwIfVideoAborted(params.signal);
     const { providerContext, binding } = resolveVideoPlanContext(
       params.modelRef || params.model
     );
@@ -404,7 +432,7 @@ class VideoAPIService {
         // Convert to blob and append
         if (processedUrl.startsWith('data:')) {
           // console.log('[VideoAPI] Converting data URL to blob...');
-          const response = await fetch(processedUrl);
+          const response = await fetch(processedUrl, { signal: params.signal });
           const blob = await prepareVideoReferenceImageBlob(
             await response.blob(),
             params.size
@@ -413,7 +441,7 @@ class VideoAPIService {
           formData.append(fieldName, blob, imageRef.name || 'image.png');
         } else if (processedUrl.startsWith('http')) {
           // console.log('[VideoAPI] Fetching remote URL...');
-          const response = await fetch(processedUrl);
+          const response = await fetch(processedUrl, { signal: params.signal });
           const blob = await prepareVideoReferenceImageBlob(
             await response.blob(),
             params.size
@@ -439,14 +467,14 @@ class VideoAPIService {
       // console.log(`[VideoAPI] Legacy image processed: ${imageData.type === 'base64' ? 'converted to base64' : 'using URL'}`);
 
       if (processedUrl.startsWith('data:')) {
-        const response = await fetch(processedUrl);
+        const response = await fetch(processedUrl, { signal: params.signal });
         const blob = await prepareVideoReferenceImageBlob(
           await response.blob(),
           params.size
         );
         formData.append('input_reference', blob, 'reference.png');
       } else if (processedUrl.startsWith('http')) {
-        const response = await fetch(processedUrl);
+        const response = await fetch(processedUrl, { signal: params.signal });
         const blob = await prepareVideoReferenceImageBlob(
           await response.blob(),
           params.size
@@ -481,7 +509,9 @@ class VideoAPIService {
       method: 'POST',
       headers: submitHeaders,
       body: formData,
+      signal: params.signal,
     });
+    throwIfVideoAborted(params.signal);
 
     if (!response.ok) {
       const duration = Date.now() - startTime;
@@ -528,6 +558,7 @@ class VideoAPIService {
       await response.json(),
       providerContext
     );
+    throwIfVideoAborted(params.signal);
     const duration = Date.now() - startTime;
 
     // 记录视频提交成功（此时视频尚未生成完成，只是提交成功）
@@ -568,8 +599,10 @@ class VideoAPIService {
   async queryVideoStatus(
     videoId: string,
     routeModel?: string | ModelRef | null,
-    params?: Record<string, unknown>
+    params?: Record<string, unknown>,
+    signal?: AbortSignal
   ): Promise<VideoQueryResponse> {
+    throwIfVideoAborted(signal);
     const { providerContext, binding } = resolveVideoPlanContext(routeModel);
 
     requireVideoProviderApiKey(providerContext, 'API Key 未配置');
@@ -578,7 +611,9 @@ class VideoAPIService {
       path: resolveVideoStatusPath(providerContext, videoId, binding, params),
       baseUrlStrategy: resolveVideoBaseUrlStrategy(providerContext, binding),
       method: 'GET',
+      signal,
     });
+    throwIfVideoAborted(signal);
 
     if (!response.ok) {
       if (
@@ -607,6 +642,7 @@ class VideoAPIService {
       await response.json(),
       providerContext
     );
+    throwIfVideoAborted(signal);
     // console.log('[VideoAPI] Query response:', JSON.stringify(result, null, 2));
     return result;
   }
@@ -624,22 +660,29 @@ class VideoAPIService {
       maxAttempts = 1080,
       onProgress,
       onSubmitted,
+      signal,
     } = options;
 
     // Submit video generation task
     // console.log('[VideoAPI] Submitting video generation task...');
-    const submitResponse = await this.submitVideoGeneration(params);
+    const submitResponse = await this.submitVideoGeneration({
+      ...params,
+      signal,
+    });
+    throwIfVideoAborted(signal);
     // console.log('[VideoAPI] Task submitted:', submitResponse.id, 'Status:', submitResponse.status);
 
     // Notify that video has been submitted (for saving remoteId)
     if (onSubmitted) {
-      onSubmitted(submitResponse.id);
+      await onSubmitted(submitResponse.id);
     }
+    throwIfVideoAborted(signal);
 
     // Report initial progress
     if (onProgress) {
       onProgress(0, submitResponse.status);
     }
+    throwIfVideoAborted(signal);
 
     // Check if submission already failed (e.g., content policy violation)
     if (submitResponse.status === 'failed') {
@@ -655,6 +698,7 @@ class VideoAPIService {
       interval,
       maxAttempts,
       onProgress,
+      signal,
       routeModel: params.modelRef || params.model,
       params: params.params,
     });
@@ -670,15 +714,18 @@ class VideoAPIService {
   ): Promise<VideoQueryResponse> {
     // console.log('[VideoAPI] Resuming polling for video:', videoId);
 
-    const { onProgress } = options;
+    const { onProgress, signal } = options;
+    throwIfVideoAborted(signal);
 
     // For resumed tasks, check status immediately first (video may already be completed)
     // console.log('[VideoAPI] Checking status immediately for resumed task...');
     const immediateStatus = await this.queryVideoStatus(
       videoId,
       options.routeModel,
-      options.params
+      options.params,
+      signal
     );
+    throwIfVideoAborted(signal);
     const immediateProgress =
       immediateStatus.progress ??
       (immediateStatus.status === 'failed'
@@ -692,6 +739,7 @@ class VideoAPIService {
     if (onProgress) {
       onProgress(immediateProgress, immediateStatus.status);
     }
+    throwIfVideoAborted(signal);
 
     // If already completed, return immediately
     if (immediateStatus.status === 'completed') {
@@ -723,7 +771,7 @@ class VideoAPIService {
     videoId: string,
     options: PollingOptions = {}
   ): Promise<VideoQueryResponse> {
-    const { interval = 5000, maxAttempts = 1080, onProgress } = options;
+    const { interval = 5000, maxAttempts = 1080, onProgress, signal } = options;
 
     let attempts = 0;
     let consecutiveErrors = 0;
@@ -731,7 +779,7 @@ class VideoAPIService {
 
     // Poll for completion
     while (attempts < maxAttempts) {
-      await this.sleep(interval);
+      await this.sleep(interval, signal);
       attempts++;
 
       // Flag to track if this is a business failure (should not retry)
@@ -741,8 +789,10 @@ class VideoAPIService {
         const status = await this.queryVideoStatus(
           videoId,
           options.routeModel,
-          options.params
+          options.params,
+          signal
         );
+        throwIfVideoAborted(signal);
 
         // 请求成功，重置连续错误计数
         consecutiveErrors = 0;
@@ -759,6 +809,7 @@ class VideoAPIService {
         if (onProgress) {
           onProgress(progress, status.status);
         }
+        throwIfVideoAborted(signal);
 
         if (status.status === 'completed') {
           return this.resolveCompletedVideoStatus(
@@ -782,6 +833,9 @@ class VideoAPIService {
         if (isBusinessFailure || isCreativeVideoUnsupportedError(err)) {
           throw err;
         }
+        if (isVideoAbortError(err)) {
+          throw err;
+        }
 
         // 轮询接口临时错误（网络错误），增加间隔继续重试
         consecutiveErrors++;
@@ -799,7 +853,7 @@ class VideoAPIService {
           interval * Math.pow(1.5, consecutiveErrors),
           60000
         );
-        await this.sleep(backoffInterval - interval); // 减去已等待的 interval
+        await this.sleep(backoffInterval - interval, signal); // 减去已等待的 interval
       }
     }
 
@@ -809,8 +863,24 @@ class VideoAPIService {
   /**
    * Sleep helper
    */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0) {
+      throwIfVideoAborted(signal);
+      return Promise.resolve();
+    }
+    throwIfVideoAborted(signal);
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timeoutId);
+        signal?.removeEventListener('abort', onAbort);
+        reject(createVideoAbortError());
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   private async resolveCompletedVideoStatus(

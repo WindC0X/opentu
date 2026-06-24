@@ -525,11 +525,19 @@ export const Image: React.FC<ImageProps> = (props: ImageProps) => {
     return (
       <Video
         videoItem={{
+          id: (props.imageItem as any).id,
+          elementId: (props.imageItem as any).id,
+          boardId:
+            (props.board as any)?.__plait_id || (props.board as any)?.id,
           url: props.imageItem.url,
           width: props.imageItem.width,
           height: props.imageItem.height,
           videoType: (props.imageItem as any).videoType,
           poster: (props.imageItem as any).poster,
+          contentUrl: (props.imageItem as any).contentUrl,
+          remoteTaskId: (props.imageItem as any).remoteTaskId,
+          providerTaskId: (props.imageItem as any).providerTaskId,
+          mimeType: (props.imageItem as any).mimeType,
         }}
         isFocus={props.isFocus}
         isSelected={(props as any).isSelected}
@@ -574,7 +582,7 @@ export const Image: React.FC<ImageProps> = (props: ImageProps) => {
         })}
         showSkeleton={false}
         style={imgProps.style}
-        onError={handleImageError}
+        onAttemptError={handleImageError}
         onLoad={handleImageLoad}
       />
     </div>

@@ -248,6 +248,20 @@ class WorkflowSubmissionService {
               error: workflow.error || 'Unknown error',
             });
           }
+
+          const isActive =
+            workflow.status === 'running' || workflow.status === 'pending';
+          const isRecentlyFailed =
+            workflow.status === 'failed' &&
+            workflow.updatedAt &&
+            Date.now() - workflow.updatedAt < 5 * 60 * 1000;
+          if (isActive || isRecentlyFailed) {
+            this.events$.next({
+              type: 'recovered',
+              workflowId: workflow.id,
+              workflow,
+            });
+          }
         }
       }
 

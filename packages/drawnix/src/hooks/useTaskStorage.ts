@@ -19,7 +19,11 @@ import {
   TaskStatus,
   TaskExecutionPhase,
 } from '../types/task.types';
-import { isResumableAsyncImageTask } from '../utils/task-utils';
+import {
+  isRecoverableCreativeManagedImageSubmissionTask,
+  isRecoverableRemoteTaskFailure,
+  isResumableAsyncImageTask,
+} from '../utils/task-utils';
 
 // Global flag to prevent multiple initializations (persists across HMR)
 let initializationStarted = false;
@@ -87,6 +91,8 @@ export function useTaskStorage(): boolean {
             processingTasks.forEach((task) => {
               const isAsyncImageResumable =
                 isResumableAsyncImageTask(task);
+              const isCreativeImageSubmitRecoverable =
+                isRecoverableCreativeManagedImageSubmissionTask(task);
 
               const isVideoResumable = task.type === TaskType.VIDEO && !!task.remoteId;
               const isAudioResumable =
@@ -94,11 +100,23 @@ export function useTaskStorage(): boolean {
 
               console.warn(
                 `[useTaskStorage]   task=${task.id} type=${task.type} phase=${task.executionPhase || 'unknown'} remoteId=${task.remoteId || 'none'} → ${
-                  isVideoResumable || isAudioResumable || isAsyncImageResumable
+                  isVideoResumable ||
+                  isAudioResumable ||
+                  isAsyncImageResumable ||
+                  isCreativeImageSubmitRecoverable
                     ? 'KEEP'
                     : 'MARK_FAILED'
                 }`
               );
+
+              // Creative image submit was interrupted before the browser stored
+              // remoteId. Replay the original local task through TaskQueueService's
+              // managed executor path so it reuses opentu-image-${task.id} instead
+              // of being picked up by the legacy pending-task executor.
+              if (isCreativeImageSubmitRecoverable) {
+                taskQueueService.resumeSubmitInterruptedTask(task.id);
+                return;
+              }
 
               // Video或异步图片任务且有 remoteId：允许后续恢复轮询
               if (
@@ -144,14 +162,9 @@ export function useTaskStorage(): boolean {
 
           // Check for failed remote tasks that can be recovered
           // 视频任务有 remoteId 说明已提交到服务端，刷新后应始终尝试重新轮询
-          const failedRemoteTasks = storedTasks.filter(
-            (task) =>
-              task.status === 'failed' &&
-              task.remoteId &&
-              (task.type === TaskType.VIDEO ||
-                task.type === TaskType.AUDIO ||
-                isResumableAsyncImageTask(task))
-          );
+	          const failedRemoteTasks = storedTasks.filter(
+	            (task) => isRecoverableRemoteTaskFailure(task)
+	          );
 
           // 无条件打印汇总，便于定位
           const failedVideoCount = storedTasks.filter(t => t.status === 'failed' && t.type === TaskType.VIDEO).length;
@@ -162,24 +175,12 @@ export function useTaskStorage(): boolean {
             `[useTaskStorage] Recovery check: ${processingTasks.length} processing, ${failedVideoCount} failed video (${failedVideoWithRemoteId} with remoteId), ${failedAudioCount} failed audio (${failedAudioWithRemoteId} with remoteId), ${failedRemoteTasks.length} recoverable`
           );
 
-          if (failedRemoteTasks.length > 0) {
-            // 白名单：只恢复因页面刷新/客户端中断导致的失败，真正的业务失败不恢复
-            const RECOVERABLE_ERROR_CODES = new Set([
-              'INTERRUPTED',
-              'INTERRUPTED_DURING_SUBMISSION',
-              'RESUME_FAILED',
-            ]);
-
-            failedRemoteTasks.forEach((task) => {
-              const errorCode = task.error?.code || '';
-              if (!RECOVERABLE_ERROR_CODES.has(errorCode)) {
-                console.warn(`[useTaskStorage] Skip recovery for task ${task.id}: terminal failure (${errorCode || 'no error code'})`);
-                return;
-              }
-
-              console.warn(
-                `[useTaskStorage] Recovering interrupted task ${task.id} (error: ${errorCode}, remoteId: ${task.remoteId})`
-              );
+	          if (failedRemoteTasks.length > 0) {
+	            failedRemoteTasks.forEach((task) => {
+	              const errorCode = task.error?.code || '';
+	              console.warn(
+	                `[useTaskStorage] Recovering interrupted task ${task.id} (error: ${errorCode}, remoteId: ${task.remoteId})`
+	              );
 
               legacyTaskQueueService.updateTaskStatus(
                 task.id,

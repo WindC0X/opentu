@@ -298,9 +298,9 @@ describe('frame-insertion-utils PPT helpers', () => {
       }
     );
 
-    expect(board.children.some((element: any) => element.id === 'old-image')).toBe(
-      false
-    );
+    expect(
+      board.children.some((element: any) => element.id === 'old-image')
+    ).toBe(false);
     expect(findPPTSlideImage(board, 'frame-1')?.elementId).toBe('new-image');
     expect(board.children[0].pptMeta).toMatchObject({
       slidePrompt: 'regenerated prompt',
@@ -602,6 +602,35 @@ describe('frame-insertion-utils PPT helpers', () => {
         [240, 0],
         [1680, 1080],
       ],
+    });
+  });
+
+  it('persists generated image rehydrate metadata on selected-frame image insertion', async () => {
+    const board = createBoard([createFrame()]);
+    board.appState = { lastSelectedElementIds: ['frame-1'] };
+
+    await insertMediaIntoSelectedFrame(
+      board,
+      '/__aitu_cache__/image/generated.png',
+      'image',
+      { width: 512, height: 512 },
+      {
+        metadata: {
+          contentUrl: '/creative/relay/v1/images/tasks/remote-1/content',
+          remoteTaskId: 'remote-1',
+          providerTaskId: 'provider-1',
+          mimeType: 'image/png',
+        },
+      }
+    );
+
+    expect(board.children[1]).toMatchObject({
+      type: 'image',
+      frameId: 'frame-1',
+      contentUrl: '/creative/relay/v1/images/tasks/remote-1/content',
+      remoteTaskId: 'remote-1',
+      providerTaskId: 'provider-1',
+      mimeType: 'image/png',
     });
   });
 });

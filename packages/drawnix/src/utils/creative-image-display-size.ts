@@ -41,3 +41,79 @@ export function resolveCreativeImageDisplaySize(input: {
     normalizeCreativeImageDisplaySize(input.userParams?.size)
   );
 }
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function ratioFromSize(value: string | undefined): number | undefined {
+  const size = normalizeCreativeImageDisplaySize(value);
+  const match = size?.match(/^(\d+)\s*x\s*(\d+)$/i);
+  if (!match) {
+    return undefined;
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width > 0 && height > 0 ? width / height : undefined;
+}
+
+export function resolveCreativeImageAspectRatio(input: {
+  width?: number;
+  height?: number;
+  targetWidth?: number;
+  targetHeight?: number;
+  size?: string;
+  userParams?: CreativeUserParams | null;
+}): number | undefined {
+  const width = positiveNumber(input.width);
+  const height = positiveNumber(input.height);
+  if (width && height) {
+    return width / height;
+  }
+
+  const targetWidth = positiveNumber(input.targetWidth);
+  const targetHeight = positiveNumber(input.targetHeight);
+  if (targetWidth && targetHeight) {
+    return targetWidth / targetHeight;
+  }
+
+  return ratioFromSize(
+    resolveCreativeImageDisplaySize({
+      size: input.size,
+      userParams: input.userParams,
+    })
+  );
+}
+
+export function fitCreativeImagePreviewBox(
+  input: {
+    width?: number;
+    height?: number;
+    targetWidth?: number;
+    targetHeight?: number;
+    size?: string;
+    userParams?: CreativeUserParams | null;
+  },
+  maxWidth: number,
+  maxHeight: number
+): { width: number; height: number } {
+  const ratio = resolveCreativeImageAspectRatio(input);
+  if (!ratio) {
+    return { width: maxWidth, height: maxHeight };
+  }
+
+  const maxRatio = maxWidth / maxHeight;
+  if (ratio >= maxRatio) {
+    return {
+      width: maxWidth,
+      height: Math.max(1, Math.round(maxWidth / ratio)),
+    };
+  }
+
+  return {
+    width: Math.max(1, Math.round(maxHeight * ratio)),
+    height: maxHeight,
+  };
+}

@@ -79,6 +79,8 @@ export interface Asset {
   duration?: number; // 音频/视频时长（秒）
   clipId?: string; // 音频片段 ID（仅 AI 音频）
   providerTaskId?: string; // 供应商任务 ID（仅 AI 音频）
+  remoteTaskId?: string; // NewAPI/remote async task ID for generated media recovery
+  contentUrl?: string; // Same-origin broker content URL for rehydrating generated media
   cacheWarning?: CacheWarning; // 缓存失败/不可用提醒
 }
 

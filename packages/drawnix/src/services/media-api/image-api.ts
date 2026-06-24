@@ -288,7 +288,7 @@ export async function generateImageAsync(
   }
 
   // 通知调用方保存 remoteId（用于页面刷新后恢复轮询）
-  onSubmitted?.(taskRemoteId);
+  await onSubmitted?.(taskRemoteId);
   onProgress?.(10);
   // 轮询等待结果
   let progress = submitData.progress ?? 0;

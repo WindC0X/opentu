@@ -2054,9 +2054,9 @@ export const SettingsDialog = ({
       <div className="settings-dialog__sidebar-summary">
         <div className="settings-dialog__sidebar-summary-row">
           <span className="settings-dialog__sidebar-summary-title">
-            供应商目录
+            {creativeEmbeddedMode ? '平台模型来源' : '供应商目录'}
           </span>
-          {isCompactLayout ? (
+          {isCompactLayout && !creativeEmbeddedMode ? (
             <button
               type="button"
               className="settings-dialog__sidebar-summary-action"
@@ -2068,7 +2068,9 @@ export const SettingsDialog = ({
         </div>
         {isCompactLayout ? (
           <span className="settings-dialog__sidebar-summary-text">
-            先从列表里选择供应商，再进入对应的配置页面。
+            {creativeEmbeddedMode
+              ? '模型和渠道由 New API 管理员配置，这里只展示当前平台可用来源。'
+              : '先从列表里选择供应商，再进入对应的配置页面。'}
           </span>
         ) : null}
       </div>
@@ -2298,14 +2300,18 @@ export const SettingsDialog = ({
               onClick={() => setCompactProviderMode('catalog')}
             >
               <ChevronLeft size={16} />
-              <span>返回供应商目录</span>
+              <span>
+                {creativeEmbeddedMode ? '返回模型来源' : '返回供应商目录'}
+              </span>
             </button>
             <div className="settings-dialog__compact-stage-copy">
               <span className="settings-dialog__compact-stage-eyebrow">
-                供应商配置
+                {creativeEmbeddedMode ? '平台渠道' : '供应商配置'}
               </span>
               <p className="settings-dialog__compact-stage-text">
-                进入详情后再编辑接口信息、密钥和模型同步配置。
+                {creativeEmbeddedMode
+                  ? '渠道鉴权、接口和模型同步由 New API 后台管理；普通用户仅调整默认模型偏好。'
+                  : '进入详情后再编辑接口信息、密钥和模型同步配置。'}
               </p>
             </div>
           </div>

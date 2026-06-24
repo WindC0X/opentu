@@ -9,6 +9,7 @@ import {
   type PromptType,
 } from './prompt-storage-service';
 import { stripKnowledgeContextFromPrompt } from './generation-context-service';
+import { sanitizeTaskErrorDisplayMessage } from './creative-error-sanitizer';
 
 export type PromptHistoryCategory =
   | 'image'
@@ -23,11 +24,19 @@ export type PromptHistoryResultPreview =
   | {
       kind: 'image';
       url: string;
+      contentUrl?: string;
+      remoteTaskId?: string;
+      providerTaskId?: string;
+      mimeType?: string;
       title?: string;
     }
   | {
       kind: 'video';
       url: string;
+      contentUrl?: string;
+      remoteTaskId?: string;
+      providerTaskId?: string;
+      mimeType?: string;
       posterUrl?: string;
       title?: string;
       duration?: number;
@@ -181,7 +190,7 @@ export function buildPromptHistoryResultPreview(
   if (task.status === TaskStatus.FAILED) {
     return {
       kind: 'error',
-      text: task.error?.message || '任务失败',
+      text: sanitizeTaskErrorDisplayMessage(task.error?.message, '任务失败'),
     };
   }
 
@@ -203,7 +212,15 @@ export function buildPromptHistoryResultPreview(
   if (category === 'image' || category === 'ppt-slide') {
     const url = result.thumbnailUrls?.[0] || result.thumbnailUrl || result.urls?.[0] || result.url;
     return url
-      ? { kind: 'image', url, title: result.title }
+      ? {
+          kind: 'image',
+          url,
+          contentUrl: result.contentUrl,
+          remoteTaskId: result.remoteTaskId,
+          providerTaskId: result.providerTaskId || result.remoteTaskId,
+          mimeType: result.mimeType,
+          title: result.title,
+        }
       : { kind: 'none', text: '暂无图片预览' };
   }
 
@@ -215,6 +232,10 @@ export function buildPromptHistoryResultPreview(
       ? {
           kind: 'video',
           url,
+          contentUrl: result.contentUrl,
+          remoteTaskId: result.remoteTaskId,
+          providerTaskId: result.providerTaskId || result.remoteTaskId,
+          mimeType: result.mimeType,
           posterUrl,
           title: result.title,
           duration: result.duration,

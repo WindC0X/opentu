@@ -37,6 +37,10 @@ vi.mock('tdesign-react', () => ({
   MessagePlugin: mockMessage,
 }));
 
+vi.mock('../../utils/message-plugin', () => ({
+  MessagePlugin: mockMessage,
+}));
+
 vi.mock('../../utils/runtime-helpers', () => ({
   copyToClipboard: mockCopyToClipboard,
 }));

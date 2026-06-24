@@ -11,6 +11,21 @@
 export const IMAGE_GENERATION_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
+ * Creative managed image tasks are remote async provider jobs. Once a public
+ * remote task id is durable, the browser should keep the task resumable much
+ * longer than the local image request timeout instead of marking it terminal.
+ */
+export const CREATIVE_REMOTE_IMAGE_TIMEOUT_MS = 90 * 60 * 1000;
+
+/**
+ * Bounded browser wait for the initial Creative managed image submit response.
+ * The backend/provider may already have accepted the request, so expiry is
+ * treated as a retryable submission interruption that must reuse the original
+ * idempotency key.
+ */
+export const CREATIVE_IMAGE_SUBMIT_TIMEOUT_MS = 60 * 1000;
+
+/**
  * Task timeout durations (in milliseconds)
  * Different timeouts for different content types
  * This is the total task timeout, not HTTP request timeout

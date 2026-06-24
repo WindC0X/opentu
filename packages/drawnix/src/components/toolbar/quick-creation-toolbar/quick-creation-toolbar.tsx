@@ -34,6 +34,7 @@ import { PenShape } from '../../../plugins/pen/type';
 import { finishPenOnToolSwitch } from '../../../plugins/pen/with-pen-create';
 import { DrawnixPointerType, useSetPointer } from '../../../hooks/use-drawnix';
 import { addImage } from '../../../utils/image';
+import { getReadyMediaLibraryImageInsertUrl } from '../../../utils/media-library-image-insert';
 import { useI18n } from '../../../i18n';
 import { BoardCreationMode, setCreationMode } from '@plait/common';
 import { Popover, PopoverContent, PopoverTrigger } from '../../popover/popover';
@@ -204,7 +205,10 @@ export const QuickCreationToolbar: React.FC<QuickCreationToolbarProps> = ({
   const handleInsertAsset = async (asset: Asset) => {
     try {
       if (asset.type === AssetType.IMAGE) {
-        await insertImageFromUrl(board, asset.url);
+        await insertImageFromUrl(
+          board,
+          await getReadyMediaLibraryImageInsertUrl(asset)
+        );
       } else if (asset.type === AssetType.VIDEO) {
         await insertVideoFromUrl(board, asset.url);
       } else if (asset.type === AssetType.AUDIO) {

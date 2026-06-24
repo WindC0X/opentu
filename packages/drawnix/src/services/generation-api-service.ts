@@ -78,6 +78,75 @@ function assertStoredTaskInvocationRouteAvailable(
   }
 }
 
+function normalizeTaskRetryAttempt(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+}
+
+function createTaskTimeoutError(message = 'TIMEOUT'): Error {
+  const error = new Error(message);
+  error.name = 'TIMEOUT';
+  (error as any).code = 'TIMEOUT';
+  return error;
+}
+
+function isTaskTimeoutError(error: unknown): boolean {
+  return (
+    (error as { code?: unknown } | undefined)?.code === 'TIMEOUT' ||
+    (error as { name?: unknown } | undefined)?.name === 'TIMEOUT' ||
+    (error as { message?: unknown } | undefined)?.message === 'TIMEOUT'
+  );
+}
+
+interface TaskAttemptSnapshot {
+  taskId: string;
+  retryAttempt: number;
+  startedAt?: number;
+  remoteId?: string;
+}
+
+function createTaskAttemptSnapshot(
+  taskId: string,
+  remoteId?: string
+): TaskAttemptSnapshot {
+  const task = taskQueueService.getTask(taskId);
+  return {
+    taskId,
+    retryAttempt: normalizeTaskRetryAttempt(task?.params.retryAttempt),
+    startedAt: task?.startedAt,
+    remoteId,
+  };
+}
+
+function isTaskStillProcessingAttempt(
+  snapshot: TaskAttemptSnapshot,
+  options: { remoteId?: string } = {}
+): boolean {
+  const task = taskQueueService.getTask(snapshot.taskId);
+  if (!task || task.status !== TaskStatus.PROCESSING) {
+    return false;
+  }
+  if (
+    normalizeTaskRetryAttempt(task.params.retryAttempt) !==
+    snapshot.retryAttempt
+  ) {
+    return false;
+  }
+  if (
+    typeof snapshot.startedAt === 'number' &&
+    typeof task.startedAt === 'number' &&
+    snapshot.startedAt !== task.startedAt
+  ) {
+    return false;
+  }
+  const expectedRemoteId = options.remoteId || snapshot.remoteId;
+  if (expectedRemoteId && task.remoteId !== expectedRemoteId) {
+    return false;
+  }
+  return true;
+}
+
 function logImageAdapterSelection(
   taskId: string,
   adapter: ImageModelAdapter,
@@ -257,7 +326,7 @@ class GenerationAPIService {
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
           abortController.abort();
-          reject(new Error('TIMEOUT'));
+          reject(createTaskTimeoutError());
         }, timeout);
       });
 
@@ -294,7 +363,7 @@ class GenerationAPIService {
         error
       );
 
-      if (error.message === 'TIMEOUT') {
+      if (isTaskTimeoutError(error)) {
         // Track timeout failure
         analytics.trackModelFailure({
           taskId,
@@ -303,7 +372,7 @@ class GenerationAPIService {
           duration,
           error: 'TIMEOUT',
         });
-        throw new Error(
+        throw createTaskTimeoutError(
           `${
             type === TaskType.IMAGE
               ? '图片'
@@ -338,8 +407,11 @@ class GenerationAPIService {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
-      // Cleanup abort controller
-      this.abortControllers.delete(taskId);
+      // Cleanup only this execution's controller; a stale attempt must not
+      // delete a newer retry/resume controller for the same task id.
+      if (this.abortControllers.get(taskId) === abortController) {
+        this.abortControllers.delete(taskId);
+      }
     }
   }
 
@@ -588,7 +660,7 @@ class GenerationAPIService {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
         abortController.abort();
-        reject(new Error('TIMEOUT'));
+        reject(createTaskTimeoutError());
       }, timeout);
     });
 
@@ -687,6 +759,20 @@ class GenerationAPIService {
           referenceImages:
             referenceImages.length > 0 ? referenceImages : undefined,
           idempotencyKey: `opentu-video-${taskId}`,
+          signal,
+          onProgress: (progress: number) => {
+            taskQueueService.updateTaskProgress(taskId, progress);
+          },
+          onSubmitted: async (videoId: string) => {
+            taskQueueService.updateTaskStatus(taskId, 'processing' as any, {
+              remoteId: videoId,
+              invocationRoute: createTaskInvocationRouteSnapshot(
+                'video',
+                effectiveModelRef || effectiveModel
+              ),
+              executionPhase: TaskExecutionPhase.POLLING,
+            });
+          },
           params: {
             idempotencyKey: `opentu-video-${taskId}`,
             ...(params as any).params,
@@ -762,6 +848,7 @@ class GenerationAPIService {
       taskQueueService.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
         executionPhase: TaskExecutionPhase.SUBMITTING,
       });
+      const executionSnapshot = createTaskAttemptSnapshot(taskId);
 
       const result = await adapter.generateAudio(
         getAdapterContextFromSettings(
@@ -782,26 +869,32 @@ class GenerationAPIService {
           continueAt: params.continueAt,
           infillStartS: params.infillStartS,
           infillEndS: params.infillEndS,
+          idempotencyKey: `opentu-audio-${taskId}`,
+          signal,
+          onProgress: (progress: number) => {
+            if (!isTaskStillProcessingAttempt(executionSnapshot)) {
+              return;
+            }
+            taskQueueService.updateTaskProgress(taskId, progress);
+            taskQueueService.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
+              executionPhase: TaskExecutionPhase.POLLING,
+            });
+          },
+          onSubmitted: async (remoteId: string) => {
+            if (!isTaskStillProcessingAttempt(executionSnapshot)) {
+              return;
+            }
+            taskQueueService.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
+              remoteId,
+              invocationRoute: createTaskInvocationRouteSnapshot(
+                'audio',
+                effectiveModelRef || effectiveModel
+              ),
+              executionPhase: TaskExecutionPhase.POLLING,
+            });
+          },
           params: {
             ...(params as any).params,
-            idempotencyKey: `opentu-audio-${taskId}`,
-            signal,
-            onProgress: (progress: number) => {
-              taskQueueService.updateTaskProgress(taskId, progress);
-              taskQueueService.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
-                executionPhase: TaskExecutionPhase.POLLING,
-              });
-            },
-            onSubmitted: (remoteId: string) => {
-              taskQueueService.updateTaskStatus(taskId, TaskStatus.PROCESSING, {
-                remoteId,
-                invocationRoute: createTaskInvocationRouteSnapshot(
-                  'audio',
-                  effectiveModelRef || effectiveModel
-                ),
-                executionPhase: TaskExecutionPhase.POLLING,
-              });
-            },
           },
         }
       );
@@ -873,7 +966,7 @@ class GenerationAPIService {
       // Create timeout promise
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => {
-          reject(new Error('TIMEOUT'));
+          reject(createTaskTimeoutError());
         }, timeout);
       });
 
@@ -946,10 +1039,14 @@ class GenerationAPIService {
     routeModel?: string | ModelRef | null
   ): Promise<TaskResult> {
     const startTime = Date.now();
+    const abortController = new AbortController();
+    this.abortControllers.set(taskId, abortController);
     const modelName = resolveAnalyticsModelName(
       routeModel,
       DEFAULT_AUDIO_MODEL_ID
     );
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const executionSnapshot = createTaskAttemptSnapshot(taskId, remoteId);
 
     analytics.trackModelCall({
       taskId,
@@ -964,15 +1061,22 @@ class GenerationAPIService {
       assertStoredTaskInvocationRouteAvailable(taskId, 'audio');
       const timeout = TASK_TIMEOUT.AUDIO;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error('TIMEOUT'));
+        timeoutId = setTimeout(() => {
+          abortController.abort();
+          reject(createTaskTimeoutError());
         }, timeout);
       });
 
       const pollingPromise = audioAPIService.resumePolling(remoteId, {
         interval: 5000,
         routeModel,
+        signal: abortController.signal,
         onProgress: (progress) => {
+          if (
+            !isTaskStillProcessingAttempt(executionSnapshot, { remoteId })
+          ) {
+            return;
+          }
           taskQueueService.updateTaskProgress(taskId, progress);
         },
       });
@@ -1024,6 +1128,13 @@ class GenerationAPIService {
       });
 
       throw error;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (this.abortControllers.get(taskId) === abortController) {
+        this.abortControllers.delete(taskId);
+      }
     }
   }
 

@@ -17,12 +17,19 @@ import { isDataURL, normalizeImageDataUrl } from '@aitu/utils';
 import { copyToClipboard } from '../../utils/runtime-helpers';
 import { formatDate, formatFileSize } from '../../utils/asset-utils';
 import { useAssetSize } from '../../hooks/useAssetSize';
-import { isCacheUrl, countElementsByAssetUrls } from '../../utils/asset-cleanup';
+import {
+  isCacheUrl,
+  countElementsByAssetUrls,
+} from '../../utils/asset-cleanup';
 import { useDrawnix } from '../../hooks/use-drawnix';
 import { ConfirmDialog } from '../dialog/ConfirmDialog';
 import { RetryImage } from '../retry-image';
 import { VideoPosterPreview } from '../shared/VideoPosterPreview';
 import { HoverTip } from '../shared/hover';
+import {
+  resolveGeneratedImageContentUrl,
+  resolveGeneratedVideoContentUrl,
+} from '../../utils/generated-media-cache';
 import type { MediaLibraryInspectorProps } from '../../types/asset.types';
 import { AssetCategory, AssetType } from '../../types/asset.types';
 import './MediaLibraryInspector.scss';
@@ -32,7 +39,10 @@ import './MediaLibraryInspector.scss';
  * @param originalUrl 原始 URL
  * @param size 预览图尺寸（默认 small）
  */
-function getThumbnailUrl(originalUrl: string, size: 'small' | 'large' = 'small'): string {
+function getThumbnailUrl(
+  originalUrl: string,
+  size: 'small' | 'large' = 'small'
+): string {
   const normalizedUrl = normalizeImageDataUrl(originalUrl);
   if (
     normalizedUrl.startsWith('http://') ||
@@ -83,7 +93,9 @@ export function MediaLibraryInspector({
       return { isCacheAsset: false, canvasElementCount: 0 };
     }
     const isCache = isCacheUrl(asset.url);
-    const count = isCache ? countElementsByAssetUrls(board, asset.dedupeUrls || [asset.url]) : 0;
+    const count = isCache
+      ? countElementsByAssetUrls(board, asset.dedupeUrls || [asset.url])
+      : 0;
     return { isCacheAsset: isCache, canvasElementCount: count };
   }, [asset, board]);
   const inspectorTrackParams = useMemo(() => {
@@ -112,7 +124,7 @@ export function MediaLibraryInspector({
       setIsRenaming(false);
       return;
     }
-    
+
     const trimmedName = newName.trim();
     // 如果名称为空或没有变化，取消编辑
     if (!trimmedName || trimmedName === asset.name) {
@@ -218,13 +230,7 @@ export function MediaLibraryInspector({
     } finally {
       setIsSavingSubject(false);
     }
-  }, [
-    asset,
-    isSavingSubject,
-    onMarkAsSubject,
-    subjectName,
-    subjectPrompt,
-  ]);
+  }, [asset, isSavingSubject, onMarkAsSubject, subjectName, subjectPrompt]);
 
   if (!asset) {
     return (
@@ -236,6 +242,16 @@ export function MediaLibraryInspector({
 
   const normalizedAssetUrl =
     asset.type === 'IMAGE' ? normalizeImageDataUrl(asset.url) : asset.url;
+  const imageRehydrateSourceUrl = resolveGeneratedImageContentUrl({
+    contentUrl: asset.contentUrl,
+    remoteTaskId: asset.remoteTaskId,
+    providerTaskId: asset.providerTaskId,
+  });
+  const videoRehydrateSourceUrl = resolveGeneratedVideoContentUrl({
+    contentUrl: asset.contentUrl,
+    remoteTaskId: asset.remoteTaskId,
+    providerTaskId: asset.providerTaskId,
+  });
   const isSubjectAsset = asset.category === AssetCategory.CHARACTER;
   const showSubjectAction = asset.type === AssetType.IMAGE && !!onMarkAsSubject;
 
@@ -265,11 +281,33 @@ export function MediaLibraryInspector({
             src={getThumbnailUrl(normalizedAssetUrl, 'large')}
             alt={asset.name}
             className="media-library-inspector__image"
+            rehydrateCacheUrl={normalizedAssetUrl}
+            rehydrateSourceUrl={imageRehydrateSourceUrl}
+            rehydrateMetadata={{
+              taskId: asset.taskId || asset.id,
+              remoteTaskId: asset.remoteTaskId,
+              providerTaskId: asset.providerTaskId,
+              contentUrl: imageRehydrateSourceUrl,
+              mimeType: asset.mimeType,
+              prompt: asset.prompt,
+              model: asset.modelName,
+            }}
             fallback={
               <RetryImage
                 src={normalizedAssetUrl}
                 alt={asset.name}
                 className="media-library-inspector__image"
+                rehydrateCacheUrl={normalizedAssetUrl}
+                rehydrateSourceUrl={imageRehydrateSourceUrl}
+                rehydrateMetadata={{
+                  taskId: asset.taskId || asset.id,
+                  remoteTaskId: asset.remoteTaskId,
+                  providerTaskId: asset.providerTaskId,
+                  contentUrl: imageRehydrateSourceUrl,
+                  mimeType: asset.mimeType,
+                  prompt: asset.prompt,
+                  model: asset.modelName,
+                }}
                 showSkeleton={false}
                 eager
               />
@@ -286,6 +324,17 @@ export function MediaLibraryInspector({
             thumbnailSize="large"
             activateVideoOnClick
             playOnActivate
+            rehydrateCacheUrl={normalizedAssetUrl}
+            rehydrateSourceUrl={videoRehydrateSourceUrl}
+            rehydrateMetadata={{
+              taskId: asset.taskId || asset.id,
+              remoteTaskId: asset.remoteTaskId,
+              providerTaskId: asset.providerTaskId || asset.remoteTaskId,
+              contentUrl: videoRehydrateSourceUrl,
+              mimeType: asset.mimeType,
+              prompt: asset.prompt,
+              model: asset.modelName,
+            }}
             videoProps={{
               controls: true,
               preload: 'metadata',
@@ -303,7 +352,7 @@ export function MediaLibraryInspector({
               onChange={(value) => setNewName(value as string)}
               autofocus
               onBlur={handleConfirmRename}
-              {...{onEnter: handleConfirmRename} as any}
+              {...({ onEnter: handleConfirmRename } as any)}
               onKeydown={handleKeyDown}
               placeholder="输入名称，按 Enter 或点击外部保存"
             />
@@ -329,7 +378,11 @@ export function MediaLibraryInspector({
         <div className="media-library-inspector__meta-item">
           <span className="media-library-inspector__meta-label">类型</span>
           <span className="media-library-inspector__meta-value">
-            {asset.type === 'IMAGE' ? '图片' : asset.type === 'AUDIO' ? '音频' : '视频'}
+            {asset.type === 'IMAGE'
+              ? '图片'
+              : asset.type === 'AUDIO'
+              ? '音频'
+              : '视频'}
           </span>
         </div>
         <div className="media-library-inspector__meta-item">
@@ -346,7 +399,9 @@ export function MediaLibraryInspector({
             </div>
             {asset.characterMeta?.name && (
               <div className="media-library-inspector__meta-item">
-                <span className="media-library-inspector__meta-label">主体名</span>
+                <span className="media-library-inspector__meta-label">
+                  主体名
+                </span>
                 <span className="media-library-inspector__meta-value">
                   {asset.characterMeta.name}
                 </span>
@@ -362,7 +417,9 @@ export function MediaLibraryInspector({
         </div>
         {displaySize && (
           <div className="media-library-inspector__meta-item">
-            <span className="media-library-inspector__meta-label">文件大小</span>
+            <span className="media-library-inspector__meta-label">
+              文件大小
+            </span>
             <span className="media-library-inspector__meta-value">
               {formatFileSize(displaySize)}
             </span>
@@ -374,7 +431,9 @@ export function MediaLibraryInspector({
       {asset.prompt && (
         <div className="media-library-inspector__prompt-section">
           <div className="media-library-inspector__prompt-header">
-            <span className="media-library-inspector__prompt-label">提示词</span>
+            <span className="media-library-inspector__prompt-label">
+              提示词
+            </span>
             <Button
               size="small"
               variant="text"
@@ -395,7 +454,9 @@ export function MediaLibraryInspector({
         asset.characterMeta.prompt !== asset.prompt && (
           <div className="media-library-inspector__prompt-section media-library-inspector__prompt-section--compact">
             <div className="media-library-inspector__prompt-header">
-              <span className="media-library-inspector__prompt-label">主体提示词</span>
+              <span className="media-library-inspector__prompt-label">
+                主体提示词
+              </span>
             </div>
             <div className="media-library-inspector__prompt-content">
               {asset.characterMeta.prompt}
@@ -515,12 +576,15 @@ export function MediaLibraryInspector({
         onConfirm={handleConfirmDelete}
       >
         <p>删除后无法恢复，确认删除该素材？</p>
-        <p style={{ marginTop: '8px', color: 'var(--td-text-color-secondary)' }}>
+        <p
+          style={{ marginTop: '8px', color: 'var(--td-text-color-secondary)' }}
+        >
           素材名称: <strong>{asset.name}</strong>
         </p>
         {isCacheAsset && canvasElementCount > 0 && (
           <p style={{ marginTop: '8px', color: 'var(--td-error-color)' }}>
-            ⚠️ 画布中有 <strong>{canvasElementCount}</strong> 个元素正在使用此素材，删除后这些元素也将被移除！
+            ⚠️ 画布中有 <strong>{canvasElementCount}</strong>{' '}
+            个元素正在使用此素材，删除后这些元素也将被移除！
           </p>
         )}
       </ConfirmDialog>

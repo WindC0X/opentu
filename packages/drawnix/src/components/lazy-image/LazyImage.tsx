@@ -35,6 +35,12 @@ export interface LazyImageProps {
   onError?: () => void;
   /** Callback when image is clicked */
   onClick?: () => void;
+  /** Stable local cache URL to repair when src is a generated thumbnail URL */
+  rehydrateCacheUrl?: string;
+  /** Same-origin broker content URL for generated-media cache rehydration */
+  rehydrateSourceUrl?: string;
+  /** Metadata to preserve when re-caching generated media */
+  rehydrateMetadata?: Record<string, unknown>;
 }
 
 /**
@@ -53,6 +59,9 @@ export const LazyImage = memo(function LazyImage({
   onLoad,
   onError,
   onClick,
+  rehydrateCacheUrl,
+  rehydrateSourceUrl,
+  rehydrateMetadata,
 }: LazyImageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -157,6 +166,9 @@ export const LazyImage = memo(function LazyImage({
             setHasError(true);
             onError?.();
           }}
+          rehydrateCacheUrl={rehydrateCacheUrl}
+          rehydrateSourceUrl={rehydrateSourceUrl}
+          rehydrateMetadata={rehydrateMetadata}
         />
       )}
     </div>

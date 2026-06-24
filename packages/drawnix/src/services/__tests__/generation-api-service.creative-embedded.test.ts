@@ -1,13 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaskType } from '../../types/task.types';
-import { ModelVendor, type ModelConfig } from '../../constants/model-config';
+import {
+  ModelVendor,
+  type ModelConfig,
+  type ModelType,
+} from '../../constants/model-config';
 
 const mocks = vi.hoisted(() => ({
   adapterGenerateImage: vi.fn(),
+  adapterGenerateAudio: vi.fn(),
   resolveAdapterForInvocation: vi.fn(),
   getAdapterContextFromSettings: vi.fn(),
-  getSelectableModels: vi.fn<() => ModelConfig[]>(() => []),
-  getPinnedSelectableModel: vi.fn(() => null),
+  resumeAudioPolling: vi.fn(),
+  extractAudioGenerationResult: vi.fn(),
+  getSelectableModels: vi.fn<(type?: ModelType) => ModelConfig[]>(() => []),
+  getPinnedSelectableModel:
+    vi.fn<
+      (type: ModelType, modelId?: string | null) => ModelConfig | null
+    >(() => null),
   trackModelCall: vi.fn(),
   trackModelSuccess: vi.fn(),
   trackModelFailure: vi.fn(),
@@ -71,8 +81,10 @@ vi.mock('../video-api-service', () => ({
 }));
 
 vi.mock('../audio-api-service', () => ({
-  audioAPIService: {},
-  extractAudioGenerationResult: vi.fn(),
+  audioAPIService: {
+    resumePolling: mocks.resumeAudioPolling,
+  },
+  extractAudioGenerationResult: mocks.extractAudioGenerationResult,
 }));
 
 vi.mock('../task-invocation-route', () => ({
@@ -91,6 +103,15 @@ const managedImageModel: ModelConfig = {
   vendor: ModelVendor.GPT,
   sourceProfileId: 'new-api-creative',
   selectionKey: 'new-api-creative::newapi-image',
+};
+
+const managedAudioModel: ModelConfig = {
+  id: 'newapi-audio',
+  label: 'New API Audio',
+  type: 'audio',
+  vendor: ModelVendor.SUNO,
+  sourceProfileId: 'new-api-creative',
+  selectionKey: 'new-api-creative::newapi-audio',
 };
 
 describe('generation-api-service embedded Creative model guard', () => {
@@ -113,6 +134,28 @@ describe('generation-api-service embedded Creative model guard', () => {
     mocks.adapterGenerateImage.mockResolvedValue({
       url: 'https://cdn.example.com/image.png',
       format: 'png',
+    });
+    mocks.adapterGenerateAudio.mockResolvedValue({
+      url: '',
+      format: 'lyrics',
+      resultKind: 'lyrics',
+      lyricsText: 'hello',
+      providerTaskId: 'audio-task-1',
+    });
+    mocks.resumeAudioPolling.mockResolvedValue({
+      taskId: 'remote-audio-1',
+      status: 'complete',
+      action: 'lyrics',
+      clips: [],
+      lyrics: { text: 'resumed lyrics' },
+      raw: {},
+    });
+    mocks.extractAudioGenerationResult.mockReturnValue({
+      url: '',
+      format: 'lyrics',
+      resultKind: 'lyrics',
+      lyricsText: 'resumed lyrics',
+      providerTaskId: 'remote-audio-1',
     });
   });
 
@@ -229,5 +272,134 @@ describe('generation-api-service embedded Creative model guard', () => {
         },
       })
     );
+  });
+
+  it('suppresses stale legacy audio generate callbacks after retry attempt changes', async () => {
+    let currentTask: any = {
+      id: 'audio-stale-generate',
+      type: TaskType.AUDIO,
+      status: 'processing',
+      params: { prompt: 'sing', retryAttempt: 0 },
+      createdAt: 1,
+      updatedAt: 1,
+      startedAt: 100,
+    };
+    mocks.getSelectableModels.mockImplementation((type?: ModelType) =>
+      type === 'audio' ? [managedAudioModel] : [managedImageModel]
+    );
+    mocks.getPinnedSelectableModel.mockImplementation((_type, modelId) =>
+      modelId === managedAudioModel.id ? managedAudioModel : null
+    );
+    mocks.getTask.mockImplementation(() => currentTask);
+    mocks.resolveAdapterForInvocation.mockReturnValue({
+      id: 'audio-adapter',
+      label: 'Audio Adapter',
+      kind: 'audio',
+      generateAudio: mocks.adapterGenerateAudio,
+    });
+    mocks.adapterGenerateAudio.mockImplementationOnce(async (_context, request) => {
+      mocks.updateTaskProgress.mockClear();
+      mocks.updateTaskStatus.mockClear();
+      currentTask = {
+        ...currentTask,
+        params: { ...currentTask.params, retryAttempt: 1 },
+        startedAt: 200,
+      };
+      const onProgress = request.onProgress || request.params?.onProgress;
+      const onSubmitted = request.onSubmitted || request.params?.onSubmitted;
+      onProgress?.(45, 'PENDING');
+      await onSubmitted?.('remote-audio-stale');
+      return {
+        url: '',
+        format: 'lyrics',
+        resultKind: 'lyrics',
+        lyricsText: 'hello',
+        providerTaskId: 'remote-audio-stale',
+      };
+    });
+    const { generationAPIService } = await import('../generation-api-service');
+
+    await generationAPIService.generate(
+      'audio-stale-generate',
+      { prompt: 'sing', model: managedAudioModel.id },
+      TaskType.AUDIO
+    );
+
+    expect(mocks.updateTaskProgress).not.toHaveBeenCalled();
+    expect(mocks.updateTaskStatus).not.toHaveBeenCalled();
+  });
+
+  it('suppresses stale legacy audio resume progress after retry attempt changes', async () => {
+    let currentTask: any = {
+      id: 'audio-stale-resume',
+      type: TaskType.AUDIO,
+      status: 'processing',
+      remoteId: 'remote-audio-1',
+      params: { prompt: 'sing', retryAttempt: 0 },
+      createdAt: 1,
+      updatedAt: 1,
+      startedAt: 100,
+    };
+    mocks.getTask.mockImplementation(() => currentTask);
+    mocks.resumeAudioPolling.mockImplementationOnce(async (_remoteId, options) => {
+      currentTask = {
+        ...currentTask,
+        params: { ...currentTask.params, retryAttempt: 1 },
+        startedAt: 200,
+      };
+      options.onProgress?.(55, 'PENDING');
+      return {
+        taskId: 'remote-audio-1',
+        status: 'complete',
+        action: 'lyrics',
+        clips: [],
+        lyrics: { text: 'resumed lyrics' },
+        raw: {},
+      };
+    });
+    const { generationAPIService } = await import('../generation-api-service');
+
+    await generationAPIService.resumeAudioGeneration(
+      'audio-stale-resume',
+      'remote-audio-1',
+      {
+        profileId: 'new-api-creative',
+        modelId: managedAudioModel.id,
+      }
+    );
+
+    expect(mocks.updateTaskProgress).not.toHaveBeenCalled();
+  });
+
+  it('preserves TIMEOUT code when legacy audio resume reaches the local timeout', async () => {
+    vi.useFakeTimers();
+    mocks.resumeAudioPolling.mockImplementationOnce(
+      () => new Promise(() => undefined)
+    );
+    const { generationAPIService } = await import('../generation-api-service');
+
+    try {
+      const resumed = generationAPIService.resumeAudioGeneration(
+        'audio-resume-timeout-code',
+        'remote-audio-timeout-code',
+        {
+          profileId: 'new-api-creative',
+          modelId: managedAudioModel.id,
+        }
+      );
+      const observed = resumed.then(
+        () => null,
+        (error) => error
+      );
+
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+
+      await expect(observed).resolves.toMatchObject({
+        code: 'TIMEOUT',
+        name: 'TIMEOUT',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
